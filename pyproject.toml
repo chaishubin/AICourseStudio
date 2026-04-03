@@ -1,0 +1,15 @@
+[project]
+name = "vidppt"
+version = "0.1.0"
+description = "Extract text, images from PPT and convert slides to images"
+requires-python = ">=3.12"
+dependencies = [
+    "python-pptx>=1.0.2",
+    "Pillow>=10.0.0",
+    "spire.presentation>=9.0.0",
+    "edge-tts>=7.2.8",
+    "moviepy>=2.2.1",
+]
+
+[project.scripts]
+extract-ppt = "extract_ppt:main"
