@@ -3,9 +3,10 @@
 """
 
 import argparse
-import logging
 import sys
 from pathlib import Path
+
+from loguru import logger
 
 from .core.models import ProcessConfig
 from .core.registry import ProcessorRegistry
@@ -15,9 +16,6 @@ from .utils.logger import setup_logger
 # 导入所有处理器以触发注册
 from .processors.ppt_processor import PPTProcessor
 from .processors.pdf_processor import PDFProcessor
-
-# 创建模块级别的日志记录器
-logger = logging.getLogger("vidppt.cli")
 
 
 def main():
@@ -138,9 +136,11 @@ MiniMax TTS 示例:
     args = parser.parse_args()
 
     # 初始化日志系统
-    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
     setup_logger(
-        name="vidppt", level=log_level, verbose=args.verbose, log_file=args.log_file
+        name="vidppt",
+        level=args.log_level.upper(),
+        verbose=args.verbose,
+        log_file=args.log_file,
     )
 
     logger.info(f"VidPPT 启动 (日志等级: {args.log_level})")

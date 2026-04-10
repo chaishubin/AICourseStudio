@@ -3,14 +3,12 @@ PowerPoint 文档处理器
 """
 
 import io
-import logging
 from pathlib import Path
 
+from loguru import logger
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from PIL import Image
-
-logger = logging.getLogger(__name__)
 
 from ..core.interfaces import DocumentProcessor
 from ..core.models import DocumentContent, PageContent, ProcessConfig

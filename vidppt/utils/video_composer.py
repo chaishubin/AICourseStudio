@@ -2,14 +2,12 @@
 视频合成工具
 """
 
-import logging
 from pathlib import Path
 
+from loguru import logger
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
 
 from ..core.models import DocumentContent, ProcessConfig
-
-logger = logging.getLogger(__name__)
 
 
 class VideoComposer:

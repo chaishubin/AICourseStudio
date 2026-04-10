@@ -2,13 +2,12 @@
 文档处理器注册中心
 """
 
-import logging
 from pathlib import Path
 from typing import Optional, Type
 
-from .interfaces import DocumentProcessor
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from .interfaces import DocumentProcessor
 
 
 class ProcessorRegistry:

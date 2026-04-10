@@ -3,15 +3,14 @@
 """
 
 import asyncio
-import logging
 from pathlib import Path
+
+from loguru import logger
 
 from .core.models import ProcessConfig, DocumentContent
 from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
 from .utils.video_composer import VideoComposer
-
-logger = logging.getLogger(__name__)
 
 
 class Pipeline:
