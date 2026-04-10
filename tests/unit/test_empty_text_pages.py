@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from vidppt.core.models import PageContent, DocumentContent, ProcessConfig
 from vidppt.pipeline import Pipeline
 from vidppt.utils.video_composer import VideoComposer
+from vidppt.utils.progress import ProgressTracker
 
 
 class TestEmptyTextPages:
@@ -34,7 +35,8 @@ class TestEmptyTextPages:
         # Mock TTS 引擎的 batch_convert 方法
         pipeline = Pipeline(config)
         with patch.object(pipeline.tts_engine, "batch_convert") as mock_tts:
-            pipeline._generate_audio(content)
+            progress = ProgressTracker(total_pages=len(content.pages))
+            pipeline._generate_audio(content, progress)
 
             # 验证只有非空文本的页面被传递给 TTS
             call_args = mock_tts.call_args
@@ -186,7 +188,8 @@ class TestEmptyTextIntegration:
 
         # 应该尝试处理所有页面
         with patch.object(pipeline.tts_engine, "batch_convert") as mock_tts:
-            pipeline._generate_audio(content)
+            progress = ProgressTracker(total_pages=len(content.pages))
+            pipeline._generate_audio(content, progress)
 
             # 应该有调用 TTS
             mock_tts.assert_called_once()
@@ -209,7 +212,8 @@ class TestEmptyTextIntegration:
 
         # 应该跳过 TTS 处理
         with patch.object(pipeline.tts_engine, "batch_convert") as mock_tts:
-            pipeline._generate_audio(content)
+            progress = ProgressTracker(total_pages=len(content.pages))
+            pipeline._generate_audio(content, progress)
 
             # 不应该调用 TTS
             mock_tts.assert_not_called()
@@ -233,7 +237,8 @@ class TestEmptyTextIntegration:
         pipeline = Pipeline(config)
 
         with patch.object(pipeline.tts_engine, "batch_convert") as mock_tts:
-            pipeline._generate_audio(content)
+            progress = ProgressTracker(total_pages=len(content.pages))
+            pipeline._generate_audio(content, progress)
 
             # 应该调用 TTS，但只处理第1和4页
             if mock_tts.called:

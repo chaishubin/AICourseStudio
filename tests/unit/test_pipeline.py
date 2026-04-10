@@ -236,7 +236,12 @@ class TestPipelineGenerateAudio:
         mock_tts = AsyncMock()
         pipeline.tts_engine = mock_tts
 
-        pipeline._generate_audio(content)
+        # 创建进度跟踪器
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=len(content.pages))
+
+        pipeline._generate_audio(content, progress)
 
         # 验证调用
         mock_tts.batch_convert.assert_called_once()
@@ -261,7 +266,12 @@ class TestPipelineGenerateAudio:
         mock_tts = AsyncMock()
         pipeline.tts_engine = mock_tts
 
-        pipeline._generate_audio(content)
+        # 创建进度跟踪器
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=len(content.pages))
+
+        pipeline._generate_audio(content, progress)
 
         # 验证使用临时路径
         assert "_temp_audio_" in str(content.pages[0].audio)
@@ -280,12 +290,17 @@ class TestPipelineGenerateAudio:
         mock_tts = Mock()
         mock_tts.batch_convert.side_effect = Exception("网络错误")
 
+        # 创建进度跟踪器
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=len(content.pages))
+
         with patch("asyncio.run") as mock_asyncio_run:
             mock_asyncio_run.side_effect = Exception("网络错误")
             pipeline.tts_engine = mock_tts
 
             # 应该捕获异常，不会崩溃
-            pipeline._generate_audio(content)
+            pipeline._generate_audio(content, progress)
 
 
 class TestPipelineComposeVideo:
@@ -311,7 +326,12 @@ class TestPipelineComposeVideo:
         )
 
         with patch("vidppt.pipeline.VideoComposer.compose") as mock_compose:
-            pipeline._compose_video(content)
+            # 创建进度跟踪器
+            from vidppt.utils.progress import ProgressTracker
+
+            progress = ProgressTracker(total_pages=len(content.pages))
+
+            pipeline._compose_video(content, progress)
 
             # 验证调用
             mock_compose.assert_called_once()
@@ -331,8 +351,13 @@ class TestPipelineComposeVideo:
         with patch("vidppt.pipeline.VideoComposer.compose") as mock_compose:
             mock_compose.side_effect = Exception("合成错误")
 
+            # 创建进度跟踪器
+            from vidppt.utils.progress import ProgressTracker
+
+            progress = ProgressTracker(total_pages=len(content.pages))
+
             # 应该捕获异常
-            pipeline._compose_video(content)
+            pipeline._compose_video(content, progress)
 
 
 class TestPipelineCleanup:
@@ -351,7 +376,13 @@ class TestPipelineCleanup:
         (config.output_dir / "normal_file.txt").write_text("keep")
 
         pipeline = Pipeline(config)
-        pipeline._cleanup_temp_files()
+
+        # 创建进度跟踪器
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=1)
+
+        pipeline._cleanup_temp_files(progress)
 
         # 临时文件应该被删除
         assert not (config.output_dir / "_temp_audio_1.mp3").exists()

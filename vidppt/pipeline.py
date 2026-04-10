@@ -12,6 +12,7 @@ from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
 from .utils.video_composer import VideoComposer
 from .utils.audio_cache import AudioCacheManager
+from .utils.progress import ProgressTracker, ProcessStage
 
 
 class Pipeline:
@@ -69,24 +70,42 @@ class Pipeline:
         logger.info(f"输入文件: {self.config.input_path}")
         logger.info(f"输出目录: {self.config.output_dir}")
 
-        # 3. 提取内容和渲染页面
-        content = processor.process(self.config)
+        # 初始化进度跟踪器（将在提取内容后更新总页数）
+        progress = ProgressTracker(
+            total_pages=0,  # 暂时为 0，提取内容后更新
+            enable_progress=True,
+        )
 
-        # 4. 文字转语音
-        if self.config.enable_tts:
-            self._generate_audio(content)
+        try:
+            # 3. 提取内容和渲染页面
+            stage = progress.start_stage(ProcessStage.EXTRACT)
+            content = processor.process(self.config)
+            progress.stages[ProcessStage.EXTRACT].total = content.total_pages
+            progress.complete_stage(ProcessStage.EXTRACT)
 
-        # 5. 合成视频
-        if self.config.enable_video:
-            self._compose_video(content)
+            # 4. 文字转语音
+            if self.config.enable_tts:
+                self._generate_audio(content, progress)
 
-        # 6. 清理临时文件（如果需要）
-        if not self.config.save_intermediate:
-            self._cleanup_temp_files()
+            # 5. 合成视频
+            if self.config.enable_video:
+                self._compose_video(content, progress)
 
-        logger.info(f"完成！输出目录: {self.config.output_dir.resolve()}")
+            # 6. 清理临时文件（如果需要）
+            if not self.config.save_intermediate:
+                self._cleanup_temp_files(progress)
 
-    def _generate_audio(self, content: DocumentContent) -> None:
+            logger.info(f"完成！输出目录: {self.config.output_dir.resolve()}")
+            progress.print_summary()
+
+        except Exception as e:
+            logger.error(f"处理失败: {e}")
+            progress.print_summary()
+            raise
+
+    def _generate_audio(
+        self, content: DocumentContent, progress: ProgressTracker
+    ) -> None:
         """生成语音"""
         logger.info(
             f"开始文字转语音"
@@ -96,6 +115,9 @@ class Pipeline:
         )
 
         try:
+            progress.start_stage(ProcessStage.TTS)
+            progress.stages[ProcessStage.TTS].total = content.total_pages
+
             page_texts = []
             cached_pages = []
 
@@ -103,6 +125,7 @@ class Pipeline:
                 # 跳过没有文本的页面
                 if not page.text or not page.text.strip():
                     logger.debug(f"第 {page.page_number} 页 无文本，跳过 TTS 转换")
+                    progress.update_stage(ProcessStage.TTS, page.page_number)
                     continue
 
                 if self.config.save_intermediate:
@@ -139,6 +162,8 @@ class Pipeline:
                     page.audio = audio_path
                     page_texts.append((page.page_number, page.text, audio_path))
 
+                progress.update_stage(ProcessStage.TTS, page.page_number)
+
             # 如果有需要转换的文本，进行异步批量转换
             if page_texts:
                 asyncio.run(
@@ -171,26 +196,43 @@ class Pipeline:
             else:
                 logger.info("没有文本需要转换，跳过 TTS 处理")
 
+            progress.complete_stage(ProcessStage.TTS)
+
         except Exception as e:
             logger.warning(f"TTS 转换失败: {e}")
+            progress.fail_stage(ProcessStage.TTS, str(e))
             if "edge-tts" in self.config.tts_engine:
                 logger.warning("请检查网络连接，edge-tts 需要访问微软服务器")
 
-    def _compose_video(self, content: DocumentContent) -> None:
+    def _compose_video(
+        self, content: DocumentContent, progress: ProgressTracker
+    ) -> None:
         """合成视频"""
         video_name = self.config.input_path.stem
         video_path = self.config.output_dir / f"{video_name}.mp4"
 
         logger.info("开始合成视频...")
         try:
+            progress.start_stage(ProcessStage.VIDEO)
+            progress.stages[ProcessStage.VIDEO].total = content.total_pages
+
             VideoComposer.compose(content, self.config, video_path)
+
+            progress.complete_stage(ProcessStage.VIDEO)
         except Exception as e:
             logger.warning(f"视频合成失败: {e}")
+            progress.fail_stage(ProcessStage.VIDEO, str(e))
 
-    def _cleanup_temp_files(self) -> None:
+    def _cleanup_temp_files(self, progress: ProgressTracker) -> None:
         """清理临时文件"""
         logger.info("清理临时文件...")
-        temp_files = list(self.config.output_dir.glob("_temp_*"))
-        for temp_file in temp_files:
-            temp_file.unlink()
-            logger.debug(f"删除: {temp_file}")
+        try:
+            progress.start_stage(ProcessStage.CLEANUP)
+            temp_files = list(self.config.output_dir.glob("_temp_*"))
+            for temp_file in temp_files:
+                temp_file.unlink()
+                logger.debug(f"删除: {temp_file}")
+            progress.complete_stage(ProcessStage.CLEANUP)
+        except Exception as e:
+            logger.warning(f"清理临时文件失败: {e}")
+            progress.fail_stage(ProcessStage.CLEANUP, str(e))
