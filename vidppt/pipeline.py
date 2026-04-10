@@ -11,6 +11,7 @@ from .core.models import ProcessConfig, DocumentContent
 from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
 from .utils.video_composer import VideoComposer
+from .utils.audio_cache import AudioCacheManager
 
 
 class Pipeline:
@@ -19,6 +20,11 @@ class Pipeline:
     def __init__(self, config: ProcessConfig):
         self.config = config
         self.tts_engine = self._create_tts_engine()
+        self.cache_manager = AudioCacheManager(
+            cache_dir=config.audio_cache_dir,
+            enable_cache=config.enable_audio_cache,
+            expiry_days=config.audio_cache_expiry_days,
+        )
 
     def _create_tts_engine(self):
         """根据配置创建 TTS 引擎"""
@@ -91,6 +97,8 @@ class Pipeline:
 
         try:
             page_texts = []
+            cached_pages = []
+
             for page in content.pages:
                 # 跳过没有文本的页面
                 if not page.text or not page.text.strip():
@@ -107,8 +115,29 @@ class Pipeline:
                     )
 
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
-                page.audio = audio_path
-                page_texts.append((page.page_number, page.text, audio_path))
+
+                # 尝试从缓存获取
+                cached_audio = self.cache_manager.get(
+                    text=page.text,
+                    tts_engine=self.config.tts_engine,
+                    voice=self.config.tts_voice,
+                    rate=self.config.tts_rate,
+                    **self.config.tts_options,
+                )
+
+                if cached_audio:
+                    # 从缓存复制文件
+                    import shutil
+
+                    shutil.copy2(cached_audio, audio_path)
+                    page.audio = audio_path
+                    cached_pages.append((page.page_number, cached_audio))
+                    logger.info(
+                        f"第 {page.page_number} 页 音频（从缓存）-> {audio_path}"
+                    )
+                else:
+                    page.audio = audio_path
+                    page_texts.append((page.page_number, page.text, audio_path))
 
             # 如果有需要转换的文本，进行异步批量转换
             if page_texts:
@@ -120,8 +149,25 @@ class Pipeline:
                     )
                 )
 
-                for page_num, _, audio_path in page_texts:
+                # 转换后保存到缓存
+                for page_num, text, audio_path in page_texts:
+                    self.cache_manager.put(
+                        audio_path=audio_path,
+                        text=text,
+                        tts_engine=self.config.tts_engine,
+                        voice=self.config.tts_voice,
+                        rate=self.config.tts_rate,
+                        **self.config.tts_options,
+                    )
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
+
+            if page_texts or cached_pages:
+                cache_info = (
+                    f"（缓存命中: {len(cached_pages)}, 新转换: {len(page_texts)}）"
+                    if self.config.enable_audio_cache
+                    else ""
+                )
+                logger.info(f"文字转语音完成 {cache_info}")
             else:
                 logger.info("没有文本需要转换，跳过 TTS 处理")
 

@@ -50,6 +50,11 @@ class ProcessConfig:
     tts_rate: str = "+0%"
     tts_options: dict = field(default_factory=dict)  # TTS 引擎特定选项
 
+    # 缓存配置
+    enable_audio_cache: bool = True  # 是否启用音频缓存
+    audio_cache_dir: Optional[Path] = None  # 音频缓存目录，默认为 ~/.cache/vidppt/audio
+    audio_cache_expiry_days: int = 30  # 音频缓存过期天数
+
     # OCR 配置
     ocr_engine: str = "builtin"  # builtin, tesseract, api
 

@@ -36,13 +36,18 @@ def main():
   %(prog)s input.pptx --rate +20%%              # 加速20%%
   
 MiniMax TTS 示例:
-  %(prog)s input.pptx --tts-engine minimax      # 使用 MiniMax 引擎
-  %(prog)s input.pptx --tts-engine minimax --minimax-emotion happy  # 开心情感
-  %(prog)s input.pptx --tts-engine minimax --rate -10%%  # 减速10%%
-  %(prog)s input.pptx --tts-engine minimax \\
-                    --minimax-emotion peaceful \\
-                    --minimax-sample-rate 44100 \\
-                    --minimax-bitrate 256000    # 高质量配置
+   %(prog)s input.pptx --tts-engine minimax      # 使用 MiniMax 引擎
+   %(prog)s input.pptx --tts-engine minimax --minimax-emotion happy  # 开心情感
+   %(prog)s input.pptx --tts-engine minimax --rate -10%%  # 减速10%%
+   %(prog)s input.pptx --tts-engine minimax \\
+                     --minimax-emotion peaceful \\
+                     --minimax-sample-rate 44100 \\
+                     --minimax-bitrate 256000    # 高质量配置
+
+缓存选项:
+   %(prog)s input.pptx --no-cache               # 禁用音频缓存
+   %(prog)s input.pptx --cache-dir /tmp/cache   # 自定义缓存目录
+   %(prog)s input.pptx --cache-expiry 7         # 7天后缓存过期
 
 可用的 TTS 声音（edge-tts）:
   zh-CN-XiaoxiaoNeural  女声·温暖（默认）
@@ -116,6 +121,24 @@ MiniMax TTS 示例:
         help="MiniMax 音频格式（默认: mp3）",
     )
 
+    # 缓存配置
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="禁用音频缓存，每次都重新转换",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="自定义音频缓存目录（默认: ~/.cache/vidppt/audio）",
+    )
+    parser.add_argument(
+        "--cache-expiry",
+        type=int,
+        default=30,
+        help="音频缓存过期天数（默认: 30）",
+    )
+
     # 日志配置
     parser.add_argument(
         "-v",
@@ -175,6 +198,9 @@ MiniMax TTS 示例:
         tts_voice=args.voice,
         tts_rate=args.rate,
         tts_options=tts_options,
+        enable_audio_cache=not args.no_cache,
+        audio_cache_dir=Path(args.cache_dir) if args.cache_dir else None,
+        audio_cache_expiry_days=args.cache_expiry,
     )
 
     # 创建并运行流程
