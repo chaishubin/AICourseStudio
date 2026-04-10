@@ -34,7 +34,7 @@ class TestMiniMaxTTSEngine:
     def test_engine_custom_config(self):
         """测试自定义配置"""
         engine = MiniMaxTTSEngine(
-            api_key="test-key",
+            api_key="sk-cp-7HnzXk9RLCaGdV7s6RsQ-qKtwM4Pdoly4L1NG65iMZmAR-8XCg_9qEDxsKXhhcocnU90cq1lzwabZFBT3EVEgrTbwSg62c-AQ3IV_FFPU8FDn2fuBX2Ps4w",
             model="speech-2.8-hd",
             sample_rate=44100,
             bitrate=256000,
@@ -227,16 +227,179 @@ class TestMiniMaxConvertAsync:
     """测试异步转换"""
 
     @pytest.mark.asyncio
-    async def test_convert_requires_text_and_voice(self, temp_dir):
-        """测试转换需要文本和语音"""
-        engine = MiniMaxTTSEngine(api_key="test-key")
+    async def test_convert_async_with_mock_httpx(self, temp_dir):
+        """测试 convert_async 方法的核心逻辑（用 Mock 模拟 httpx）"""
+        import asyncio
 
+        engine = MiniMaxTTSEngine(api_key="test-key")
         output_path = temp_dir / "test.mp3"
 
-        # 这个测试验证基本参数是否被正确传递
-        # 实际的 API 调用会由集成测试覆盖
-        assert engine.api_key == "test-key"
-        assert output_path.parent == temp_dir
+        # Mock 的音频数据（十六进制编码）
+        mock_audio_hex = "FFD8FFE0"  # 简单的JPEG头部作示例
+        mock_response_data = {"data": {"audio": mock_audio_hex}}
+
+        # Mock httpx
+        with patch("httpx.AsyncClient") as mock_client_class:
+            # 配置 mock
+            mock_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.json = MagicMock(return_value=mock_response_data)
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            # 调用 convert_async
+            await engine.convert_async(
+                text="测试文本",
+                output_path=output_path,
+                voice="male-qn-qingse",
+                rate="+0%",
+            )
+
+            # 验证：
+            # 1. httpx.AsyncClient 被创建
+            mock_client_class.assert_called_once()
+
+            # 2. client.post 被调用了正确的参数
+            mock_client.post.assert_called_once()
+            call_kwargs = mock_client.post.call_args[1]
+            assert call_kwargs["timeout"] == 30.0
+            assert "headers" in call_kwargs
+            assert "json" in call_kwargs
+
+            # 3. 文件被创建
+            assert output_path.exists()
+            # 4. 文件内容正确（十六进制数据被转换为字节）
+            file_data = output_path.read_bytes()
+            assert file_data == bytes.fromhex(mock_audio_hex)
+
+    @pytest.mark.asyncio
+    async def test_convert_async_handles_empty_text(self, temp_dir):
+        """测试 convert_async 处理空文本"""
+        engine = MiniMaxTTSEngine(api_key="test-key")
+        output_path = temp_dir / "empty.mp3"
+
+        mock_audio_hex = "FFFF"
+        mock_response_data = {"data": {"audio": mock_audio_hex}}
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.json = MagicMock(return_value=mock_response_data)
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            # 空文本
+            await engine.convert_async(
+                text="", output_path=output_path, voice="male-qn-qingse", rate="+0%"
+            )
+
+            # 验证请求中的文本被设置为默认值
+            call_kwargs = mock_client.post.call_args[1]
+            payload = call_kwargs["json"]
+            assert payload["text"] == "此页无文字内容。"  # 默认值
+
+    @pytest.mark.asyncio
+    async def test_convert_async_with_emotion(self, temp_dir):
+        """测试 convert_async 带情感参数"""
+        engine = MiniMaxTTSEngine(api_key="test-key")
+        output_path = temp_dir / "emotion.mp3"
+
+        mock_audio_hex = "FFFF"
+        mock_response_data = {"data": {"audio": mock_audio_hex}}
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.json = MagicMock(return_value=mock_response_data)
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            # 带情感
+            await engine.convert_async(
+                text="开心的文本",
+                output_path=output_path,
+                voice="female-qn-nana",
+                rate="+10%",
+                emotion="happy",
+            )
+
+            # 验证请求中的情感被设置
+            call_kwargs = mock_client.post.call_args[1]
+            payload = call_kwargs["json"]
+            assert payload["voice_setting"]["emotion"] == "happy"
+            assert payload["voice_setting"]["speed"] == 1.1  # +10%
+
+    @pytest.mark.asyncio
+    async def test_convert_async_missing_audio_data_raises_error(self, temp_dir):
+        """测试 convert_async 处理缺失音频数据"""
+        engine = MiniMaxTTSEngine(api_key="test-key")
+        output_path = temp_dir / "missing.mp3"
+
+        # 缺失 audio 字段
+        mock_response_data = {"data": {}}
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.json = MagicMock(return_value=mock_response_data)
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            # 应该抛出 ValueError
+            with pytest.raises(ValueError, match="API 返回的音频数据为空"):
+                await engine.convert_async(
+                    text="测试",
+                    output_path=output_path,
+                    voice="male-qn-qingse",
+                    rate="+0%",
+                )
+
+    @pytest.mark.asyncio
+    async def test_batch_convert_calls_multiple_convert_async(self, temp_dir):
+        """测试 batch_convert 调用多个 convert_async"""
+        engine = MiniMaxTTSEngine(api_key="test-key")
+
+        texts = [
+            (1, "第一页", temp_dir / "page1.mp3"),
+            (2, "第二页", temp_dir / "page2.mp3"),
+        ]
+
+        mock_audio_hex = "FFFF"
+        mock_response_data = {"data": {"audio": mock_audio_hex}}
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.json = MagicMock(return_value=mock_response_data)
+            mock_response.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            # 批量转换
+            await engine.batch_convert(
+                texts=texts, voice="male-qn-qingse", rate="+0%", batch_size=2
+            )
+
+            # 验证 client.post 被调用了 2 次（一次一个文本）
+            assert mock_client.post.call_count == 2
+
+            # 验证文件被创建
+            assert (temp_dir / "page1.mp3").exists()
+            assert (temp_dir / "page2.mp3").exists()
 
 
 class TestAPITTSEngineAbstract:

@@ -235,14 +235,11 @@ MiniMax TTS 示例:
     # MiniMax 选项（如果指定了 MiniMax）
     if merged_config.get("tts_engine") == "minimax" and not args.config:
         tts_options = merged_config.get("tts_options", {})
-        if args.minimax_emotion != "neutral":
-            tts_options["emotion"] = args.minimax_emotion
-        if args.minimax_sample_rate != 32000:
-            tts_options["sample_rate"] = args.minimax_sample_rate
-        if args.minimax_bitrate != 128000:
-            tts_options["bitrate"] = args.minimax_bitrate
-        if args.minimax_format != "mp3":
-            tts_options["audio_format"] = args.minimax_format
+        # 始终设置所有 MiniMax 选项（包括默认值）
+        tts_options["emotion"] = args.minimax_emotion
+        tts_options["sample_rate"] = args.minimax_sample_rate
+        tts_options["bitrate"] = args.minimax_bitrate
+        tts_options["audio_format"] = args.minimax_format
         merged_config["tts_options"] = tts_options
 
     # 转换为 ProcessConfig
