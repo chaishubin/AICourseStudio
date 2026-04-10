@@ -4,6 +4,7 @@ API TTS 引擎实现
 包括 MiniMax、阿里云、腾讯云等云服务商的 TTS API
 """
 
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 import base64
@@ -85,7 +86,7 @@ class MiniMaxTTSEngine(APITTSEngine):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         api_url: str = "https://api.minimaxi.com/v1/t2a_v2",
         model: str = DEFAULT_MODEL,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
@@ -99,7 +100,7 @@ class MiniMaxTTSEngine(APITTSEngine):
         初始化 MiniMax TTS 引擎
 
         参数:
-            api_key: MiniMax API 密钥
+            api_key: MiniMax API 密钥（如果为 None，会从环境变量 MINIMAX_API 读取）
             api_url: API 端点 URL
             model: 模型名称 (默认: speech-2.8-hd)
             sample_rate: 采样率 (默认: 32000)
@@ -108,7 +109,21 @@ class MiniMaxTTSEngine(APITTSEngine):
             channel: 声道数 (默认: 1)
             emotion: 情感类型 (默认: neutral)
             **kwargs: 其他选项
+
+        抛出异常:
+            AssertionError: 如果 MINIMAX_API 环境变量不存在或为空
         """
+        # 从环境变量读取 API key
+        if api_key is None:
+            api_key = os.getenv("MINIMAX_API")
+            assert api_key, (
+                "MiniMax API key 未设置。请设置环境变量 MINIMAX_API。\n"
+                "示例: export MINIMAX_API='sk-cp-xxxxxxxxxxxxxx'"
+            )
+        else:
+            # 即使传入了 api_key，也检查其是否为空
+            assert api_key, "MiniMax API key 不能为空字符串"
+
         super().__init__(api_key, api_url, **kwargs)
         self.model = model
         self.sample_rate = sample_rate

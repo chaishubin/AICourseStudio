@@ -24,18 +24,11 @@ class Pipeline:
         if self.config.tts_engine == "edge-tts":
             return EdgeTTSEngine()
         elif self.config.tts_engine == "minimax":
-            # 从配置中获取 MiniMax 相关参数
-            api_key = self.config.tts_options.get("api_key")
-            if not api_key:
-                raise ValueError(
-                    "MiniMax TTS 引擎需要配置 api_key。\n"
-                    "请通过环境变量或配置文件设置: config.tts_options['api_key']"
-                )
-
+            # MiniMax 引擎会自动从环境变量 MINIMAX_API 读取 api_key
             from .engines.tts.api_tts_engine import MiniMaxTTSEngine
 
             return MiniMaxTTSEngine(
-                api_key=api_key,
+                api_key=self.config.tts_options.get("api_key"),
                 api_url=self.config.tts_options.get(
                     "api_url", "https://api.minimaxi.com/v1/t2a_v2"
                 ),

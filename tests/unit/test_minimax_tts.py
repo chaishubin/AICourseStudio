@@ -6,8 +6,10 @@
 - 请求负载构建
 - 语速解析
 - 异步转换
+- 环境变量处理
 """
 
+import os
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -52,6 +54,58 @@ class TestMiniMaxTTSEngine:
         engine = MiniMaxTTSEngine(api_key="test-key", emotion="invalid_emotion")
 
         assert engine.emotion == "neutral"
+
+
+class TestEnvironmentVariableHandling:
+    """测试环境变量处理"""
+
+    def test_api_key_from_explicit_parameter(self):
+        """测试显式传入 api_key"""
+        engine = MiniMaxTTSEngine(api_key="explicit-key")
+        assert engine.api_key == "explicit-key"
+
+    def test_api_key_from_environment_variable(self, monkeypatch):
+        """测试从 MINIMAX_API 环境变量读取 api_key"""
+        monkeypatch.setenv("MINIMAX_API", "env-api-key")
+        engine = MiniMaxTTSEngine(api_key=None)
+        assert engine.api_key == "env-api-key"
+
+    def test_empty_environment_variable_raises_assertion_error(self, monkeypatch):
+        """测试空的环境变量会抛出 AssertionError"""
+        monkeypatch.setenv("MINIMAX_API", "")
+        with pytest.raises(AssertionError, match="MiniMax API key 未设置"):
+            MiniMaxTTSEngine(api_key=None)
+
+    def test_missing_environment_variable_raises_assertion_error(self, monkeypatch):
+        """测试缺少环境变量会抛出 AssertionError"""
+        monkeypatch.delenv("MINIMAX_API", raising=False)
+        with pytest.raises(AssertionError, match="MiniMax API key 未设置"):
+            MiniMaxTTSEngine(api_key=None)
+
+    def test_empty_string_api_key_raises_assertion_error(self):
+        """测试空字符串 api_key 会抛出 AssertionError"""
+        with pytest.raises(AssertionError, match="MiniMax API key 不能为空字符串"):
+            MiniMaxTTSEngine(api_key="")
+
+    def test_explicit_api_key_overrides_environment_variable(self, monkeypatch):
+        """测试显式传入的 api_key 优先于环境变量"""
+        monkeypatch.setenv("MINIMAX_API", "env-api-key")
+        engine = MiniMaxTTSEngine(api_key="explicit-key")
+        assert engine.api_key == "explicit-key"
+
+    def test_none_api_key_uses_environment_variable(self, monkeypatch):
+        """测试 None api_key 时使用环境变量"""
+        monkeypatch.setenv("MINIMAX_API", "from-env")
+        engine = MiniMaxTTSEngine(api_key=None)
+        assert engine.api_key == "from-env"
+
+    def test_environment_variable_message_includes_export_example(self, monkeypatch):
+        """测试错误消息包含环境变量设置示例"""
+        monkeypatch.setenv("MINIMAX_API", "")
+        try:
+            MiniMaxTTSEngine(api_key=None)
+        except AssertionError as e:
+            assert "export MINIMAX_API" in str(e)
 
 
 class TestRateParsing:
