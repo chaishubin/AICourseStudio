@@ -93,6 +93,11 @@ class Pipeline:
         try:
             page_texts = []
             for page in content.pages:
+                # 跳过没有文本的页面
+                if not page.text or not page.text.strip():
+                    logger.debug(f"第 {page.page_number} 页 无文本，跳过 TTS 转换")
+                    continue
+
                 if self.config.save_intermediate:
                     audio_path = (
                         self.config.output_dir / str(page.page_number) / "audio.mp3"
@@ -106,17 +111,20 @@ class Pipeline:
                 page.audio = audio_path
                 page_texts.append((page.page_number, page.text, audio_path))
 
-            # 异步批量转换
-            asyncio.run(
-                self.tts_engine.batch_convert(
-                    page_texts,
-                    voice=self.config.tts_voice,
-                    rate=self.config.tts_rate,
+            # 如果有需要转换的文本，进行异步批量转换
+            if page_texts:
+                asyncio.run(
+                    self.tts_engine.batch_convert(
+                        page_texts,
+                        voice=self.config.tts_voice,
+                        rate=self.config.tts_rate,
+                    )
                 )
-            )
 
-            for page_num, _, audio_path in page_texts:
-                logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
+                for page_num, _, audio_path in page_texts:
+                    logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
+            else:
+                logger.info("没有文本需要转换，跳过 TTS 处理")
 
         except Exception as e:
             logger.warning(f"TTS 转换失败: {e}")

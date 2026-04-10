@@ -38,14 +38,16 @@ class PPTProcessor(DocumentProcessor):
             # 提取文本
             page.text = self._extract_text_from_slide(slide)
 
-            # 保存文本（如果需要）
-            if config.save_intermediate:
+            # 保存文本（如果需要且不为空）
+            if config.save_intermediate and page.text and page.text.strip():
                 page_dir = config.output_dir / str(i)
                 page_dir.mkdir(parents=True, exist_ok=True)
 
                 text_path = page_dir / "text.txt"
                 text_path.write_text(page.text, encoding="utf-8")
                 logger.debug(f"第 {i} 页 文字 -> {text_path}  ({len(page.text)} 字符)")
+            elif config.save_intermediate:
+                logger.debug(f"第 {i} 页 无文本内容，跳过文本文件保存")
 
             # 提取图片
             if config.save_intermediate:

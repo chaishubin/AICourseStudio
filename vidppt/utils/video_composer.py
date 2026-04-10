@@ -36,8 +36,20 @@ class VideoComposer:
                 logger.warning(f"跳过第 {page.page_number} 页：缺少页面图像")
                 continue
 
+            # 如果没有音频，检查是否有文本
             if not page.audio or not page.audio.exists():
-                logger.warning(f"跳过第 {page.page_number} 页：缺少音频")
+                # 如果有文本但没有音频（可能是TTS失败），则跳过
+                if page.text and page.text.strip():
+                    logger.warning(f"跳过第 {page.page_number} 页：有文本但缺少音频")
+                else:
+                    # 如果既没有文本也没有音频（空白页面），使用默认时长
+                    logger.debug(
+                        f"第 {page.page_number} 页 无文本无音频，使用默认时长 3s"
+                    )
+                    image_clip = (
+                        ImageClip(str(page.slide_image)).with_duration(3)  # 默认显示3秒
+                    )
+                    clips.append(image_clip)
                 continue
 
             # 加载音频获取时长
