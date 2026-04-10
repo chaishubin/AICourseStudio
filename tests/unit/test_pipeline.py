@@ -212,8 +212,7 @@ class TestPipelineRun:
 class TestPipelineGenerateAudio:
     """测试音频生成"""
 
-    @pytest.mark.asyncio
-    async def test_generate_audio_with_intermediate_files(self, temp_dir):
+    def test_generate_audio_with_intermediate_files(self, temp_dir):
         """测试保存中间文件时的音频生成"""
         config = ProcessConfig(
             input_path=temp_dir / "test.pptx",
@@ -232,8 +231,14 @@ class TestPipelineGenerateAudio:
             ]
         )
 
-        # Mock TTS engine
-        mock_tts = AsyncMock()
+        # Mock TTS engine with proper async mock
+        mock_tts = Mock()
+
+        # Create an async function that does nothing
+        async def mock_batch_convert(*args, **kwargs):
+            pass
+
+        mock_tts.batch_convert = AsyncMock(side_effect=mock_batch_convert)
         pipeline.tts_engine = mock_tts
 
         # 创建进度跟踪器
@@ -250,8 +255,7 @@ class TestPipelineGenerateAudio:
         assert content.pages[0].audio == temp_dir / "output" / "1" / "audio.mp3"
         assert content.pages[1].audio == temp_dir / "output" / "2" / "audio.mp3"
 
-    @pytest.mark.asyncio
-    async def test_generate_audio_without_intermediate_files(self, temp_dir):
+    def test_generate_audio_without_intermediate_files(self, temp_dir):
         """测试不保存中间文件时的音频生成"""
         config = ProcessConfig(
             input_path=temp_dir / "test.pptx",
@@ -263,7 +267,13 @@ class TestPipelineGenerateAudio:
 
         content = DocumentContent(pages=[PageContent(page_number=1, text="测试")])
 
-        mock_tts = AsyncMock()
+        # Mock TTS engine with proper async mock
+        mock_tts = Mock()
+
+        async def mock_batch_convert(*args, **kwargs):
+            pass
+
+        mock_tts.batch_convert = AsyncMock(side_effect=mock_batch_convert)
         pipeline.tts_engine = mock_tts
 
         # 创建进度跟踪器
