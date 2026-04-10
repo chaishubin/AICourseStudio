@@ -1,6 +1,7 @@
 """
 主处理流程
 """
+
 import asyncio
 import sys
 from pathlib import Path
@@ -13,62 +14,81 @@ from .utils.video_composer import VideoComposer
 
 class Pipeline:
     """文档到视频转换的主流程"""
-    
+
     def __init__(self, config: ProcessConfig):
         self.config = config
         self.tts_engine = self._create_tts_engine()
-    
+
     def _create_tts_engine(self):
         """根据配置创建 TTS 引擎"""
         if self.config.tts_engine == "edge-tts":
             return EdgeTTSEngine()
-        # 可以在这里添加其他 TTS 引擎
-        # elif self.config.tts_engine == "minimax":
-        #     return MiniMaxTTSEngine(api_key=..., api_url=...)
+        elif self.config.tts_engine == "minimax":
+            # 从配置中获取 MiniMax 相关参数
+            api_key = self.config.tts_options.get("api_key")
+            if not api_key:
+                raise ValueError(
+                    "MiniMax TTS 引擎需要配置 api_key。\n"
+                    "请通过环境变量或配置文件设置: config.tts_options['api_key']"
+                )
+
+            from .engines.tts.api_tts_engine import MiniMaxTTSEngine
+
+            return MiniMaxTTSEngine(
+                api_key=api_key,
+                api_url=self.config.tts_options.get(
+                    "api_url", "https://api.minimaxi.com/v1/t2a_v2"
+                ),
+                model=self.config.tts_options.get("model", "speech-2.8-hd"),
+                sample_rate=self.config.tts_options.get("sample_rate", 32000),
+                bitrate=self.config.tts_options.get("bitrate", 128000),
+                audio_format=self.config.tts_options.get("audio_format", "mp3"),
+                channel=self.config.tts_options.get("channel", 1),
+                emotion=self.config.tts_options.get("emotion", "neutral"),
+            )
         else:
             raise ValueError(f"不支持的 TTS 引擎: {self.config.tts_engine}")
-    
+
     def run(self) -> None:
         """执行完整的处理流程"""
         # 1. 检查文件是否存在
         if not self.config.input_path.exists():
             print(f"错误：文件不存在: {self.config.input_path}", file=sys.stderr)
             sys.exit(1)
-        
+
         # 2. 获取对应的处理器
         processor_class = ProcessorRegistry.get_processor(self.config.input_path)
         if not processor_class:
             ext = self.config.input_path.suffix
             supported = ProcessorRegistry.list_supported_extensions()
             print(
-                f"错误：不支持的文件类型: {ext}\n"
-                f"支持的类型: {', '.join(supported)}",
+                f"错误：不支持的文件类型: {ext}\n支持的类型: {', '.join(supported)}",
                 file=sys.stderr,
             )
             sys.exit(1)
-        
+
         processor = processor_class()
         print(f"使用处理器: {processor_class.__name__}")
         print(f"输入文件: {self.config.input_path}")
         print(f"输出目录: {self.config.output_dir}\n")
-        
+
         # 3. 提取内容和渲染页面
         content = processor.process(self.config)
-        
+
         # 4. 文字转语音
         if self.config.enable_tts:
             self._generate_audio(content)
-        
+
         # 5. 合成视频
         if self.config.enable_video:
             self._compose_video(content)
-        
+
         # 6. 清理临时文件（如果需要）
         if not self.config.save_intermediate:
             self._cleanup_temp_files()
-        
+
         print(f"\n完成！输出目录: {self.config.output_dir.resolve()}")
-    
+
     def _generate_audio(self, content: DocumentContent) -> None:
         """生成语音"""
         print(
@@ -77,7 +97,7 @@ class Pipeline:
             f"声音: {self.config.tts_voice}, "
             f"语速: {self.config.tts_rate}）..."
         )
-        
+
         try:
             page_texts = []
             for page in content.pages:
@@ -89,11 +109,11 @@ class Pipeline:
                     audio_path = (
                         self.config.output_dir / f"_temp_audio_{page.page_number}.mp3"
                     )
-                
+
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
                 page.audio = audio_path
                 page_texts.append((page.page_number, page.text, audio_path))
-            
+
             # 异步批量转换
             asyncio.run(
                 self.tts_engine.batch_convert(
@@ -102,26 +122,26 @@ class Pipeline:
                     rate=self.config.tts_rate,
                 )
             )
-            
+
             for page_num, _, audio_path in page_texts:
                 print(f"  第 {page_num} 页 音频 -> {audio_path}")
-        
+
         except Exception as e:
             print(f"[警告] TTS 转换失败: {e}", file=sys.stderr)
             if "edge-tts" in self.config.tts_engine:
                 print("  请检查网络连接，edge-tts 需要访问微软服务器", file=sys.stderr)
-    
+
     def _compose_video(self, content: DocumentContent) -> None:
         """合成视频"""
         video_name = self.config.input_path.stem
         video_path = self.config.output_dir / f"{video_name}.mp4"
-        
+
         print(f"\n开始合成视频...")
         try:
             VideoComposer.compose(content, self.config, video_path)
         except Exception as e:
             print(f"[警告] 视频合成失败: {e}", file=sys.stderr)
-    
+
     def _cleanup_temp_files(self) -> None:
         """清理临时文件"""
         print("\n清理临时文件...")

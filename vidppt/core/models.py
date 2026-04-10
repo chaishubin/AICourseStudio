@@ -1,6 +1,7 @@
 """
 核心数据模型
 """
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,7 @@ from typing import Optional
 @dataclass
 class PageContent:
     """单页内容"""
+
     page_number: int
     text: str = ""
     images: list[Path] = field(default_factory=list)
@@ -20,9 +22,10 @@ class PageContent:
 @dataclass
 class DocumentContent:
     """文档内容"""
+
     pages: list[PageContent]
     metadata: dict = field(default_factory=dict)
-    
+
     @property
     def total_pages(self) -> int:
         return len(self.pages)
@@ -31,31 +34,33 @@ class DocumentContent:
 @dataclass
 class ProcessConfig:
     """处理配置"""
+
     # 输入输出
     input_path: Path
     output_dir: Path
-    
+
     # 功能开关
     enable_tts: bool = True
     enable_video: bool = True
     save_intermediate: bool = True  # 是否保存中间文件
-    
+
     # TTS 配置
     tts_engine: str = "edge-tts"
     tts_voice: str = "zh-CN-XiaoxiaoNeural"
     tts_rate: str = "+0%"
-    
+    tts_options: dict = field(default_factory=dict)  # TTS 引擎特定选项
+
     # OCR 配置
     ocr_engine: str = "builtin"  # builtin, tesseract, api
-    
+
     # 图像转换配置
     image_converter: str = "builtin"  # builtin, api
-    
+
     # 视频配置
     video_fps: int = 24
     video_codec: str = "libx264"
     audio_codec: str = "aac"
-    
+
     def __post_init__(self):
         self.input_path = Path(self.input_path)
         self.output_dir = Path(self.output_dir)
