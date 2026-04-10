@@ -89,6 +89,7 @@ class PPTProcessor(DocumentProcessor):
                 slide_images.append(out_path)
             else:
                 # 不保存中间文件时，保存到临时路径
+                config.output_dir.mkdir(parents=True, exist_ok=True)
                 temp_path = config.output_dir / f"_temp_slide_{i + 1}.png"
                 img.save(temp_path, "PNG")
                 slide_images.append(temp_path)
@@ -126,6 +127,8 @@ class PPTProcessor(DocumentProcessor):
                 image = shape.image
                 ext = image.ext
                 img_path = out_dir / f"image_{img_index}.{ext}"
+                # 如果目录不存在，先创建
+                img_path.parent.mkdir(parents=True, exist_ok=True)
                 img_path.write_bytes(image.blob)
                 saved.append(img_path)
                 img_index += 1

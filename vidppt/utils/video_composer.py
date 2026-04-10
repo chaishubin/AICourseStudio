@@ -72,6 +72,9 @@ class VideoComposer:
         logger.info(f"合并 {len(clips)} 个片段，输出 -> {output_path}")
         final = concatenate_videoclips(clips, method="compose")
 
+        # 确保输出目录存在
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         # 输出视频
         final.write_videofile(
             str(output_path),
