@@ -1,0 +1,46 @@
+# VidPPT Configuration File Example (YAML)
+# 
+# This is a YAML format configuration file for VidPPT
+# You can use this with: vidppt --config config.yaml
+#
+# You can also override settings with command line arguments:
+# vidppt --config config.yaml input.pptx  # CLI args take priority
+
+# Input and output paths
+input: "presentation.pptx"
+output: "outputs"
+
+# Feature toggles
+enable_tts: true              # Enable text-to-speech
+enable_video: true            # Enable video composition
+save_intermediate: true       # Save intermediate files (text, images)
+
+# TTS Configuration
+tts_engine: "edge-tts"        # Options: edge-tts, minimax
+tts_voice: "zh-CN-XiaoxiaoNeural"  # Voice selection
+tts_rate: "+0%"               # Speech rate: +20%, -10%, 1.5, etc.
+
+# TTS Engine specific options
+tts_options:
+  # For edge-tts, typically no extra options needed
+  # For minimax, you can set:
+  # emotion: "happy"           # Emotion: happy, sad, angry, neutral, peaceful
+  # sample_rate: 32000         # Sample rate
+  # bitrate: 128000            # Bit rate
+  # audio_format: "mp3"        # Format: mp3, wav
+
+# Audio Cache Configuration
+enable_audio_cache: true
+audio_cache_dir: "~/.cache/vidppt/audio"  # ~ expands to home directory
+audio_cache_expiry_days: 30
+
+# OCR Configuration
+ocr_engine: "builtin"         # Options: builtin, tesseract, api
+
+# Image Converter Configuration
+image_converter: "builtin"    # Options: builtin, api
+
+# Video Configuration
+video_fps: 24                 # Frames per second
+video_codec: "libx264"        # Video codec
+audio_codec: "aac"            # Audio codec

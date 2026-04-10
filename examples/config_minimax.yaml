@@ -1,0 +1,45 @@
+# VidPPT MiniMax Configuration Example (YAML)
+# 
+# This example shows how to use MiniMax TTS engine with various options
+# Set MINIMAX_API environment variable before running:
+#   export MINIMAX_API='sk-cp-your-api-key'
+
+input: "presentation.pptx"
+output: "outputs"
+
+# Feature toggles
+enable_tts: true
+enable_video: true
+save_intermediate: true
+
+# TTS Configuration for MiniMax
+tts_engine: "minimax"
+tts_voice: "male-qn-qingse"    # Male voice
+tts_rate: "+10%"               # 10% faster
+
+# MiniMax specific options
+tts_options:
+  emotion: "happy"             # Emotion: happy, sad, angry, neutral, peaceful
+  sample_rate: 44100           # Higher quality
+  bitrate: 256000              # Higher bitrate
+  audio_format: "mp3"          # Format: mp3, wav
+  # api_key will be read from MINIMAX_API environment variable
+
+# Cache settings
+enable_audio_cache: true
+audio_cache_dir: "~/.cache/vidppt/audio"
+audio_cache_expiry_days: 30
+
+# Other settings
+ocr_engine: "builtin"
+image_converter: "builtin"
+video_fps: 24
+video_codec: "libx264"
+audio_codec: "aac"
+
+# Notes:
+# - Supported MiniMax voices: male-qn-qingse, female-qn-nana, etc.
+# - Supported emotions: happy, sad, angry, neutral, peaceful
+# - Speech rate range: 0.5x to 2.0x (use +50%, -50%, etc.)
+# - Sample rate range: 8000-48000 Hz
+# - Bitrate range: 64000-512000 bps

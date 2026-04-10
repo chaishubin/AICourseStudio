@@ -12,6 +12,8 @@ from .core.models import ProcessConfig
 from .core.registry import ProcessorRegistry
 from .pipeline import Pipeline
 from .utils.logger import setup_logger
+from .utils.config_loader import load_config_file, ConfigLoader
+from .utils.config_converter import ConfigConverter
 
 # 导入所有处理器以触发注册
 from .processors.ppt_processor import PPTProcessor
@@ -34,6 +36,11 @@ def main():
   %(prog)s input.pptx --no-intermediate         # 不保存中间文件
   %(prog)s input.pptx --voice zh-CN-YunyangNeural  # 使用男声 (edge-tts)
   %(prog)s input.pptx --rate +20%%              # 加速20%%
+  
+配置文件示例:
+  %(prog)s --config config.yaml                 # 使用 YAML 配置文件
+  %(prog)s --config config.json                 # 使用 JSON 配置文件
+  %(prog)s --config config.yaml input.pptx      # 配置文件 + 命令行覆盖
   
 MiniMax TTS 示例:
    %(prog)s input.pptx --tts-engine minimax      # 使用 MiniMax 引擎
@@ -61,7 +68,14 @@ MiniMax TTS 示例:
     )
 
     # 位置参数
-    parser.add_argument("input", help="输入文件路径（PPT/PDF/Word）")
+    parser.add_argument(
+        "input", nargs="?", default=None, help="输入文件路径（PPT/PDF/Word）"
+    )
+
+    # 配置文件
+    parser.add_argument(
+        "--config", default=None, help="配置文件路径（支持 YAML/JSON 格式）"
+    )
 
     # 输出配置
     parser.add_argument(
@@ -170,38 +184,73 @@ MiniMax TTS 示例:
     if args.log_file:
         logger.info(f"日志文件: {args.log_file}")
 
-    # 构建 TTS 选项字典
-    tts_options = {}
-    if args.tts_engine == "minimax":
-        tts_options = {
-            "emotion": args.minimax_emotion,
-            "sample_rate": args.minimax_sample_rate,
-            "bitrate": args.minimax_bitrate,
-            "audio_format": args.minimax_format,
-            # api_key 将从环境变量 MINIMAX_API 自动读取
-        }
+    # 加载配置文件（如果提供了）
+    config_dict = {}
+    if args.config:
+        logger.info(f"加载配置文件: {args.config}")
+        try:
+            config_dict = load_config_file(args.config)
+            logger.debug(f"配置文件加载成功，包含 {len(config_dict)} 个字段")
+        except Exception as e:
+            logger.error(f"加载配置文件失败: {e}")
+            sys.exit(1)
 
-    # 显示配置信息
-    logger.info("=" * 60)
-    logger.info("文档到视频转换工具")
-    logger.info("=" * 60)
-    logger.info("注册的文档处理器:")
+    # 将命令行参数转换为配置字典
+    cli_config = {}
 
-    # 创建配置
-    config = ProcessConfig(
-        input_path=Path(args.input),
-        output_dir=Path(args.output),
-        enable_tts=not args.no_tts,
-        enable_video=not args.no_video,
-        save_intermediate=not args.no_intermediate,
-        tts_engine=args.tts_engine,
-        tts_voice=args.voice,
-        tts_rate=args.rate,
-        tts_options=tts_options,
-        enable_audio_cache=not args.no_cache,
-        audio_cache_dir=Path(args.cache_dir) if args.cache_dir else None,
-        audio_cache_expiry_days=args.cache_expiry,
-    )
+    # 如果提供了输入文件作为位置参数，覆盖配置文件中的 input
+    if args.input:
+        cli_config["input"] = args.input
+    if args.output != "outputs":  # 非默认值
+        cli_config["output"] = args.output
+    if args.no_tts:
+        cli_config["enable_tts"] = False
+    if args.no_video:
+        cli_config["enable_video"] = False
+    if args.no_intermediate:
+        cli_config["save_intermediate"] = False
+    if args.tts_engine != "edge-tts":
+        cli_config["tts_engine"] = args.tts_engine
+    if args.voice != "zh-CN-XiaoxiaoNeural":
+        cli_config["tts_voice"] = args.voice
+    if args.rate != "+0%":
+        cli_config["tts_rate"] = args.rate
+    if args.no_cache:
+        cli_config["enable_audio_cache"] = False
+    if args.cache_dir:
+        cli_config["audio_cache_dir"] = args.cache_dir
+    if args.cache_expiry != 30:
+        cli_config["audio_cache_expiry_days"] = args.cache_expiry
+
+    # 合并配置
+    if args.config and not config_dict.get("input") and not args.input:
+        logger.error(
+            "错误: 必须指定输入文件，要么通过 --config 文件中的 'input' 字段，要么通过命令行位置参数"
+        )
+        sys.exit(1)
+
+    # 合并配置文件和 CLI 参数（CLI 参数优先）
+    merged_config = {**config_dict, **cli_config}
+
+    # MiniMax 选项（如果指定了 MiniMax）
+    if merged_config.get("tts_engine") == "minimax" and not args.config:
+        tts_options = merged_config.get("tts_options", {})
+        if args.minimax_emotion != "neutral":
+            tts_options["emotion"] = args.minimax_emotion
+        if args.minimax_sample_rate != 32000:
+            tts_options["sample_rate"] = args.minimax_sample_rate
+        if args.minimax_bitrate != 128000:
+            tts_options["bitrate"] = args.minimax_bitrate
+        if args.minimax_format != "mp3":
+            tts_options["audio_format"] = args.minimax_format
+        merged_config["tts_options"] = tts_options
+
+    # 转换为 ProcessConfig
+    try:
+        config = ConfigConverter.to_process_config(merged_config)
+    except Exception as e:
+        logger.error(f"配置转换失败: {e}")
+        sys.exit(1)
 
     # 创建并运行流程
     pipeline = Pipeline(config)

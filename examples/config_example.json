@@ -1,0 +1,21 @@
+{
+  "input": "presentation.pptx",
+  "output": "outputs",
+  "enable_tts": true,
+  "enable_video": true,
+  "save_intermediate": true,
+  "tts_engine": "edge-tts",
+  "tts_voice": "zh-CN-YunyangNeural",
+  "tts_rate": "+0%",
+  "tts_options": {
+    "_comment": "For edge-tts, typically no extra options needed. For minimax, you can set emotion, sample_rate, bitrate, audio_format"
+  },
+  "enable_audio_cache": true,
+  "audio_cache_dir": "~/.cache/vidppt/audio",
+  "audio_cache_expiry_days": 30,
+  "ocr_engine": "builtin",
+  "image_converter": "builtin",
+  "video_fps": 24,
+  "video_codec": "libx264",
+  "audio_codec": "aac"
+}
