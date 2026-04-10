@@ -63,18 +63,18 @@ class TestPipelineRun:
     """测试 Pipeline 执行流程"""
 
     def test_run_file_not_exists(self, temp_dir):
-        """测试文件不存在的情况"""
+        """测试文件不存在时的错误处理"""
         config = ProcessConfig(
             input_path=temp_dir / "nonexistent.pptx", output_dir=temp_dir / "output"
         )
 
         pipeline = Pipeline(config)
 
-        # 应该退出并报错
-        with pytest.raises(SystemExit) as exc_info:
+        # 应该抛出 FileNotFoundError
+        with pytest.raises(FileNotFoundError) as exc_info:
             pipeline.run()
 
-        assert exc_info.value.code == 1
+        assert "输入文件不存在" in str(exc_info.value)
 
     def test_run_unsupported_file_type(self, temp_dir):
         """测试不支持的文件类型"""
@@ -88,11 +88,11 @@ class TestPipelineRun:
 
         pipeline = Pipeline(config)
 
-        # 应该退出并报错
-        with pytest.raises(SystemExit) as exc_info:
+        # 应该抛出 ValueError
+        with pytest.raises(ValueError) as exc_info:
             pipeline.run()
 
-        assert exc_info.value.code == 1
+        assert "不支持的文件类型" in str(exc_info.value)
 
     def test_run_full_workflow(self, temp_dir):
         """测试完整工作流"""

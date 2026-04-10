@@ -29,6 +29,7 @@ Pipeline(config).run()
 | **MINIMAX_GUIDE.md** | MiniMax 完整使用指南 | 2000+ 行 |
 | **QUICKSTART_MINIMAX.md** | 5分钟快速开始 | 1200+ 行 |
 | **MINIMAX_README.md** | MiniMax 简明概览 | 400行 |
+| **LOGGING_GUIDE.md** | 日志系统完整指南 | 500+ 行 |
 
 ## 🔧 常用命令
 
@@ -42,6 +43,21 @@ pytest tests/unit/test_minimax_tts.py::TestEnvironmentVariableHandling -v
 
 # 查看覆盖率
 pytest tests/unit/ --cov=vidppt --cov-report=term-missing
+```
+
+### 日志控制
+```bash
+# 启用详细日志
+python -m vidppt input.pptx --verbose
+
+# 设置日志级别（DEBUG/INFO/WARNING/ERROR）
+python -m vidppt input.pptx --log-level DEBUG
+
+# 保存日志到文件
+python -m vidppt input.pptx --log-file app.log
+
+# 组合使用
+python -m vidppt input.pptx -v --log-level DEBUG --log-file debug.log
 ```
 
 ### Git
@@ -192,10 +208,10 @@ os.environ['MINIMAX_API'] = 'old-key'
 ## 📊 测试覆盖
 
 ```
-单元测试: 93 个
+单元测试: 107 个 ✅
 ├── MiniMax TTS: 27 个
 │   ├── 基础功能: 3 个
-│   ├── 环境变量: 8 个 ← 本阶段新增
+│   ├── 环境变量: 8 个
 │   ├── 语速解析: 7 个
 │   ├── 负载构建: 5 个
 │   └── 集成测试: 4 个
@@ -206,7 +222,7 @@ os.environ['MINIMAX_API'] = 'old-key'
 └── TTS 引擎: 13 个
 
 总通过率: 100% ✅
-执行时间: 0.57 秒
+执行时间: 0.45 秒
 ```
 
 ## 🔗 重要链接

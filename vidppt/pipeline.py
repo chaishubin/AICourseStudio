@@ -3,13 +3,15 @@
 """
 
 import asyncio
-import sys
+import logging
 from pathlib import Path
 
 from .core.models import ProcessConfig, DocumentContent
 from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
 from .utils.video_composer import VideoComposer
+
+logger = logging.getLogger(__name__)
 
 
 class Pipeline:
@@ -46,24 +48,21 @@ class Pipeline:
         """执行完整的处理流程"""
         # 1. 检查文件是否存在
         if not self.config.input_path.exists():
-            print(f"错误：文件不存在: {self.config.input_path}", file=sys.stderr)
-            sys.exit(1)
+            logger.error(f"文件不存在: {self.config.input_path}")
+            raise FileNotFoundError(f"输入文件不存在: {self.config.input_path}")
 
         # 2. 获取对应的处理器
         processor_class = ProcessorRegistry.get_processor(self.config.input_path)
         if not processor_class:
             ext = self.config.input_path.suffix
             supported = ProcessorRegistry.list_supported_extensions()
-            print(
-                f"错误：不支持的文件类型: {ext}\n支持的类型: {', '.join(supported)}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            logger.error(f"不支持的文件类型: {ext}。支持的类型: {', '.join(supported)}")
+            raise ValueError(f"不支持的文件类型: {ext}")
 
         processor = processor_class()
-        print(f"使用处理器: {processor_class.__name__}")
-        print(f"输入文件: {self.config.input_path}")
-        print(f"输出目录: {self.config.output_dir}\n")
+        logger.info(f"使用处理器: {processor_class.__name__}")
+        logger.info(f"输入文件: {self.config.input_path}")
+        logger.info(f"输出目录: {self.config.output_dir}")
 
         # 3. 提取内容和渲染页面
         content = processor.process(self.config)
@@ -80,15 +79,15 @@ class Pipeline:
         if not self.config.save_intermediate:
             self._cleanup_temp_files()
 
-        print(f"\n完成！输出目录: {self.config.output_dir.resolve()}")
+        logger.info(f"完成！输出目录: {self.config.output_dir.resolve()}")
 
     def _generate_audio(self, content: DocumentContent) -> None:
         """生成语音"""
-        print(
-            f"\n开始文字转语音"
+        logger.info(
+            f"开始文字转语音"
             f"（引擎: {self.config.tts_engine}, "
             f"声音: {self.config.tts_voice}, "
-            f"语速: {self.config.tts_rate}）..."
+            f"语速: {self.config.tts_rate}）"
         )
 
         try:
@@ -117,28 +116,28 @@ class Pipeline:
             )
 
             for page_num, _, audio_path in page_texts:
-                print(f"  第 {page_num} 页 音频 -> {audio_path}")
+                logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
 
         except Exception as e:
-            print(f"[警告] TTS 转换失败: {e}", file=sys.stderr)
+            logger.warning(f"TTS 转换失败: {e}")
             if "edge-tts" in self.config.tts_engine:
-                print("  请检查网络连接，edge-tts 需要访问微软服务器", file=sys.stderr)
+                logger.warning("请检查网络连接，edge-tts 需要访问微软服务器")
 
     def _compose_video(self, content: DocumentContent) -> None:
         """合成视频"""
         video_name = self.config.input_path.stem
         video_path = self.config.output_dir / f"{video_name}.mp4"
 
-        print(f"\n开始合成视频...")
+        logger.info("开始合成视频...")
         try:
             VideoComposer.compose(content, self.config, video_path)
         except Exception as e:
-            print(f"[警告] 视频合成失败: {e}", file=sys.stderr)
+            logger.warning(f"视频合成失败: {e}")
 
     def _cleanup_temp_files(self) -> None:
         """清理临时文件"""
-        print("\n清理临时文件...")
+        logger.info("清理临时文件...")
         temp_files = list(self.config.output_dir.glob("_temp_*"))
         for temp_file in temp_files:
             temp_file.unlink()
-            print(f"  删除: {temp_file}")
+            logger.debug(f"删除: {temp_file}")

@@ -3,16 +3,21 @@
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 from .core.models import ProcessConfig
 from .core.registry import ProcessorRegistry
 from .pipeline import Pipeline
+from .utils.logger import setup_logger
 
 # 导入所有处理器以触发注册
 from .processors.ppt_processor import PPTProcessor
 from .processors.pdf_processor import PDFProcessor
+
+# 创建模块级别的日志记录器
+logger = logging.getLogger("vidppt.cli")
 
 
 def main():
@@ -113,7 +118,34 @@ MiniMax TTS 示例:
         help="MiniMax 音频格式（默认: mp3）",
     )
 
+    # 日志配置
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="启用详细日志输出（包括时间戳和函数名）",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="日志等级（默认: INFO）",
+    )
+    parser.add_argument(
+        "--log-file", default=None, help="日志文件路径（默认: 仅输出到控制台）"
+    )
+
     args = parser.parse_args()
+
+    # 初始化日志系统
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    setup_logger(
+        name="vidppt", level=log_level, verbose=args.verbose, log_file=args.log_file
+    )
+
+    logger.info(f"VidPPT 启动 (日志等级: {args.log_level})")
+    if args.log_file:
+        logger.info(f"日志文件: {args.log_file}")
 
     # 构建 TTS 选项字典
     tts_options = {}
@@ -126,11 +158,11 @@ MiniMax TTS 示例:
             # api_key 将从环境变量 MINIMAX_API 自动读取
         }
 
-    # 显示注册的处理器
-    print("=" * 60)
-    print("文档到视频转换工具")
-    print("=" * 60)
-    print("\n注册的文档处理器:")
+    # 显示配置信息
+    logger.info("=" * 60)
+    logger.info("文档到视频转换工具")
+    logger.info("=" * 60)
+    logger.info("注册的文档处理器:")
 
     # 创建配置
     config = ProcessConfig(
