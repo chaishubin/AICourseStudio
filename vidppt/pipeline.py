@@ -15,6 +15,34 @@ from .utils.audio_cache import AudioCacheManager
 from .utils.progress import ProgressTracker, ProcessStage
 
 
+def _run_async(coro):
+    """
+    安全地运行异步协程，兼容嵌套事件循环场景（如 Jupyter、某些框架）。
+
+    优先尝试在已有事件循环中运行（使用 nest_asyncio），
+    若不可用则回退到 asyncio.run()。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # 已有运行中的事件循环（如 Jupyter），尝试使用 nest_asyncio
+        try:
+            import nest_asyncio
+
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except ImportError:
+            raise RuntimeError(
+                "检测到已有运行中的事件循环，但 nest_asyncio 未安装。\n"
+                "请运行: pip install nest_asyncio"
+            )
+    else:
+        return asyncio.run(coro)
+
+
 class Pipeline:
     """文档到视频转换的主流程"""
 
@@ -46,6 +74,8 @@ class Pipeline:
                 audio_format=self.config.tts_options.get("audio_format", "mp3"),
                 channel=self.config.tts_options.get("channel", 1),
                 emotion=self.config.tts_options.get("emotion", "neutral"),
+                timeout=self.config.tts_options.get("timeout", 60.0),
+                max_retries=self.config.tts_options.get("max_retries", 3),
             )
         else:
             raise ValueError(f"不支持的 TTS 引擎: {self.config.tts_engine}")
@@ -110,7 +140,7 @@ class Pipeline:
         logger.info(
             f"开始文字转语音"
             f"（引擎: {self.config.tts_engine}, "
-            f"声音: {self.config.tts_voice}, "
+            f"声音: {self.config.tts_voice if self.config.tts_engine == 'edge-tts' else self.config.tts_options.get('voice_id', 'male-qn-qingse')}, "
             f"语速: {self.config.tts_rate}）"
         )
 
@@ -140,13 +170,26 @@ class Pipeline:
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # 尝试从缓存获取
-                cached_audio = self.cache_manager.get(
-                    text=page.text,
-                    tts_engine=self.config.tts_engine,
-                    voice=self.config.tts_voice,
-                    rate=self.config.tts_rate,
-                    **self.config.tts_options,
-                )
+                if self.config.tts_engine == "edge-tts":
+                    cached_audio = self.cache_manager.get(
+                        text=page.text,
+                        tts_engine=self.config.tts_engine,
+                        voice=self.config.tts_voice,
+                        rate=self.config.tts_rate,
+                    )
+                else:
+                    # minimax：voice 来自 tts_options，其余 tts_options 也作为 cache key
+                    cached_audio = self.cache_manager.get(
+                        text=page.text,
+                        tts_engine=self.config.tts_engine,
+                        voice=self.config.tts_options.get("voice_id", "male-qn-qingse"),
+                        rate=self.config.tts_rate,
+                        **{
+                            k: v
+                            for k, v in self.config.tts_options.items()
+                            if k != "api_key"
+                        },
+                    )
 
                 if cached_audio:
                     # 从缓存复制文件
@@ -166,24 +209,73 @@ class Pipeline:
 
             # 如果有需要转换的文本，进行异步批量转换
             if page_texts:
-                asyncio.run(
-                    self.tts_engine.batch_convert(
-                        page_texts,
-                        voice=self.config.tts_voice,
-                        rate=self.config.tts_rate,
+                if self.config.tts_engine == "edge-tts":
+                    # edge-tts 只需要 voice 和 rate，不接受其他参数
+                    _run_async(
+                        self.tts_engine.batch_convert(
+                            page_texts,
+                            voice=self.config.tts_voice,
+                            rate=self.config.tts_rate,
+                        )
                     )
-                )
+                elif self.config.tts_engine == "minimax":
+                    # MiniMax 引擎：voice_id 来自 tts_options，
+                    # 额外参数（emotion、pronunciation_dict）也来自 tts_options
+                    # 引擎级参数（model、sample_rate 等）已在初始化时传入，不重复传递
+                    minimax_voice = self.config.tts_options.get(
+                        "voice_id", "male-qn-qingse"
+                    )
+                    minimax_extra = {
+                        k: v
+                        for k, v in self.config.tts_options.items()
+                        if k
+                        not in (
+                            "api_key",
+                            "api_url",
+                            "model",
+                            "sample_rate",
+                            "bitrate",
+                            "audio_format",
+                            "channel",
+                            "voice_id",
+                            "timeout",
+                            "max_retries",
+                        )
+                    }
+                    _run_async(
+                        self.tts_engine.batch_convert(
+                            page_texts,
+                            voice=minimax_voice,
+                            rate=self.config.tts_rate,
+                            **minimax_extra,
+                        )
+                    )
 
                 # 转换后保存到缓存
                 for page_num, text, audio_path in page_texts:
-                    self.cache_manager.put(
-                        audio_path=audio_path,
-                        text=text,
-                        tts_engine=self.config.tts_engine,
-                        voice=self.config.tts_voice,
-                        rate=self.config.tts_rate,
-                        **self.config.tts_options,
-                    )
+                    if self.config.tts_engine == "edge-tts":
+                        self.cache_manager.put(
+                            audio_path=audio_path,
+                            text=text,
+                            tts_engine=self.config.tts_engine,
+                            voice=self.config.tts_voice,
+                            rate=self.config.tts_rate,
+                        )
+                    else:
+                        self.cache_manager.put(
+                            audio_path=audio_path,
+                            text=text,
+                            tts_engine=self.config.tts_engine,
+                            voice=self.config.tts_options.get(
+                                "voice_id", "male-qn-qingse"
+                            ),
+                            rate=self.config.tts_rate,
+                            **{
+                                k: v
+                                for k, v in self.config.tts_options.items()
+                                if k != "api_key"
+                            },
+                        )
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
 
             if page_texts or cached_pages:

@@ -10,10 +10,8 @@ from loguru import logger
 logger.remove()
 
 # 配置格式
-LOG_FORMAT = (
-    "<level>{level: <8}</level> | <cyan>{name}</cyan> - <level>{message}</level>"
-)
-LOG_FORMAT_WITH_TIME = "<level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+LOG_FORMAT = "<level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{file}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+LOG_FORMAT_WITH_TIME = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{file}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
 
 
 def setup_logger(

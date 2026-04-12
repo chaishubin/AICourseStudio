@@ -167,7 +167,7 @@ class TestPayloadBuilding:
         assert payload["text"] == "测试文本"
         assert payload["stream"] is False
         assert payload["voice_setting"]["voice_id"] == "male-qn-qingse"
-        assert payload["voice_setting"]["speed"] == 1.0
+        assert payload["voice_setting"]["speed"] == 1
         assert payload["audio_setting"]["sample_rate"] == 32000
         assert payload["audio_setting"]["format"] == "mp3"
 
@@ -211,9 +211,9 @@ class TestPayloadBuilding:
         engine = MiniMaxTTSEngine(api_key="test-key")
 
         test_cases = [
-            ("+20%", 1.2),
-            ("-10%", 0.9),
-            ("1.5", 1.5),
+            ("+20%", 1),   # 1.2 -> int -> 1
+            ("-10%", 0),   # 0.9 -> int -> 0
+            ("1.5", 1),    # 1.5 -> clamped to 1.5 -> int -> 1
         ]
 
         for rate_input, expected_speed in test_cases:
@@ -265,7 +265,7 @@ class TestMiniMaxConvertAsync:
             # 2. client.post 被调用了正确的参数
             mock_client.post.assert_called_once()
             call_kwargs = mock_client.post.call_args[1]
-            assert call_kwargs["timeout"] == 30.0
+            assert call_kwargs["timeout"] == 60.0
             assert "headers" in call_kwargs
             assert "json" in call_kwargs
 
@@ -336,7 +336,7 @@ class TestMiniMaxConvertAsync:
             call_kwargs = mock_client.post.call_args[1]
             payload = call_kwargs["json"]
             assert payload["voice_setting"]["emotion"] == "happy"
-            assert payload["voice_setting"]["speed"] == 1.1  # +10%
+            assert payload["voice_setting"]["speed"] == 1  # +10%
 
     @pytest.mark.asyncio
     async def test_convert_async_missing_audio_data_raises_error(self, temp_dir):

@@ -40,6 +40,14 @@ class ConfigConverter:
         # 输出目录，默认为 'outputs'
         output_dir = Path(config_dict.get("output", "outputs"))
 
+        tts_engine = config_dict.get("tts_engine", "edge-tts")
+
+        # tts_voice 仅对 edge-tts 有意义；minimax 的 voice 通过 tts_options["voice_id"] 配置
+        if tts_engine == "edge-tts":
+            tts_voice = config_dict.get("tts_voice", "zh-CN-XiaoxiaoNeural")
+        else:
+            tts_voice = None
+
         # 创建 ProcessConfig
         process_config = ProcessConfig(
             input_path=input_path,
@@ -49,8 +57,8 @@ class ConfigConverter:
             enable_video=config_dict.get("enable_video", True),
             save_intermediate=config_dict.get("save_intermediate", True),
             # TTS 配置
-            tts_engine=config_dict.get("tts_engine", "edge-tts"),
-            tts_voice=config_dict.get("tts_voice", "zh-CN-XiaoxiaoNeural"),
+            tts_engine=tts_engine,
+            tts_voice=tts_voice,
             tts_rate=config_dict.get("tts_rate", "+0%"),
             tts_options=config_dict.get("tts_options", {}),
             # 缓存配置

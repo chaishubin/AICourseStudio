@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import base64
 
+from loguru import logger
+
 from ...core.interfaces import TTSEngine
 
 
@@ -94,6 +96,8 @@ class MiniMaxTTSEngine(APITTSEngine):
         audio_format: str = DEFAULT_FORMAT,
         channel: int = DEFAULT_CHANNEL,
         emotion: str = "neutral",
+        timeout: float = 60.0,
+        max_retries: int = 3,
         **kwargs,
     ):
         """
@@ -108,6 +112,8 @@ class MiniMaxTTSEngine(APITTSEngine):
             audio_format: 音频格式 (默认: mp3)
             channel: 声道数 (默认: 1)
             emotion: 情感类型 (默认: neutral)
+            timeout: 请求超时秒数 (默认: 60.0)
+            max_retries: 失败最大重试次数 (默认: 3)
             **kwargs: 其他选项
 
         抛出异常:
@@ -130,7 +136,16 @@ class MiniMaxTTSEngine(APITTSEngine):
         self.bitrate = bitrate
         self.audio_format = audio_format
         self.channel = channel
-        self.emotion = emotion if emotion in self.EMOTIONS else "neutral"
+        if emotion not in self.EMOTIONS:
+            logger.warning(
+                f"不支持的情感类型: '{emotion}'，已回退为 'neutral'。"
+                f"支持的类型: {self.EMOTIONS}"
+            )
+            self.emotion = "neutral"
+        else:
+            self.emotion = emotion
+        self.timeout = timeout
+        self.max_retries = max_retries
 
     @staticmethod
     def _parse_rate(rate: str) -> float:
@@ -200,7 +215,7 @@ class MiniMaxTTSEngine(APITTSEngine):
             "stream": False,
             "voice_setting": {
                 "voice_id": voice,
-                "speed": rate_value,
+                "speed": int(rate_value),
                 "vol": 1,
                 "pitch": 0,
                 "emotion": emotion,
@@ -211,6 +226,7 @@ class MiniMaxTTSEngine(APITTSEngine):
                 "format": self.audio_format,
                 "channel": self.channel,
             },
+            "subtitle_enable": False,
         }
 
         # 添加发音字典（如果提供）
@@ -259,31 +275,55 @@ class MiniMaxTTSEngine(APITTSEngine):
             "Content-Type": "application/json",
         }
 
-        # 发送 API 请求
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=30.0,
-            )
-            response.raise_for_status()
+        # 发送 API 请求（带重试）
+        last_exc: Exception = RuntimeError("未知错误")
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        self.api_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self.timeout,
+                    )
+                    response.raise_for_status()
 
-            # 解析响应
-            result = response.json()
+                    # 解析响应
+                    result = response.json()
 
-            # 提取音频数据
-            # MiniMax API 返回格式: {"data": {"audio": "hex_string"}, ...}
-            audio_hex = result.get("data", {}).get("audio")
-            if not audio_hex:
-                raise ValueError("API 返回的音频数据为空")
+                    # 提取音频数据
+                    # MiniMax API 返回格式: {"data": {"audio": "base64_string"}, ...}
+                    audio_b64 = result.get("data", {}).get("audio")
+                    if not audio_b64:
+                        raise ValueError(f"API 返回的音频数据为空。完整响应: {result}")
 
-            # 从十六进制转换为二进制
-            audio_data = bytes.fromhex(audio_hex)
+                    # 从 base64 转换为二进制
+                    audio_data = base64.b64decode(audio_b64)
 
-            # 保存到文件
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(audio_data)
+                    # 保存到文件
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_bytes(audio_data)
+                    return  # 成功，直接返回
+
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                last_exc = exc
+                if attempt < self.max_retries:
+                    import asyncio as _asyncio
+
+                    wait = 2 ** (attempt - 1)  # 指数退避: 1s, 2s, 4s...
+                    from loguru import logger as _logger
+
+                    _logger.warning(
+                        f"TTS API 请求失败（第 {attempt}/{self.max_retries} 次）"
+                        f"，{wait}s 后重试: {exc}"
+                    )
+                    await _asyncio.sleep(wait)
+                else:
+                    raise
+            except Exception:
+                raise  # 非网络错误直接抛出，不重试
+
+        raise last_exc
 
     async def batch_convert_with_emotions(
         self,

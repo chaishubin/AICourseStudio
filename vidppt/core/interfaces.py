@@ -65,11 +65,23 @@ class TTSEngine(ABC):
         voice: str,
         rate: str,
         batch_size: int = 5,
+        **kwargs,
     ) -> None:
-        """批量转换文本为音频"""
+        """批量转换文本为音频
+
+        参数:
+            texts: [(页码, 文本, 输出路径), ...]
+            voice: 语音 ID
+            rate: 语速
+            batch_size: 批处理大小（默认 5）
+            **kwargs: 透传给 convert_async 的额外参数（如 emotion、pronunciation_dict 等）
+        """
         import asyncio
 
-        tasks = [self.convert_async(text, path, voice, rate) for _, text, path in texts]
+        tasks = [
+            self.convert_async(text, path, voice, rate, **kwargs)
+            for _, text, path in texts
+        ]
 
         # 分批处理避免并发过多
         for i in range(0, len(tasks), batch_size):

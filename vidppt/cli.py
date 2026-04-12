@@ -101,7 +101,7 @@ MiniMax TTS 示例:
     parser.add_argument(
         "--voice",
         default="zh-CN-XiaoxiaoNeural",
-        help="TTS 声音角色（默认: zh-CN-XiaoxiaoNeural）",
+        help="TTS 声音角色（edge-tts 默认: zh-CN-XiaoxiaoNeural；minimax 请填写 voice_id，如 male-qn-qingse）",
     )
     parser.add_argument(
         "--rate",
@@ -211,8 +211,19 @@ MiniMax TTS 示例:
         cli_config["save_intermediate"] = False
     if args.tts_engine != "edge-tts":
         cli_config["tts_engine"] = args.tts_engine
-    if args.voice != "zh-CN-XiaoxiaoNeural":
-        cli_config["tts_voice"] = args.voice
+    # --voice 的含义取决于引擎：
+    # edge-tts -> tts_voice（如 zh-CN-XiaoxiaoNeural）
+    # minimax  -> tts_options.voice_id（如 male-qn-qingse）
+    if args.tts_engine == "minimax":
+        # minimax 的 voice 通过 tts_options.voice_id 传递，tts_voice 对其无意义
+        if args.voice != "zh-CN-XiaoxiaoNeural":
+            # 用户明确指定了 voice，写入 tts_options
+            tts_options_cli = cli_config.get("tts_options", {})
+            tts_options_cli["voice_id"] = args.voice
+            cli_config["tts_options"] = tts_options_cli
+    else:
+        if args.voice != "zh-CN-XiaoxiaoNeural":
+            cli_config["tts_voice"] = args.voice
     if args.rate != "+0%":
         cli_config["tts_rate"] = args.rate
     if args.no_cache:
@@ -236,6 +247,9 @@ MiniMax TTS 示例:
     if merged_config.get("tts_engine") == "minimax" and not args.config:
         tts_options = merged_config.get("tts_options", {})
         # 始终设置所有 MiniMax 选项（包括默认值）
+        # voice_id：如果用户通过 --voice 明确指定则已写入，否则用默认值
+        if "voice_id" not in tts_options:
+            tts_options["voice_id"] = "male-qn-qingse"
         tts_options["emotion"] = args.minimax_emotion
         tts_options["sample_rate"] = args.minimax_sample_rate
         tts_options["bitrate"] = args.minimax_bitrate

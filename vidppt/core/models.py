@@ -46,9 +46,13 @@ class ProcessConfig:
 
     # TTS 配置
     tts_engine: str = "edge-tts"
-    tts_voice: str = "zh-CN-XiaoxiaoNeural"
+    tts_voice: Optional[str] = (
+        "zh-CN-XiaoxiaoNeural"  # 仅用于 edge-tts；minimax 时此字段为 None，voice 通过 tts_options["voice_id"] 配置
+    )
     tts_rate: str = "+0%"
-    tts_options: dict = field(default_factory=dict)  # TTS 引擎特定选项
+    tts_options: dict = field(
+        default_factory=dict
+    )  # TTS 引擎特定选项（minimax: voice_id, api_key, model 等）
 
     # 缓存配置
     enable_audio_cache: bool = True  # 是否启用音频缓存

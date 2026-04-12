@@ -205,9 +205,8 @@ class TestConfigConverter:
             "enable_video": False,
             "save_intermediate": False,
             "tts_engine": "minimax",
-            "tts_voice": "male-qn-qingse",
             "tts_rate": "+20%",
-            "tts_options": {"emotion": "happy"},
+            "tts_options": {"voice_id": "male-qn-qingse", "emotion": "happy"},
             "enable_audio_cache": False,
             "audio_cache_expiry_days": 7,
             "video_fps": 30,
@@ -221,9 +220,10 @@ class TestConfigConverter:
         assert config.enable_video is False
         assert config.save_intermediate is False
         assert config.tts_engine == "minimax"
-        assert config.tts_voice == "male-qn-qingse"
+        assert config.tts_voice is None  # minimax 不使用 tts_voice
+        assert config.tts_options["voice_id"] == "male-qn-qingse"
         assert config.tts_rate == "+20%"
-        assert config.tts_options == {"emotion": "happy"}
+        assert config.tts_options["emotion"] == "happy"
         assert config.enable_audio_cache is False
         assert config.audio_cache_expiry_days == 7
         assert config.video_fps == 30
