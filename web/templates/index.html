@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VidPPT - PPT转视频</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>VidPPT - PPT转视频工具</h1>
+            <p class="subtitle">将PPT文档转换为配视频</p>
+        </header>
+
+        <main class="main-content">
+            <!-- 上传模块 -->
+            <section class="module" id="upload-module">
+                <h2 class="module-title">上传PPT文件</h2>
+                <div class="module-content">
+                    <div class="upload-area" id="upload-area">
+                        <input type="file" id="file-input" accept=".ppt,.pptx" hidden>
+                        <div class="upload-placeholder">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <polyline points="17 8 12 3 7 8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <line x1="12" y1="3" x2="12" y2="15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            <p>点击或拖拽文件到此处上传</p>
+                            <p class="upload-hint">支持 .ppt 和 .pptx 格式</p>
+                        </div>
+                        <div class="upload-progress" id="upload-progress" hidden>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill"></div>
+                            </div>
+                            <p class="progress-text" id="upload-progress-text">上传中...</p>
+                        </div>
+                    </div>
+                    <div class="file-info" id="file-info" hidden>
+                        <div class="file-icon">📄</div>
+                        <div class="file-details">
+                            <p class="file-name" id="file-name"></p>
+                            <p class="file-path" id="file-path"></p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 转换模块 -->
+            <section class="module" id="convert-module">
+                <h2 class="module-title">转换视频</h2>
+                <div class="module-content">
+                    <div class="convert-area">
+                        <button class="btn btn-primary" id="convert-btn" disabled>
+                            <span class="btn-text">开始转换</span>
+                            <span class="btn-loading" hidden>
+                                <span class="spinner"></span>
+                                转换中...
+                            </span>
+                        </button>
+                    </div>
+                    <div class="convert-status" id="convert-status" hidden>
+                        <div class="status-icon">✓</div>
+                        <p class="status-text" id="status-text"></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 预览模块 -->
+            <section class="module" id="preview-module">
+                <h2 class="module-title">视频预览</h2>
+                <div class="module-content">
+                    <div class="preview-container" id="preview-container">
+                        <div class="preview-placeholder">
+                            <p>上传PPT文件并转换后将显示预览</p>
+                        </div>
+                        <video id="video-player" class="video-player" controls hidden></video>
+                        <img id="video-thumbnail" class="video-thumbnail" alt="视频预览" hidden>
+                    </div>
+                    <div class="preview-actions">
+                        <button class="btn btn-secondary" id="download-btn" disabled>
+                            下载视频
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>VidPPT &copy; 2026</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
