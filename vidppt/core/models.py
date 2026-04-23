@@ -70,6 +70,22 @@ class ProcessConfig:
     video_codec: str = "libx264"
     audio_codec: str = "aac"
 
+    # 数字人配置（可选）
+    enable_avatar: bool = False  # 是否启用数字人叠加
+    avatar_face_image: Optional[Path] = None  # 人脸图片路径（启用数字人时必填）
+    avatar_provider: str = "sadtalker"  # 数字人后端：sadtalker / heygen
+    avatar_provider_config: dict = field(default_factory=dict)  # Provider 专属配置
+    avatar_face_position: str = (
+        "bottom-right"  # 人脸位置：top-left/top-right/bottom-left/bottom-right
+    )
+    avatar_face_size: int = 300  # 圆形人脸直径（像素）
+    avatar_face_margin: int = 50  # 人脸距边缘边距（像素）
+    avatar_transition_duration: float = 1.0  # 转场淡入淡出时长（秒）
+    avatar_video_width: int = 1920  # 输出视频宽度
+    avatar_video_height: int = 1080  # 输出视频高度
+
     def __post_init__(self):
         self.input_path = Path(self.input_path)
         self.output_dir = Path(self.output_dir)
+        if self.avatar_face_image is not None:
+            self.avatar_face_image = Path(self.avatar_face_image)

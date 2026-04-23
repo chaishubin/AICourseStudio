@@ -299,7 +299,7 @@ class Pipeline:
     def _compose_video(
         self, content: DocumentContent, progress: ProgressTracker
     ) -> None:
-        """合成视频"""
+        """合成视频：若启用数字人则叠加人脸，否则使用普通合成"""
         video_name = self.config.input_path.stem
         video_path = self.config.output_dir / f"{video_name}.mp4"
 
@@ -308,12 +308,146 @@ class Pipeline:
             progress.start_stage(ProcessStage.VIDEO)
             progress.stages[ProcessStage.VIDEO].total = content.total_pages
 
-            VideoComposer.compose(content, self.config, video_path)
+            if self.config.enable_avatar and self.config.avatar_face_image:
+                self._compose_video_with_avatar(content, video_path, progress)
+            else:
+                VideoComposer.compose(content, self.config, video_path)
 
             progress.complete_stage(ProcessStage.VIDEO)
         except Exception as e:
             logger.warning(f"视频合成失败: {e}")
             progress.fail_stage(ProcessStage.VIDEO, str(e))
+
+    def _compose_video_with_avatar(
+        self,
+        content: DocumentContent,
+        video_path: Path,
+        progress: ProgressTracker,
+    ) -> None:
+        """使用数字人叠加合成视频"""
+        import tempfile
+        import shutil
+
+        from .video_composer.composer import (
+            FaceVideoGenerator,
+            VideoConfig,
+            create_image_clip,
+            create_circular_video_clip,
+            add_transition,
+        )
+        from moviepy import CompositeVideoClip, AudioFileClip, VideoFileClip
+
+        cfg = self.config
+        video_config = VideoConfig(
+            width=cfg.avatar_video_width,
+            height=cfg.avatar_video_height,
+            fps=cfg.video_fps,
+            face_position=cfg.avatar_face_position,
+            face_margin=cfg.avatar_face_margin,
+            face_size=cfg.avatar_face_size,
+            transition_duration=cfg.avatar_transition_duration,
+        )
+
+        face_generator = FaceVideoGenerator(
+            provider_name=cfg.avatar_provider,
+            face_image_path=cfg.avatar_face_image,
+            provider_config=cfg.avatar_provider_config,
+        )
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="vidppt_avatar_"))
+        logger.info(f"数字人临时目录: {temp_dir}")
+
+        all_clips = []
+
+        try:
+            for page in content.pages:
+                if not page.slide_image:
+                    logger.warning(f"第 {page.page_number} 页 缺少幻灯片图片，跳过")
+                    progress.update_stage(ProcessStage.VIDEO, page.page_number)
+                    continue
+
+                logger.info(f"第 {page.page_number} 页 合成数字人视频...")
+
+                if not page.audio:
+                    # 无音频：生成无人脸的静态背景片段
+                    logger.debug(f"第 {page.page_number} 页 无音频，使用静态背景")
+                    clip = create_image_clip(
+                        page.slide_image,
+                        duration=5.0,
+                        fps=video_config.fps,
+                        size=(video_config.width, video_config.height),
+                    )
+                    all_clips.append(clip)
+                    progress.update_stage(ProcessStage.VIDEO, page.page_number)
+                    continue
+
+                # 获取音频时长
+                audio_clip = AudioFileClip(str(page.audio))
+                audio_duration = audio_clip.duration
+                audio_clip.close()
+
+                # 生成人脸视频（将已有音频传入 provider）
+                face_video_path = temp_dir / f"face_{page.page_number}.mp4"
+                face_generator.generate(
+                    audio_path=page.audio,
+                    output_path=face_video_path,
+                    text=page.text or "",
+                )
+
+                # 背景图片片段
+                bg_clip = create_image_clip(
+                    page.slide_image,
+                    duration=audio_duration,
+                    fps=video_config.fps,
+                    size=(video_config.width, video_config.height),
+                )
+
+                # 圆形人脸片段
+                face_clip = create_circular_video_clip(
+                    face_video_path, video_config.face_size
+                )
+                face_w, face_h = face_clip.size
+                pos = video_config.get_face_position(face_w, face_h)
+                face_clip = face_clip.set_position(pos)
+
+                # 合成背景 + 人脸
+                composite = CompositeVideoClip(
+                    [bg_clip, face_clip],
+                    size=(video_config.width, video_config.height),
+                )
+
+                # 使用人脸视频自带的音频（已同步）
+                face_with_audio = VideoFileClip(str(face_video_path))
+                if face_with_audio.audio:
+                    composite = composite.set_audio(face_with_audio.audio)
+                else:
+                    composite = composite.set_audio(AudioFileClip(str(page.audio)))
+
+                all_clips.append(composite)
+                logger.info(f"第 {page.page_number} 页 数字人合成完成")
+                progress.update_stage(ProcessStage.VIDEO, page.page_number)
+
+            if not all_clips:
+                logger.warning("没有可用的视频片段，跳过输出")
+                return
+
+            # 转场 + 拼接
+            logger.info("添加转场效果并拼接...")
+            final_video = add_transition(all_clips, video_config.transition_duration)
+
+            video_path.parent.mkdir(parents=True, exist_ok=True)
+            final_video.write_videofile(
+                str(video_path),
+                fps=video_config.fps,
+                codec=cfg.video_codec,
+                audio_codec=cfg.audio_codec,
+                logger=None,
+            )
+            logger.info(f"数字人视频输出: {video_path}")
+
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.debug("数字人临时目录已清理")
 
     def _cleanup_temp_files(self, progress: ProgressTracker) -> None:
         """清理临时文件"""

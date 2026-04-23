@@ -75,6 +75,23 @@ class ConfigConverter:
             video_fps=config_dict.get("video_fps", 24),
             video_codec=config_dict.get("video_codec", "libx264"),
             audio_codec=config_dict.get("audio_codec", "aac"),
+            # 数字人配置
+            enable_avatar=config_dict.get("enable_avatar", False),
+            avatar_face_image=ConfigConverter._resolve_path(
+                config_dict.get("avatar_face_image")
+            ),
+            avatar_provider=config_dict.get("avatar_provider", "sadtalker"),
+            avatar_provider_config=config_dict.get("avatar_provider_config", {}),
+            avatar_face_position=config_dict.get(
+                "avatar_face_position", "bottom-right"
+            ),
+            avatar_face_size=config_dict.get("avatar_face_size", 300),
+            avatar_face_margin=config_dict.get("avatar_face_margin", 50),
+            avatar_transition_duration=config_dict.get(
+                "avatar_transition_duration", 1.0
+            ),
+            avatar_video_width=config_dict.get("avatar_video_width", 1920),
+            avatar_video_height=config_dict.get("avatar_video_height", 1080),
         )
 
         logger.debug(f"配置转换成功: {input_path.name} -> {output_dir.name}")

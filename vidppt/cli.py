@@ -36,7 +36,9 @@ def main():
   %(prog)s input.pptx --no-intermediate         # 不保存中间文件
   %(prog)s input.pptx --voice zh-CN-YunyangNeural  # 使用男声 (edge-tts)
   %(prog)s input.pptx --rate +20%%              # 加速20%%
-  
+  %(prog)s input.pptx --face face.jpg           # 启用数字人叠加（默认 sadtalker）
+  %(prog)s input.pptx --face face.jpg --provider heygen --provider-config '{{"api_key":"xxx"}}'
+
 配置文件示例:
   %(prog)s --config config.yaml                 # 使用 YAML 配置文件
   %(prog)s --config config.json                 # 使用 JSON 配置文件
@@ -153,9 +155,50 @@ MiniMax TTS 示例:
         help="音频缓存过期天数（默认: 30）",
     )
 
+    # 数字人配置
+    parser.add_argument(
+        "--face",
+        default=None,
+        help="人脸图片路径；提供此参数后自动启用数字人叠加模式",
+    )
+    parser.add_argument(
+        "--provider",
+        default="sadtalker",
+        choices=["sadtalker", "heygen"],
+        help="数字人后端（默认: sadtalker）",
+    )
+    parser.add_argument(
+        "--provider-config",
+        default=None,
+        help='数字人 Provider 专属配置（JSON 格式，如 \'{"api_key":"xxx"}\'）',
+    )
+    parser.add_argument(
+        "--face-position",
+        default="bottom-right",
+        choices=["top-left", "top-right", "bottom-left", "bottom-right"],
+        help="数字人位置（默认: bottom-right）",
+    )
+    parser.add_argument(
+        "--face-size",
+        type=int,
+        default=300,
+        help="数字人圆形直径，单位像素（默认: 300）",
+    )
+    parser.add_argument(
+        "--face-margin",
+        type=int,
+        default=50,
+        help="数字人距视频边缘的边距，单位像素（默认: 50）",
+    )
+    parser.add_argument(
+        "--transition",
+        type=float,
+        default=1.0,
+        help="转场淡入淡出时长，单位秒（默认: 1.0）",
+    )
+
     # 日志配置
     parser.add_argument(
-        "-v",
         "--verbose",
         action="store_true",
         help="启用详细日志输出（包括时间戳和函数名）",
@@ -232,6 +275,25 @@ MiniMax TTS 示例:
         cli_config["audio_cache_dir"] = args.cache_dir
     if args.cache_expiry != 30:
         cli_config["audio_cache_expiry_days"] = args.cache_expiry
+
+    # 数字人参数
+    if args.face:
+        import json as _json
+
+        cli_config["enable_avatar"] = True
+        cli_config["avatar_face_image"] = args.face
+        cli_config["avatar_provider"] = args.provider
+        if args.provider_config:
+            try:
+                cli_config["avatar_provider_config"] = _json.loads(args.provider_config)
+            except Exception:
+                logger.warning(
+                    f"--provider-config 解析失败，忽略: {args.provider_config}"
+                )
+        cli_config["avatar_face_position"] = args.face_position
+        cli_config["avatar_face_size"] = args.face_size
+        cli_config["avatar_face_margin"] = args.face_margin
+        cli_config["avatar_transition_duration"] = args.transition
 
     # 合并配置
     if args.config and not config_dict.get("input") and not args.input:

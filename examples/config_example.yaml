@@ -44,3 +44,22 @@ image_converter: "builtin"    # Options: builtin, api
 video_fps: 24                 # Frames per second
 video_codec: "libx264"        # Video codec
 audio_codec: "aac"            # Audio codec
+
+# Avatar (Digital Human) Configuration
+# Enable by setting enable_avatar: true and providing avatar_face_image
+enable_avatar: false
+# avatar_face_image: "face.jpg"          # Path to face reference image (required when enabled)
+# avatar_provider: "sadtalker"           # Backend: sadtalker (local) / heygen (cloud API)
+# avatar_provider_config:                # Provider-specific config
+#   # For HeyGen:
+#   # api_key: "YOUR_HEYGEN_API_KEY"
+#   # avatar_id: "xxx"
+#   # For SadTalker:
+#   # checkpoint_path: "/path/to/checkpoints"
+#   # device: "cuda"
+# avatar_face_position: "bottom-right"  # top-left / top-right / bottom-left / bottom-right
+# avatar_face_size: 300                 # Circular face diameter in pixels
+# avatar_face_margin: 50                # Margin from video edge in pixels
+# avatar_transition_duration: 1.0      # Fade transition duration in seconds
+# avatar_video_width: 1920             # Output video width
+# avatar_video_height: 1080            # Output video height
