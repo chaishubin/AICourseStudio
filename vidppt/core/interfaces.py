@@ -4,9 +4,13 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 from .models import DocumentContent, PageContent, ProcessConfig
+
+
+# 进度回调函数类型: (当前页码, 总页数, 页信息) -> None
+ProgressCallback = Callable[[int, int, str], None]
 
 
 class DocumentProcessor(ABC):
@@ -65,8 +69,10 @@ class TTSEngine(ABC):
         voice: str,
         rate: str,
         batch_size: int = 5,
+        progress_callback: Optional[ProgressCallback] = None,
+        continue_on_error: bool = True,
         **kwargs,
-    ) -> None:
+    ) -> list[tuple[int, str]]:
         """批量转换文本为音频
 
         参数:
@@ -74,18 +80,44 @@ class TTSEngine(ABC):
             voice: 语音 ID
             rate: 语速
             batch_size: 批处理大小（默认 5）
+            progress_callback: 进度回调函数 (当前索引, 总数, 页信息)
+            continue_on_error: 单个失败时是否继续处理其他页面（默认 True）
             **kwargs: 透传给 convert_async 的额外参数（如 emotion、pronunciation_dict 等）
+
+        返回:
+            失败列表: [(页码, 错误信息), ...]
         """
         import asyncio
+        from loguru import logger
+
+        total = len(texts)
+        errors: list[tuple[int, str]] = []
+
+        async def convert_with_progress(item: tuple[int, str, Path], index: int):
+            """转换单个并更新进度"""
+            page_num, text, path = item
+            try:
+                await self.convert_async(text, path, voice, rate, **kwargs)
+            except Exception as e:
+                error_msg = str(e)
+                errors.append((page_num, error_msg))
+                if continue_on_error:
+                    logger.warning(f"第 {page_num} 页 TTS 转换失败: {error_msg}")
+                else:
+                    raise
+            if progress_callback:
+                progress_callback(index + 1, total, f"第 {page_num} 页")
 
         tasks = [
-            self.convert_async(text, path, voice, rate, **kwargs)
-            for _, text, path in texts
+            convert_with_progress(item, i)
+            for i, item in enumerate(texts)
         ]
 
         # 分批处理避免并发过多
         for i in range(0, len(tasks), batch_size):
             await asyncio.gather(*tasks[i : i + batch_size])
+
+        return errors
 
 
 class OCREngine(ABC):

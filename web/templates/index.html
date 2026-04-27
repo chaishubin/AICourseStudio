@@ -10,7 +10,7 @@
     <div class="container">
         <header class="header">
             <h1>VidPPT - PPT转视频工具</h1>
-            <p class="subtitle">将PPT文档转换为配视频</p>
+            <p class="subtitle">将PPT文档转换为配音视频</p>
         </header>
 
         <main class="main-content">
@@ -46,6 +46,30 @@
                 </div>
             </section>
 
+            <!-- 选项模块 -->
+            <section class="module" id="options-module">
+                <h2 class="module-title">转换选项</h2>
+                <div class="module-content">
+                    <div class="options-grid">
+                        <div class="option-group">
+                            <label for="tts-engine">语音引擎</label>
+                            <select id="tts-engine" class="select-input">
+                                <option value="edge-tts">Edge TTS (免费)</option>
+                                <option value="minimax">MiniMax (需API)</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
+                            <label for="voice-select">语音</label>
+                            <select id="voice-select" class="select-input">
+                                <option value="zh-CN-XiaoxiaoNeural">晓晓（女声）</option>
+                                <option value="zh-CN-YunxiNeural">云希（男声）</option>
+                                <option value="zh-CN-YunyangNeural">云扬（新闻风格）</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- 转换模块 -->
             <section class="module" id="convert-module">
                 <h2 class="module-title">转换视频</h2>
@@ -59,6 +83,36 @@
                             </span>
                         </button>
                     </div>
+
+                    <!-- 转换进度条 -->
+                    <div class="conversion-progress" id="conversion-progress" hidden>
+                        <div class="progress-header">
+                            <span class="progress-stage" id="progress-stage">准备中...</span>
+                            <span class="progress-percentage" id="progress-percentage">0%</span>
+                        </div>
+                        <div class="progress-bar progress-bar-large">
+                            <div class="progress-fill" id="conversion-progress-fill"></div>
+                        </div>
+                        <div class="progress-details" id="progress-details">
+                            <div class="progress-step" id="step-init">
+                                <span class="step-icon">○</span>
+                                <span class="step-name">初始化</span>
+                            </div>
+                            <div class="progress-step" id="step-extract">
+                                <span class="step-icon">○</span>
+                                <span class="step-name">提取内容</span>
+                            </div>
+                            <div class="progress-step" id="step-tts">
+                                <span class="step-icon">○</span>
+                                <span class="step-name">文字转语音</span>
+                            </div>
+                            <div class="progress-step" id="step-video">
+                                <span class="step-icon">○</span>
+                                <span class="step-name">合成视频</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="convert-status" id="convert-status" hidden>
                         <div class="status-icon">✓</div>
                         <p class="status-text" id="status-text"></p>
@@ -71,11 +125,10 @@
                 <h2 class="module-title">视频预览</h2>
                 <div class="module-content">
                     <div class="preview-container" id="preview-container">
-                        <div class="preview-placeholder">
+                        <div class="preview-placeholder" id="preview-placeholder">
                             <p>上传PPT文件并转换后将显示预览</p>
                         </div>
                         <video id="video-player" class="video-player" controls hidden></video>
-                        <img id="video-thumbnail" class="video-thumbnail" alt="视频预览" hidden>
                     </div>
                     <div class="preview-actions">
                         <button class="btn btn-secondary" id="download-btn" disabled>

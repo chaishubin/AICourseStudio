@@ -209,13 +209,26 @@ class Pipeline:
 
             # 如果有需要转换的文本，进行异步批量转换
             if page_texts:
+                # 创建进度回调函数
+                def tts_progress_callback(current: int, total: int, info: str):
+                    """TTS 转换进度回调"""
+                    # 计算总进度：缓存页数 + 当前转换数
+                    total_processed = len(cached_pages) + current
+                    # 使用增量更新，避免频繁输出
+                    progress.update_stage_incremental(
+                        ProcessStage.TTS,
+                        total_processed,
+                        force_display=(current == 1 or current == total)
+                    )
+
                 if self.config.tts_engine == "edge-tts":
                     # edge-tts 只需要 voice 和 rate，不接受其他参数
-                    _run_async(
+                    errors = _run_async(
                         self.tts_engine.batch_convert(
                             page_texts,
                             voice=self.config.tts_voice,
                             rate=self.config.tts_rate,
+                            progress_callback=tts_progress_callback,
                         )
                     )
                 elif self.config.tts_engine == "minimax":
@@ -242,17 +255,32 @@ class Pipeline:
                             "max_retries",
                         )
                     }
-                    _run_async(
+                    errors = _run_async(
                         self.tts_engine.batch_convert(
                             page_texts,
                             voice=minimax_voice,
                             rate=self.config.tts_rate,
+                            progress_callback=tts_progress_callback,
                             **minimax_extra,
                         )
                     )
+                else:
+                    errors = []
 
-                # 转换后保存到缓存
+                # 处理失败的页面：移除其 audio 路径
+                failed_pages = {page_num for page_num, _ in errors}
+                if failed_pages:
+                    for page in content.pages:
+                        if page.page_number in failed_pages:
+                            page.audio = None
+                    logger.warning(
+                        f"TTS 转换失败 {len(failed_pages)} 页: {sorted(failed_pages)}"
+                    )
+
+                # 转换后保存到缓存（仅保存成功的）
                 for page_num, text, audio_path in page_texts:
+                    if page_num in failed_pages:
+                        continue
                     if self.config.tts_engine == "edge-tts":
                         self.cache_manager.put(
                             audio_path=audio_path,
@@ -279,10 +307,12 @@ class Pipeline:
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
 
             if page_texts or cached_pages:
+                success_count = len(page_texts) - len(failed_pages) if 'failed_pages' in dir() else len(page_texts)
                 cache_info = (
-                    f"（缓存命中: {len(cached_pages)}, 新转换: {len(page_texts)}）"
+                    f"（缓存命中: {len(cached_pages)}, 新转换: {success_count}"
+                    f"{f', 失败: {len(failed_pages)}' if 'failed_pages' in dir() and failed_pages else ''}）"
                     if self.config.enable_audio_cache
-                    else ""
+                    else f"（成功: {success_count}{f', 失败: {len(failed_pages)}' if 'failed_pages' in dir() and failed_pages else ''}）"
                 )
                 logger.info(f"文字转语音完成 {cache_info}")
             else:
@@ -291,10 +321,11 @@ class Pipeline:
             progress.complete_stage(ProcessStage.TTS)
 
         except Exception as e:
-            logger.warning(f"TTS 转换失败: {e}")
+            logger.error(f"TTS 转换失败: {e}")
             progress.fail_stage(ProcessStage.TTS, str(e))
             if "edge-tts" in self.config.tts_engine:
                 logger.warning("请检查网络连接，edge-tts 需要访问微软服务器")
+                logger.info("提示: 可以使用 --tts-engine minimax 并设置 MINIMAX_API 环境变量")
 
     def _compose_video(
         self, content: DocumentContent, progress: ProgressTracker

@@ -50,6 +50,11 @@ class VideoComposer:
                     clips.append(image_clip)
                 continue
 
+            # 检查音频文件是否有效（非空）
+            if page.audio.stat().st_size == 0:
+                logger.warning(f"跳过第 {page.page_number} 页：音频文件为空（TTS转换失败）")
+                continue
+
             # 加载音频获取时长
             audio_clip = AudioFileClip(str(page.audio))
             duration = audio_clip.duration

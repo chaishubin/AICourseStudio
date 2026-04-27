@@ -5,12 +5,21 @@ Web界面后端API
 
 import os
 import uuid
+import json
+import threading
+import sys
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, send_file, make_response
+from queue import Queue
+from flask import Flask, render_template, request, jsonify, send_file, make_response, Response
 from werkzeug.utils import secure_filename
 
-app = Flask(__name__, 
-            template_folder=Path(__file__).parent / 'templates', 
+# 导入 vidppt
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from vidppt import Pipeline, ProcessConfig
+from vidppt.utils.progress import ProcessStage
+
+app = Flask(__name__,
+            template_folder=Path(__file__).parent / 'templates',
             static_folder=Path(__file__).parent / 'static')
 
 # 配置
@@ -24,6 +33,10 @@ OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['OUTPUT_FOLDER'] = str(OUTPUT_FOLDER)
+
+# 存储任务状态和进度队列
+tasks = {}  # task_id -> {status, progress, error, video_path, etc.}
+progress_queues = {}  # task_id -> Queue
 
 
 def allowed_file(filename):
@@ -39,84 +52,315 @@ def index():
 
 @app.route('/api/upload', methods=['POST'])
 def upload_ppt():
-    """
-    上传PPT文件接口
-    直接返回文件路径，暂不实现实际的文件保存逻辑
-    """
+    """上传PPT文件接口"""
     if 'file' not in request.files:
         return jsonify({'error': '未选择文件'}), 400
-    
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': '未选择文件'}), 400
-    
+
     if file and allowed_file(file.filename):
         # 生成唯一文件名
         filename = secure_filename(file.filename)
         ext = filename.rsplit('.', 1)[1].lower()
         unique_filename = f"{uuid.uuid4().hex}_{filename}"
         file_path = UPLOAD_FOLDER / unique_filename
-        
+
         # 保存文件
         file.save(file_path)
-        
+
         return jsonify({
             'success': True,
             'file_path': str(file_path),
             'original_name': filename
         })
-    
+
     return jsonify({'error': '不支持的文件类型'}), 400
+
+
+class WebProgressTracker:
+    """Web端进度跟踪器，将进度推送到队列"""
+
+    def __init__(self, task_id: str, queue: Queue, total_pages: int = 0):
+        self.task_id = task_id
+        self.queue = queue
+        self.total_pages = total_pages
+        self.current_stage = None
+        self.current_progress = 0
+        self.stage_progress = {}  # stage_name -> {current, total, percentage}
+
+    def update(self, stage: str, current: int, total: int, message: str = ""):
+        """更新进度"""
+        self.current_stage = stage
+        self.current_progress = int((current / total * 100) if total > 0 else 0)
+
+        # 计算整体进度
+        self.stage_progress[stage] = {
+            'current': current,
+            'total': total,
+            'percentage': self.current_progress
+        }
+
+        # 推送到队列
+        self.queue.put({
+            'type': 'progress',
+            'stage': stage,
+            'current': current,
+            'total': total,
+            'percentage': self.current_progress,
+            'message': message
+        })
+
+    def set_stage(self, stage: str, message: str = ""):
+        """设置当前阶段"""
+        self.current_stage = stage
+        self.queue.put({
+            'type': 'stage',
+            'stage': stage,
+            'message': message
+        })
+
+    def complete(self, video_path: str = None):
+        """标记完成"""
+        self.queue.put({
+            'type': 'complete',
+            'video_path': video_path,
+            'message': '转换完成'
+        })
+
+    def error(self, error_msg: str):
+        """标记错误"""
+        self.queue.put({
+            'type': 'error',
+            'message': error_msg
+        })
+
+
+def run_conversion(task_id: str, file_path: str, output_dir: Path,
+                   tts_engine: str = 'edge-tts', voice: str = 'zh-CN-XiaoxiaoNeural'):
+    """在后台线程中运行转换"""
+    queue = progress_queues.get(task_id)
+    if not queue:
+        return
+
+    progress = WebProgressTracker(task_id, queue)
+
+    try:
+        # 1. 初始化
+        progress.set_stage('init', '初始化转换...')
+
+        # 2. 创建配置
+        config = ProcessConfig(
+            input_path=Path(file_path),
+            output_dir=output_dir,
+            save_intermediate=False,
+            tts_engine=tts_engine,
+            tts_voice=voice,
+        )
+
+        # 3. 创建 Pipeline
+        pipeline = Pipeline(config)
+
+        progress.update('init', 1, 1, '初始化完成')
+
+        # 4. 运行转换（需要修改 pipeline 以支持进度回调）
+        # 这里我们用一种简化的方式：监控输出文件变化来估计进度
+
+        progress.set_stage('extract', '提取PPT内容...')
+
+        # 获取处理器
+        from vidppt.core.registry import ProcessorRegistry
+        processor_class = ProcessorRegistry.get_processor(Path(file_path))
+        if not processor_class:
+            raise ValueError(f"不支持的文件类型: {Path(file_path).suffix}")
+
+        processor = processor_class()
+
+        # 提取内容
+        content = processor.process(config)
+        total_pages = content.total_pages
+        progress.total_pages = total_pages
+
+        progress.update('extract', total_pages, total_pages, f'提取完成，共 {total_pages} 页')
+
+        # 5. TTS 转换
+        progress.set_stage('tts', '文字转语音...')
+
+        if config.enable_tts:
+            # 手动执行 TTS（简化版本，实际应该使用 pipeline 的方法）
+            import asyncio
+            from vidppt.core.interfaces import TTSEngine
+
+            tts_engine = pipeline.tts_engine
+
+            page_texts = []
+            for page in content.pages:
+                if page.text and page.text.strip():
+                    audio_path = output_dir / f"temp_audio_{page.page_number}.mp3"
+                    audio_path.parent.mkdir(parents=True, exist_ok=True)
+                    page.audio = audio_path
+                    page_texts.append((page.page_number, page.text, audio_path))
+
+            total_tts = len(page_texts)
+
+            # 执行 TTS
+            if page_texts:
+                def tts_callback(current: int, total: int, info: str):
+                    progress.update('tts', current, total, info)
+
+                # 运行异步 TTS
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                try:
+                    errors = loop.run_until_complete(
+                        tts_engine.batch_convert(
+                            page_texts,
+                            voice=config.tts_voice,
+                            rate=config.tts_rate,
+                            progress_callback=tts_callback,
+                        )
+                    )
+
+                    # 处理失败的页面
+                    for page_num, _ in errors:
+                        for page in content.pages:
+                            if page.page_number == page_num:
+                                page.audio = None
+                finally:
+                    loop.close()
+
+            progress.update('tts', total_tts, total_tts, '语音转换完成')
+
+        # 6. 视频合成
+        progress.set_stage('video', '合成视频...')
+
+        if config.enable_video:
+            from vidppt.utils.video_composer import VideoComposer
+
+            video_path = output_dir / f"{Path(file_path).stem}.mp4"
+            VideoComposer.compose(content, config, video_path)
+
+            progress.update('video', 1, 1, f'视频生成完成')
+
+            # 完成
+            progress.complete(str(video_path))
+        else:
+            progress.complete(None)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        progress.error(str(e))
 
 
 @app.route('/api/convert', methods=['POST'])
 def convert_ppt():
     """
     PPT转视频接口
-    这里留出接口，实际转换逻辑可以后续实现
-    
-    转换逻辑：
-    1. 接收PPT文件路径
-    2. 调用vidppt进行转换
-    3. 返回视频文件路径和第一帧图片
+    启动异步转换并返回 task_id
     """
     data = request.get_json()
     file_path = data.get('file_path')
-    
+    tts_engine = data.get('tts_engine', 'edge-tts')
+    voice = data.get('voice', 'zh-CN-XiaoxiaoNeural')
+
     if not file_path:
         return jsonify({'error': '未提供文件路径'}), 400
-    
+
     # 检查文件是否存在
     if not Path(file_path).exists():
         return jsonify({'error': '文件不存在'}), 404
-    
-    # 这里可以调用实际的vidppt转换逻辑
-    # 当前返回模拟的转换结果
-    # 实际实现时，这里应该调用vidppt的Pipeline
-    
-    # 生成输出视频路径
-    input_name = Path(file_path).stem
-    video_filename = f"{input_name}.mp4"
-    video_path = OUTPUT_FOLDER / video_filename
-    
-    # 生成第一帧图片路径（转换完成后用于预览）
-    frame_filename = f"{input_name}_frame.png"
-    frame_path = OUTPUT_FOLDER / frame_filename
-    
-    # TODO: 实现实际的PPT转视频逻辑
-    # 这里先创建一个占位响应，返回文件路径
-    # 实际转换需要调用 vidppt.pipeline.Pipeline
-    
-    # 返回转换结果
+
+    # 生成任务 ID
+    task_id = uuid.uuid4().hex
+
+    # 创建输出目录
+    output_dir = OUTPUT_FOLDER / task_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 创建进度队列
+    progress_queues[task_id] = Queue()
+    tasks[task_id] = {
+        'status': 'pending',
+        'file_path': file_path,
+        'output_dir': str(output_dir)
+    }
+
+    # 在后台线程中运行转换
+    thread = threading.Thread(
+        target=run_conversion,
+        args=(task_id, file_path, output_dir, tts_engine, voice)
+    )
+    thread.daemon = True
+    thread.start()
+
     return jsonify({
         'success': True,
-        'video_path': str(video_path),
-        'frame_path': str(frame_path),
-        'message': '转换接口已预留，实际转换逻辑待实现'
+        'task_id': task_id,
+        'message': '转换已启动'
     })
 
 
-@app.route('/api/video/<path:video_path>', methods=['GET'])
+@app.route('/api/progress/<task_id>')
+def get_progress(task_id):
+    """
+    SSE 接口，推送转换进度
+    """
+    queue = progress_queues.get(task_id)
+    if not queue:
+        return jsonify({'error': '任务不存在'}), 404
+
+    def generate():
+        while True:
+            try:
+                # 阻塞获取进度更新
+                data = queue.get(timeout=300)  # 5分钟超时
+
+                # 发送 SSE 事件
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+                # 如果任务完成或出错，结束流
+                if data.get('type') in ('complete', 'error'):
+                    # 清理
+                    if task_id in progress_queues:
+                        del progress_queues[task_id]
+                    if task_id in tasks:
+                        del tasks[task_id]
+                    break
+
+            except Exception:
+                # 超时或其他错误
+                yield f"data: {json.dumps({'type': 'timeout', 'message': '连接超时'})}\n\n"
+                break
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@app.route('/api/status/<task_id>')
+def get_status(task_id):
+    """获取任务状态"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+
+    return jsonify({
+        'task_id': task_id,
+        'status': task.get('status', 'unknown'),
+        'video_path': task.get('video_path'),
+        'error': task.get('error')
+    })
+
+
+@app.route('/api/video/<path:video_path>')
 def get_video(video_path):
     """获取视频文件用于预览"""
     try:
@@ -125,7 +369,7 @@ def get_video(video_path):
         return jsonify({'error': '视频文件不存在'}), 404
 
 
-@app.route('/api/frame/<path:frame_path>', methods=['GET'])
+@app.route('/api/frame/<path:frame_path>')
 def get_frame(frame_path):
     """获取视频第一帧图片用于预览"""
     try:
@@ -134,7 +378,7 @@ def get_frame(frame_path):
         return jsonify({'error': '图片文件不存在'}), 404
 
 
-@app.route('/api/download/<path:file_path>', methods=['GET'])
+@app.route('/api/download/<path:file_path>')
 def download_file(file_path):
     """下载文件"""
     try:
@@ -144,6 +388,27 @@ def download_file(file_path):
         return response
     except FileNotFoundError:
         return jsonify({'error': '文件不存在'}), 404
+
+
+@app.route('/api/voices')
+def list_voices():
+    """列出可用的语音"""
+    voices = {
+        'edge-tts': [
+            {'id': 'zh-CN-XiaoxiaoNeural', 'name': '晓晓（女声）', 'gender': 'female'},
+            {'id': 'zh-CN-YunxiNeural', 'name': '云希（男声）', 'gender': 'male'},
+            {'id': 'zh-CN-YunyangNeural', 'name': '云扬（男声，新闻风格）', 'gender': 'male'},
+            {'id': 'zh-CN-XiaoyiNeural', 'name': '晓伊（女声）', 'gender': 'female'},
+            {'id': 'zh-CN-YunjianNeural', 'name': '云健（男声）', 'gender': 'male'},
+        ],
+        'minimax': [
+            {'id': 'male-qn-qingse', 'name': '青涩男声', 'gender': 'male'},
+            {'id': 'female-qn-nana', 'name': '娜娜女声', 'gender': 'female'},
+            {'id': 'male-qn-jingying', 'name': '精英男声', 'gender': 'male'},
+            {'id': 'female-shaonv', 'name': '少女女声', 'gender': 'female'},
+        ]
+    }
+    return jsonify(voices)
 
 
 if __name__ == '__main__':

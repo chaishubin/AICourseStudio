@@ -413,16 +413,155 @@ body {
     .container {
         padding: 12px;
     }
-    
+
     .header h1 {
         font-size: 24px;
     }
-    
+
     .module-content {
         padding: 16px;
     }
-    
+
     .upload-area {
         padding: 24px 16px;
     }
 }
+
+/* --------------------------------------------------------------------------
+   选项模块
+   -------------------------------------------------------------------------- */
+.options-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+@media (max-width: 640px) {
+    .options-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.option-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.option-group label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text);
+}
+
+.select-input {
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
+    color: var(--color-text);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.select-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+/* --------------------------------------------------------------------------
+   转换进度条
+   -------------------------------------------------------------------------- */
+.conversion-progress {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+}
+
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.progress-stage {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text);
+}
+
+.progress-percentage {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-primary);
+}
+
+.progress-bar-large {
+    height: 12px;
+    background: var(--color-border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 16px;
+}
+
+.progress-bar-large .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-primary), var(--color-success));
+    border-radius: 6px;
+    transition: width 0.3s ease;
+}
+
+.progress-details {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.progress-step {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 4px;
+    background: var(--color-bg-card);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    transition: all var(--transition-fast);
+}
+
+.progress-step .step-icon {
+    font-size: 10px;
+}
+
+.progress-step.active {
+    color: var(--color-primary);
+    background: var(--color-primary-light);
+}
+
+.progress-step.active .step-icon {
+    color: var(--color-primary);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.progress-step.completed {
+    color: var(--color-success);
+}
+
+.progress-step.completed .step-icon {
+    color: var(--color-success);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* --------------------------------------------------------------------------
+   转换进度条
+   -------------------------------------------------------------------------- */

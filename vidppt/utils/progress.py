@@ -2,11 +2,12 @@
 处理进度跟踪系统
 """
 
+import sys
 import time
+from datetime import datetime, timedelta
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
-from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from loguru import logger
 
@@ -81,6 +82,9 @@ class StageProgress:
         """完成阶段"""
         self.end_time = datetime.now()
         self.status = "completed"
+        # 确保进度条换行后再输出完成信息
+        sys.stdout.write("\n")
+        sys.stdout.flush()
         logger.info(f"{self.stage.value}完成 (耗时: {self.elapsed_seconds:.1f}秒)")
 
     def fail(self, error: str = ""):
@@ -105,6 +109,7 @@ class ProgressTracker:
         self.enable_progress = enable_progress
         self.stages = {}
         self.overall_start_time = datetime.now()
+        self._last_progress_update = 0  # 上次进度更新的页数
 
         # 初始化各个阶段
         for stage in ProcessStage:
@@ -131,6 +136,36 @@ class ProgressTracker:
             progress.start()
         progress.update(current, total)
         self._log_progress(progress)
+
+    def update_stage_incremental(
+        self, stage: ProcessStage, current: int, total: Optional[int] = None,
+        force_display: bool = False
+    ):
+        """
+        增量更新阶段进度，避免频繁输出
+
+        参数:
+            stage: 处理阶段
+            current: 当前值
+            total: 总值（可选）
+            force_display: 强制显示进度（用于关键时刻）
+        """
+        progress = self.stages[stage]
+        if progress.status == "pending":
+            progress.start()
+
+        # 检查是否有实际进展
+        if current == self._last_progress_update and not force_display:
+            return
+
+        self._last_progress_update = current
+        progress.update(current, total)
+
+        # 根据总数决定显示频率
+        display_step = max(1, (progress.total or 10) // 10)  # 每10%显示一次
+
+        if force_display or current == 1 or current == progress.total or current % display_step == 0:
+            self._log_progress(progress)
 
     def complete_stage(self, stage: ProcessStage):
         """完成一个阶段"""
@@ -161,11 +196,19 @@ class ProgressTracker:
                 else "完成"
             )
 
-            logger.debug(
-                f"{progress.stage.value} [{bar}] "
+            # 直接输出进度条到终端（覆盖上一行）
+            msg = (
+                f"\r{progress.stage.value} [{bar}] "
                 f"{progress.current}/{progress.total} "
                 f"({percentage:.0f}%) - {eta_str}"
             )
+            sys.stdout.write(msg)
+            sys.stdout.flush()
+
+            # 如果完成，换行
+            if progress.current >= progress.total:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
     def get_overall_progress(self) -> dict:
         """获取整体进度信息"""
