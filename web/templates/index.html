@@ -7,134 +7,142 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header class="header">
-            <h1>VidPPT - PPT转视频工具</h1>
-            <p class="subtitle">将PPT文档转换为配音视频</p>
+    <div class="page">
+        <!-- Hero -->
+        <header class="hero">
+            <h1 class="hero-title">VidPPT</h1>
+            <p class="hero-subtitle">将演示文稿，变为视频。</p>
         </header>
 
-        <main class="main-content">
-            <!-- 上传模块 -->
-            <section class="module" id="upload-module">
-                <h2 class="module-title">上传PPT文件</h2>
-                <div class="module-content">
-                    <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" accept=".ppt,.pptx" hidden>
-                        <div class="upload-placeholder">
-                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                <polyline points="17 8 12 3 7 8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                <line x1="12" y1="3" x2="12" y2="15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <main class="content">
+            <!-- 上传 -->
+            <section class="card" id="upload-module">
+                <div class="upload-area" id="upload-area">
+                    <input type="file" id="file-input" accept=".ppt,.pptx" hidden>
+                    <div class="upload-placeholder" id="upload-placeholder">
+                        <div class="upload-icon-wrap">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
                             </svg>
-                            <p>点击或拖拽文件到此处上传</p>
-                            <p class="upload-hint">支持 .ppt 和 .pptx 格式</p>
                         </div>
-                        <div class="upload-progress" id="upload-progress" hidden>
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="progress-fill"></div>
-                            </div>
-                            <p class="progress-text" id="upload-progress-text">上传中...</p>
-                        </div>
+                        <p class="upload-text">拖拽文件至此处，或点击上传</p>
+                        <p class="upload-hint">支持 .ppt / .pptx</p>
                     </div>
-                    <div class="file-info" id="file-info" hidden>
-                        <div class="file-icon">📄</div>
-                        <div class="file-details">
-                            <p class="file-name" id="file-name"></p>
-                            <p class="file-path" id="file-path"></p>
+                    <div class="upload-progress" id="upload-progress" hidden>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
                         </div>
+                        <p class="progress-text" id="upload-progress-text">上传中...</p>
+                    </div>
+                </div>
+                <div class="file-info" id="file-info" hidden>
+                    <div class="file-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                        </svg>
+                    </div>
+                    <div class="file-details">
+                        <p class="file-name" id="file-name"></p>
+                        <p class="file-path" id="file-path"></p>
                     </div>
                 </div>
             </section>
 
-            <!-- 选项模块 -->
-            <section class="module" id="options-module">
-                <h2 class="module-title">转换选项</h2>
-                <div class="module-content">
-                    <div class="options-grid">
-                        <div class="option-group">
-                            <label for="tts-engine">语音引擎</label>
-                            <select id="tts-engine" class="select-input">
-                                <option value="edge-tts">Edge TTS (免费)</option>
-                                <option value="minimax">MiniMax (需API)</option>
-                            </select>
-                        </div>
-                        <div class="option-group">
-                            <label for="voice-select">语音</label>
-                            <select id="voice-select" class="select-input">
-                                <option value="zh-CN-XiaoxiaoNeural">晓晓（女声）</option>
-                                <option value="zh-CN-YunxiNeural">云希（男声）</option>
-                                <option value="zh-CN-YunyangNeural">云扬（新闻风格）</option>
-                            </select>
-                        </div>
+            <!-- 选项 -->
+            <section class="card" id="options-module">
+                <div class="options-grid">
+                    <div class="option-group">
+                        <label for="tts-engine">语音引擎</label>
+                        <select id="tts-engine" class="select-input">
+                            <option value="edge-tts">Edge TTS (免费)</option>
+                            <option value="minimax">MiniMax (需API)</option>
+                        </select>
+                    </div>
+                    <div class="option-group">
+                        <label for="voice-select">语音</label>
+                        <select id="voice-select" class="select-input">
+                            <option value="zh-CN-XiaoxiaoNeural">晓晓（女声）</option>
+                            <option value="zh-CN-YunxiNeural">云希（男声）</option>
+                            <option value="zh-CN-YunyangNeural">云扬（新闻风格）</option>
+                        </select>
                     </div>
                 </div>
             </section>
 
-            <!-- 转换模块 -->
-            <section class="module" id="convert-module">
-                <h2 class="module-title">转换视频</h2>
-                <div class="module-content">
-                    <div class="convert-area">
-                        <button class="btn btn-primary" id="convert-btn" disabled>
-                            <span class="btn-text">开始转换</span>
-                            <span class="btn-loading" hidden>
-                                <span class="spinner"></span>
-                                转换中...
-                            </span>
-                        </button>
-                    </div>
+            <!-- 转换 -->
+            <section class="card" id="convert-module">
+                <div class="convert-area">
+                    <button class="btn-convert" id="convert-btn" disabled>
+                        <span class="btn-text">开始转换</span>
+                        <span class="btn-loading" hidden>
+                            <span class="spinner"></span>
+                            转换中...
+                        </span>
+                    </button>
+                </div>
 
-                    <!-- 转换进度条 -->
-                    <div class="conversion-progress" id="conversion-progress" hidden>
-                        <div class="progress-header">
-                            <span class="progress-stage" id="progress-stage">准备中...</span>
-                            <span class="progress-percentage" id="progress-percentage">0%</span>
+                <div class="conversion-progress" id="conversion-progress" hidden>
+                    <div class="progress-header">
+                        <span class="progress-stage" id="progress-stage">准备中...</span>
+                        <span class="progress-percentage" id="progress-percentage">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="conversion-progress-fill"></div>
+                    </div>
+                    <div class="progress-steps" id="progress-details">
+                        <div class="step" id="step-init">
+                            <span class="step-dot"></span>
+                            <span class="step-label">初始化</span>
                         </div>
-                        <div class="progress-bar progress-bar-large">
-                            <div class="progress-fill" id="conversion-progress-fill"></div>
+                        <div class="step-line"></div>
+                        <div class="step" id="step-extract">
+                            <span class="step-dot"></span>
+                            <span class="step-label">提取内容</span>
                         </div>
-                        <div class="progress-details" id="progress-details">
-                            <div class="progress-step" id="step-init">
-                                <span class="step-icon">○</span>
-                                <span class="step-name">初始化</span>
-                            </div>
-                            <div class="progress-step" id="step-extract">
-                                <span class="step-icon">○</span>
-                                <span class="step-name">提取内容</span>
-                            </div>
-                            <div class="progress-step" id="step-tts">
-                                <span class="step-icon">○</span>
-                                <span class="step-name">文字转语音</span>
-                            </div>
-                            <div class="progress-step" id="step-video">
-                                <span class="step-icon">○</span>
-                                <span class="step-name">合成视频</span>
-                            </div>
+                        <div class="step-line"></div>
+                        <div class="step" id="step-tts">
+                            <span class="step-dot"></span>
+                            <span class="step-label">文字转语音</span>
+                        </div>
+                        <div class="step-line"></div>
+                        <div class="step" id="step-video">
+                            <span class="step-dot"></span>
+                            <span class="step-label">合成视频</span>
                         </div>
                     </div>
+                </div>
 
-                    <div class="convert-status" id="convert-status" hidden>
-                        <div class="status-icon">✓</div>
-                        <p class="status-text" id="status-text"></p>
-                    </div>
+                <div class="convert-status" id="convert-status" hidden>
+                    <div class="status-icon" id="status-icon"></div>
+                    <p class="status-text" id="status-text"></p>
                 </div>
             </section>
 
-            <!-- 预览模块 -->
-            <section class="module" id="preview-module">
-                <h2 class="module-title">视频预览</h2>
-                <div class="module-content">
-                    <div class="preview-container" id="preview-container">
-                        <div class="preview-placeholder" id="preview-placeholder">
-                            <p>上传PPT文件并转换后将显示预览</p>
-                        </div>
-                        <video id="video-player" class="video-player" controls hidden></video>
+            <!-- 预览 -->
+            <section class="card" id="preview-module">
+                <div class="preview-container" id="preview-container">
+                    <div class="preview-placeholder" id="preview-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                        <p>转换完成后将在此显示预览</p>
                     </div>
-                    <div class="preview-actions">
-                        <button class="btn btn-secondary" id="download-btn" disabled>
-                            下载视频
-                        </button>
-                    </div>
+                    <video id="video-player" class="video-player" controls hidden></video>
+                </div>
+                <div class="preview-actions">
+                    <button class="btn-download" id="download-btn" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        下载视频
+                    </button>
                 </div>
             </section>
         </main>

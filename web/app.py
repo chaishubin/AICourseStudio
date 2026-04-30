@@ -18,6 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from vidppt import Pipeline, ProcessConfig
 from vidppt.utils.progress import ProcessStage
 
+# 导入处理器以触发注册
+import vidppt.processors  # noqa: F401
+
 app = Flask(__name__,
             template_folder=Path(__file__).parent / 'templates',
             static_folder=Path(__file__).parent / 'static')
@@ -360,27 +363,30 @@ def get_status(task_id):
     })
 
 
-@app.route('/api/video/<path:video_path>')
-def get_video(video_path):
+@app.route('/api/video')
+def get_video():
     """获取视频文件用于预览"""
+    video_path = request.args.get('path', '')
     try:
         return send_file(video_path, mimetype='video/mp4')
     except FileNotFoundError:
         return jsonify({'error': '视频文件不存在'}), 404
 
 
-@app.route('/api/frame/<path:frame_path>')
-def get_frame(frame_path):
+@app.route('/api/frame')
+def get_frame():
     """获取视频第一帧图片用于预览"""
+    frame_path = request.args.get('path', '')
     try:
         return send_file(frame_path, mimetype='image/png')
     except FileNotFoundError:
         return jsonify({'error': '图片文件不存在'}), 404
 
 
-@app.route('/api/download/<path:file_path>')
-def download_file(file_path):
+@app.route('/api/download')
+def download_file():
     """下载文件"""
+    file_path = request.args.get('path', '')
     try:
         filename = Path(file_path).name
         response = make_response(send_file(file_path))
@@ -412,4 +418,8 @@ def list_voices():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    import argparse
+    parser = argparse.ArgumentParser(description='VidPPT Web Server')
+    parser.add_argument('port', nargs='?', type=int, default=5000, help='端口号 (默认: 5000)')
+    args = parser.parse_args()
+    app.run(debug=True, host='0.0.0.0', port=args.port)
