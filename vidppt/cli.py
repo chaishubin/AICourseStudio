@@ -92,6 +92,11 @@ MiniMax TTS 示例:
         action="store_true",
         help="不保存中间文件（文本、图片等），仅保留最终视频",
     )
+    parser.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="强制重新处理所有页面，即使输出文件已存在",
+    )
 
     # TTS 配置
     parser.add_argument(
@@ -252,6 +257,8 @@ MiniMax TTS 示例:
         cli_config["enable_video"] = False
     if args.no_intermediate:
         cli_config["save_intermediate"] = False
+    if args.no_skip_existing:
+        cli_config["skip_existing"] = False
     if args.tts_engine != "edge-tts":
         cli_config["tts_engine"] = args.tts_engine
     # --voice 的含义取决于引擎：

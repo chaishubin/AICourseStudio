@@ -30,33 +30,42 @@ class PPTProcessor(DocumentProcessor):
 
         logger.info(f"共 {len(prs.slides)} 页，开始提取...")
 
+        text_skipped = 0
         for i, slide in enumerate(prs.slides, start=1):
             page = PageContent(page_number=i)
+            page_dir = config.output_dir / str(i)
+            text_path = page_dir / "text.txt"
 
-            # 提取文本
-            page.text = self._extract_text_from_slide(slide)
+            # 跳过已有文本的页面
+            if config.save_intermediate and config.skip_existing and text_path.exists():
+                page.text = text_path.read_text(encoding="utf-8")
+                logger.debug(f"第 {i} 页 文字已存在，跳过提取  ({len(page.text)} 字符)")
+                text_skipped += 1
+            else:
+                # 提取文本
+                page.text = self._extract_text_from_slide(slide)
 
-            # 保存文本（如果需要且不为空）
-            if config.save_intermediate and page.text and page.text.strip():
-                page_dir = config.output_dir / str(i)
-                page_dir.mkdir(parents=True, exist_ok=True)
+                # 保存文本（如果需要且不为空）
+                if config.save_intermediate and page.text and page.text.strip():
+                    page_dir.mkdir(parents=True, exist_ok=True)
+                    text_path.write_text(page.text, encoding="utf-8")
+                    logger.debug(f"第 {i} 页 文字 -> {text_path}  ({len(page.text)} 字符)")
+                elif config.save_intermediate:
+                    logger.debug(f"第 {i} 页 无文本内容，跳过文本文件保存")
 
-                text_path = page_dir / "text.txt"
-                text_path.write_text(page.text, encoding="utf-8")
-                logger.debug(f"第 {i} 页 文字 -> {text_path}  ({len(page.text)} 字符)")
-            elif config.save_intermediate:
-                logger.debug(f"第 {i} 页 无文本内容，跳过文本文件保存")
-
-            # 提取图片
-            if config.save_intermediate:
-                page_dir = config.output_dir / str(i)
-                page.images = self._extract_images_from_slide(slide, page_dir)
-                for img_path in page.images:
-                    logger.debug(f"第 {i} 页 图片 -> {img_path}")
-                if not page.images:
-                    logger.debug(f"第 {i} 页 无内嵌图片")
+                # 提取图片
+                if config.save_intermediate:
+                    page_dir.mkdir(parents=True, exist_ok=True)
+                    page.images = self._extract_images_from_slide(slide, page_dir)
+                    for img_path in page.images:
+                        logger.debug(f"第 {i} 页 图片 -> {img_path}")
+                    if not page.images:
+                        logger.debug(f"第 {i} 页 无内嵌图片")
 
             pages.append(page)
+
+        if text_skipped:
+            logger.info(f"跳过 {text_skipped} 页已有文字提取")
 
         return DocumentContent(pages=pages)
 
@@ -65,37 +74,85 @@ class PPTProcessor(DocumentProcessor):
         from spire.presentation import Presentation as SpirePresentation
 
         logger.info("开始渲染幻灯片截图...")
+
+        # 预检查哪些页需要渲染
+        if config.save_intermediate and config.skip_existing:
+            page_count = self._get_slide_count(config)
+            skip_flags = []
+            for i in range(1, page_count + 1):
+                slide_path = config.output_dir / str(i) / "slide.png"
+                skip_flags.append(slide_path.exists())
+
+            if all(skip_flags):
+                logger.info("所有幻灯片截图已存在，跳过渲染")
+                return [config.output_dir / str(i) / "slide.png" for i in range(1, page_count + 1)]
+        else:
+            skip_flags = []
+
+        # 需要渲染至少一页，加载 spire
         prs = SpirePresentation()
         prs.LoadFromFile(str(config.input_path))
 
         # 确保输出目录存在
         config.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 如果没有预检查结果（skip_existing 未启用），重新计算
+        if len(skip_flags) != prs.Slides.Count:
+            skip_flags = [False] * prs.Slides.Count
+            if config.save_intermediate and config.skip_existing:
+                for i in range(prs.Slides.Count):
+                    slide_path = config.output_dir / str(i + 1) / "slide.png"
+                    skip_flags[i] = slide_path.exists()
+
         slide_images = []
+        rendered = 0
         for i in range(prs.Slides.Count):
+            page_num = i + 1
+
+            if skip_flags[i]:
+                out_path = config.output_dir / str(page_num) / "slide.png"
+                slide_images.append(out_path)
+                logger.debug(f"第 {page_num} 页 截图已存在，跳过渲染")
+                continue
+
             slide = prs.Slides[i]
             img_stream = slide.SaveAsImage()
             img_bytes = bytes(img_stream.ToArray())
             img = Image.open(io.BytesIO(img_bytes))
 
             if config.save_intermediate:
-                page_dir = config.output_dir / str(i + 1)
+                page_dir = config.output_dir / str(page_num)
                 page_dir.mkdir(parents=True, exist_ok=True)
                 out_path = page_dir / "slide.png"
                 img.save(out_path, "PNG")
-                logger.debug(f"第 {i + 1} 页 截图 -> {out_path}")
+                logger.debug(f"第 {page_num} 页 截图 -> {out_path}")
                 slide_images.append(out_path)
+                rendered += 1
             else:
                 # 不保存中间文件时，保存到临时路径
                 config.output_dir.mkdir(parents=True, exist_ok=True)
-                temp_path = config.output_dir / f"_temp_slide_{i + 1}.png"
+                temp_path = config.output_dir / f"_temp_slide_{page_num}.png"
                 img.save(temp_path, "PNG")
                 slide_images.append(temp_path)
+                rendered += 1
 
             img_stream.Dispose()
 
         prs.Dispose()
+
+        skipped = sum(skip_flags)
+        if skipped:
+            logger.info(f"跳过 {skipped} 页已有截图，渲染 {rendered} 页")
+        else:
+            logger.info(f"渲染 {rendered} 页截图")
+
         return slide_images
+
+    def _get_slide_count(self, config: ProcessConfig) -> int:
+        """获取 PPT 幻灯片数量（不加载 spire）"""
+        prs = Presentation(str(config.input_path))
+        count = len(prs.slides)
+        return count
 
     @staticmethod
     def _extract_text_from_slide(slide) -> str:

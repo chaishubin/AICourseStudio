@@ -56,6 +56,7 @@ class ConfigConverter:
             enable_tts=config_dict.get("enable_tts", True),
             enable_video=config_dict.get("enable_video", True),
             save_intermediate=config_dict.get("save_intermediate", True),
+            skip_existing=config_dict.get("skip_existing", True),
             # TTS 配置
             tts_engine=tts_engine,
             tts_voice=tts_voice,

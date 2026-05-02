@@ -61,21 +61,38 @@ def extract_images_from_slide(slide, out_dir: Path) -> list[Path]:
     return saved
 
 
-def render_slides_to_images(ppt_path: str, output_root: Path) -> list[Path]:
-    """使用 spire.presentation 将每页 PPT 渲染为 PNG 图像"""
+def render_slides_to_images(ppt_path: str, output_root: Path, pages_to_render: list[int] | None = None) -> list[Path]:
+    """使用 spire.presentation 将每页 PPT 渲染为 PNG 图像
+
+    Args:
+        ppt_path: PPT 文件路径
+        output_root: 输出根目录
+        pages_to_render: 需要渲染的页码列表（1-based），为 None 时渲染所有页
+    """
     from spire.presentation import Presentation as SpirePresentation
+
+    # 全部已存在则不加载 spire
+    if pages_to_render is not None and len(pages_to_render) == 0:
+        return []
 
     prs = SpirePresentation()
     prs.LoadFromFile(ppt_path)
 
+    render_set = set(pages_to_render) if pages_to_render is not None else None
+
     slide_images = []
     for i in range(prs.Slides.Count):
+        page_num = i + 1
+        # 如果指定了要渲染的页，跳过不在列表中的
+        if render_set is not None and page_num not in render_set:
+            continue
+
         slide = prs.Slides[i]
         img_stream = slide.SaveAsImage()
         img_bytes = bytes(img_stream.ToArray())
         img = Image.open(io.BytesIO(img_bytes))
 
-        page_dir = output_root / str(i + 1)
+        page_dir = output_root / str(page_num)
         page_dir.mkdir(parents=True, exist_ok=True)
         out_path = page_dir / "slide.png"
         img.save(out_path, "PNG")
@@ -176,6 +193,7 @@ def process_ppt(
     voice: str = "zh-CN-XiaoxiaoNeural",
     rate: str = "+0%",
     video: bool = True,
+    skip_existing: bool = True,
 ) -> None:
     out_root = Path(output_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -190,16 +208,20 @@ def process_ppt(
         page_dir = out_root / str(i)
         page_dir.mkdir(parents=True, exist_ok=True)
 
-        text = extract_text_from_slide(slide)
         text_path = page_dir / "text.txt"
-        text_path.write_text(text, encoding="utf-8")
-        print(f"  第 {i} 页 文字 -> {text_path}  ({len(text)} 字符)")
+        if skip_existing and text_path.exists():
+            text = text_path.read_text(encoding="utf-8")
+            print(f"  第 {i} 页 文字已存在，跳过提取  ({len(text)} 字符)")
+        else:
+            text = extract_text_from_slide(slide)
+            text_path.write_text(text, encoding="utf-8")
+            print(f"  第 {i} 页 文字 -> {text_path}  ({len(text)} 字符)")
 
-        imgs = extract_images_from_slide(slide, page_dir)
-        for p in imgs:
-            print(f"  第 {i} 页 图片 -> {p}")
-        if not imgs:
-            print(f"  第 {i} 页 无内嵌图片")
+            imgs = extract_images_from_slide(slide, page_dir)
+            for p in imgs:
+                print(f"  第 {i} 页 图片 -> {p}")
+            if not imgs:
+                print(f"  第 {i} 页 无内嵌图片")
 
         if tts:
             page_texts.append((i, text, page_dir / "audio.mp3"))
@@ -207,20 +229,45 @@ def process_ppt(
     # Step 2: 渲染幻灯片截图
     print("\n开始渲染幻灯片截图...")
     try:
-        slide_paths = render_slides_to_images(ppt_path, out_root)
-        for i, p in enumerate(slide_paths, start=1):
-            print(f"  第 {i} 页 截图 -> {p}")
+        # 预检查哪些页缺少 slide.png
+        pages_to_render = []
+        for i in range(1, total + 1):
+            slide_path = out_root / str(i) / "slide.png"
+            if not (skip_existing and slide_path.exists()):
+                pages_to_render.append(i)
+
+        if not pages_to_render:
+            print("  所有幻灯片截图已存在，跳过渲染")
+        else:
+            slide_paths = render_slides_to_images(ppt_path, out_root, pages_to_render)
+            for i, p in enumerate(pages_to_render, start=1):
+                print(f"  第 {pages_to_render[i-1]} 页 截图 -> {slide_paths[i-1]}")
+            # 报告跳过的页
+            skipped = total - len(pages_to_render)
+            if skipped:
+                print(f"  （跳过 {skipped} 页已有截图）")
     except Exception as e:
         print(f"[警告] 幻灯片渲染失败: {e}", file=sys.stderr)
 
     # Step 3: 文字转语音
     if tts and page_texts:
-        print(f"\n开始文字转语音（声音: {voice}，语速: {rate}）...")
-        try:
-            generate_audio(page_texts, voice=voice, rate=rate)
-        except Exception as e:
-            print(f"[警告] TTS 转换失败: {e}", file=sys.stderr)
-            print("  请检查网络连接，edge-tts 需要访问微软服务器", file=sys.stderr)
+        # 过滤已有音频的页面
+        if skip_existing:
+            filtered = [(n, t, p) for n, t, p in page_texts if not p.exists()]
+            skipped = len(page_texts) - len(filtered)
+            if skipped:
+                print(f"  {skipped} 页音频已存在，跳过TTS")
+            page_texts = filtered
+
+        if page_texts:
+            print(f"\n开始文字转语音（声音: {voice}，语速: {rate}）...")
+            try:
+                generate_audio(page_texts, voice=voice, rate=rate)
+            except Exception as e:
+                print(f"[警告] TTS 转换失败: {e}", file=sys.stderr)
+                print("  请检查网络连接，edge-tts 需要访问微软服务器", file=sys.stderr)
+        else:
+            print("  所有音频已存在，跳过TTS")
 
     # Step 4: 合成视频
     if video:
@@ -246,6 +293,11 @@ def main():
     )
     parser.add_argument("--no-tts", action="store_true", help="跳过文字转语音步骤")
     parser.add_argument("--no-video", action="store_true", help="跳过视频合成步骤")
+    parser.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="强制重新处理所有页面，即使输出文件已存在",
+    )
     parser.add_argument(
         "--voice",
         default="zh-CN-XiaoxiaoNeural",
@@ -276,6 +328,7 @@ def main():
         voice=args.voice,
         rate=args.rate,
         video=not args.no_video,
+        skip_existing=not args.no_skip_existing,
     )
 
 

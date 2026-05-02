@@ -150,6 +150,7 @@ class Pipeline:
 
             page_texts = []
             cached_pages = []
+            skipped_pages = []
 
             for page in content.pages:
                 # 跳过没有文本的页面
@@ -169,6 +170,14 @@ class Pipeline:
 
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
 
+                # 检查音频文件是否已存在（跳过已有文件）
+                if self.config.save_intermediate and self.config.skip_existing and audio_path.exists():
+                    page.audio = audio_path
+                    skipped_pages.append(page.page_number)
+                    logger.debug(f"第 {page.page_number} 页 音频已存在，跳过TTS")
+                    progress.update_stage(ProcessStage.TTS, page.page_number)
+                    continue
+
                 # 尝试从缓存获取
                 if self.config.tts_engine == "edge-tts":
                     cached_audio = self.cache_manager.get(
@@ -176,6 +185,7 @@ class Pipeline:
                         tts_engine=self.config.tts_engine,
                         voice=self.config.tts_voice,
                         rate=self.config.tts_rate,
+                        input_path=str(self.config.input_path),
                     )
                 else:
                     # minimax：voice 来自 tts_options，其余 tts_options 也作为 cache key
@@ -184,6 +194,7 @@ class Pipeline:
                         tts_engine=self.config.tts_engine,
                         voice=self.config.tts_options.get("voice_id", "male-qn-qingse"),
                         rate=self.config.tts_rate,
+                        input_path=str(self.config.input_path),
                         **{
                             k: v
                             for k, v in self.config.tts_options.items()
@@ -288,6 +299,7 @@ class Pipeline:
                             tts_engine=self.config.tts_engine,
                             voice=self.config.tts_voice,
                             rate=self.config.tts_rate,
+                            input_path=str(self.config.input_path),
                         )
                     else:
                         self.cache_manager.put(
@@ -298,6 +310,7 @@ class Pipeline:
                                 "voice_id", "male-qn-qingse"
                             ),
                             rate=self.config.tts_rate,
+                            input_path=str(self.config.input_path),
                             **{
                                 k: v
                                 for k, v in self.config.tts_options.items()
@@ -306,14 +319,21 @@ class Pipeline:
                         )
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
 
-            if page_texts or cached_pages:
+            if page_texts or cached_pages or skipped_pages:
                 success_count = len(page_texts) - len(failed_pages) if 'failed_pages' in dir() else len(page_texts)
-                cache_info = (
-                    f"（缓存命中: {len(cached_pages)}, 新转换: {success_count}"
-                    f"{f', 失败: {len(failed_pages)}' if 'failed_pages' in dir() and failed_pages else ''}）"
-                    if self.config.enable_audio_cache
-                    else f"（成功: {success_count}{f', 失败: {len(failed_pages)}' if 'failed_pages' in dir() and failed_pages else ''}）"
-                )
+                parts = []
+                if skipped_pages:
+                    parts.append(f"跳过已有: {len(skipped_pages)}")
+                if self.config.enable_audio_cache:
+                    parts.append(f"缓存命中: {len(cached_pages)}")
+                    parts.append(f"新转换: {success_count}")
+                    if 'failed_pages' in dir() and failed_pages:
+                        parts.append(f"失败: {len(failed_pages)}")
+                else:
+                    parts.append(f"成功: {success_count}")
+                    if 'failed_pages' in dir() and failed_pages:
+                        parts.append(f"失败: {len(failed_pages)}")
+                cache_info = f"（{', '.join(parts)}）"
                 logger.info(f"文字转语音完成 {cache_info}")
             else:
                 logger.info("没有文本需要转换，跳过 TTS 处理")

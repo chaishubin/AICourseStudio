@@ -25,6 +25,12 @@ app = Flask(__name__,
             template_folder=Path(__file__).parent / 'templates',
             static_folder=Path(__file__).parent / 'static')
 
+DASHBOARD_ENABLED = os.environ.get('VIDPPT_DASHBOARD', 'true').lower() == 'true'
+if DASHBOARD_ENABLED:
+    sys.path.insert(0, str(Path(__file__).parent))
+    from api.system_stats import system_stats_bp
+    app.register_blueprint(system_stats_bp)
+
 # 配置
 UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
@@ -38,7 +44,7 @@ app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['OUTPUT_FOLDER'] = str(OUTPUT_FOLDER)
 
 # 存储任务状态和进度队列
-tasks = {}  # task_id -> {status, progress, error, video_path, etc.}
+tasks = {}  # task_id -> {status, file_path, output_dir, stage, percentage, message, video_path, error}
 progress_queues = {}  # task_id -> Queue
 
 
@@ -63,6 +69,13 @@ def upload_ppt():
     if file.filename == '':
         return jsonify({'error': '未选择文件'}), 400
 
+    # 检查文件是否为空（0字节）
+    file.seek(0, 2)  # 移动到文件末尾
+    file_size = file.tell()
+    file.seek(0)  # 重置到文件开头
+    if file_size == 0:
+        return jsonify({'error': '文件为空，请选择有效的PPT文件'}), 400
+
     if file and allowed_file(file.filename):
         # 生成唯一文件名
         filename = secure_filename(file.filename)
@@ -85,6 +98,9 @@ def upload_ppt():
 class WebProgressTracker:
     """Web端进度跟踪器，将进度推送到队列"""
 
+    STAGE_ORDER = ['init', 'extract', 'tts', 'video']
+    STAGE_WEIGHT = 100 / len(STAGE_ORDER)  # 每个阶段占 25%
+
     def __init__(self, task_id: str, queue: Queue, total_pages: int = 0):
         self.task_id = task_id
         self.queue = queue
@@ -93,17 +109,37 @@ class WebProgressTracker:
         self.current_progress = 0
         self.stage_progress = {}  # stage_name -> {current, total, percentage}
 
+    def _overall_percentage(self, stage: str, stage_pct: float) -> int:
+        """将阶段局部百分比转换为整体百分比"""
+        idx = self.STAGE_ORDER.index(stage) if stage in self.STAGE_ORDER else 0
+        return int(idx * self.STAGE_WEIGHT + (stage_pct / 100) * self.STAGE_WEIGHT)
+
+    def _update_task(self, **kwargs):
+        """更新 tasks 字典中的最新状态"""
+        task = tasks.get(self.task_id, {})
+        task.update(kwargs)
+        tasks[self.task_id] = task
+
     def update(self, stage: str, current: int, total: int, message: str = ""):
         """更新进度"""
         self.current_stage = stage
         self.current_progress = int((current / total * 100) if total > 0 else 0)
 
         # 计算整体进度
+        overall = self._overall_percentage(stage, self.current_progress)
+
         self.stage_progress[stage] = {
             'current': current,
             'total': total,
             'percentage': self.current_progress
         }
+
+        self._update_task(
+            status='processing',
+            stage=stage,
+            percentage=overall,
+            message=message,
+        )
 
         # 推送到队列
         self.queue.put({
@@ -111,13 +147,20 @@ class WebProgressTracker:
             'stage': stage,
             'current': current,
             'total': total,
-            'percentage': self.current_progress,
+            'percentage': overall,
             'message': message
         })
 
     def set_stage(self, stage: str, message: str = ""):
         """设置当前阶段"""
         self.current_stage = stage
+
+        self._update_task(
+            status='processing',
+            stage=stage,
+            message=message,
+        )
+
         self.queue.put({
             'type': 'stage',
             'stage': stage,
@@ -126,6 +169,14 @@ class WebProgressTracker:
 
     def complete(self, video_path: str = None):
         """标记完成"""
+        self._update_task(
+            status='completed',
+            stage='complete',
+            percentage=100,
+            message='转换完成',
+            video_path=video_path,
+        )
+
         self.queue.put({
             'type': 'complete',
             'video_path': video_path,
@@ -134,6 +185,11 @@ class WebProgressTracker:
 
     def error(self, error_msg: str):
         """标记错误"""
+        self._update_task(
+            status='error',
+            error=error_msg,
+        )
+
         self.queue.put({
             'type': 'error',
             'message': error_msg
@@ -326,11 +382,9 @@ def get_progress(task_id):
 
                 # 如果任务完成或出错，结束流
                 if data.get('type') in ('complete', 'error'):
-                    # 清理
+                    # 仅清理队列，保留 tasks 中的状态以便刷新恢复
                     if task_id in progress_queues:
                         del progress_queues[task_id]
-                    if task_id in tasks:
-                        del tasks[task_id]
                     break
 
             except Exception:
@@ -361,6 +415,38 @@ def get_status(task_id):
         'video_path': task.get('video_path'),
         'error': task.get('error')
     })
+
+
+@app.route('/api/active-task')
+def get_active_task():
+    """获取当前正在运行或刚完成的任务，供前端刷新后恢复状态"""
+    for task_id, task in tasks.items():
+        status = task.get('status', '')
+        if status in ('pending', 'processing') or \
+           (status in ('completed', 'error') and task_id in progress_queues):
+            return jsonify({
+                'task_id': task_id,
+                'status': status,
+                'stage': task.get('stage'),
+                'percentage': task.get('percentage', 0),
+                'message': task.get('message', ''),
+                'video_path': task.get('video_path'),
+                'error': task.get('error'),
+            })
+    # 也返回最近完成的任务（1个）
+    completed = [(tid, t) for tid, t in tasks.items() if t.get('status') in ('completed', 'error')]
+    if completed:
+        tid, t = completed[-1]
+        return jsonify({
+            'task_id': tid,
+            'status': t.get('status'),
+            'stage': t.get('stage'),
+            'percentage': t.get('percentage', 0),
+            'message': t.get('message', ''),
+            'video_path': t.get('video_path'),
+            'error': t.get('error'),
+        })
+    return jsonify({'active': False})
 
 
 @app.route('/api/video')

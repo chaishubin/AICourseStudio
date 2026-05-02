@@ -43,6 +43,7 @@ class ProcessConfig:
     enable_tts: bool = True
     enable_video: bool = True
     save_intermediate: bool = True  # 是否保存中间文件
+    skip_existing: bool = True  # 输出文件已存在时跳过处理
 
     # TTS 配置
     tts_engine: str = "edge-tts"

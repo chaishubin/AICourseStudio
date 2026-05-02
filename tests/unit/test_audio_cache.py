@@ -25,12 +25,14 @@ class TestAudioCacheKeyGeneration:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         key2 = cache._generate_cache_key(
             text="Hello World",
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert key1 == key2
         assert len(key1) == 64  # SHA256 哈希值长度
@@ -43,12 +45,14 @@ class TestAudioCacheKeyGeneration:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         key2 = cache._generate_cache_key(
             text="World",
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert key1 != key2
 
@@ -60,12 +64,33 @@ class TestAudioCacheKeyGeneration:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         key2 = cache._generate_cache_key(
             text="Hello",
             tts_engine="edge-tts",
             voice="en-US-GuyNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
+        )
+        assert key1 != key2
+
+    def test_generate_cache_key_different_input_paths(self):
+        """测试不同输入文件生成不同缓存键（避免不同PPT混用缓存）"""
+        cache = AudioCacheManager(enable_cache=False)
+        key1 = cache._generate_cache_key(
+            text="Hello",
+            tts_engine="edge-tts",
+            voice="en-US-AriaNeural",
+            rate="+0%",
+            input_path="/test/presentation_A.pptx",
+        )
+        key2 = cache._generate_cache_key(
+            text="Hello",
+            tts_engine="edge-tts",
+            voice="en-US-AriaNeural",
+            rate="+0%",
+            input_path="/test/presentation_B.pptx",
         )
         assert key1 != key2
 
@@ -77,6 +102,7 @@ class TestAudioCacheKeyGeneration:
             tts_engine="minimax",
             voice="Female",
             rate="+0%",
+            input_path="/test/demo.pptx",
             emotion="happy",
             model="speech-2.8-hd",
         )
@@ -85,6 +111,7 @@ class TestAudioCacheKeyGeneration:
             tts_engine="minimax",
             voice="Female",
             rate="+0%",
+            input_path="/test/demo.pptx",
             emotion="happy",
             model="speech-2.8-hd",
         )
@@ -98,12 +125,14 @@ class TestAudioCacheKeyGeneration:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         key2 = cache._generate_cache_key(
             text="Hello World",
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert key1 == key2
 
@@ -142,6 +171,7 @@ class TestAudioCachePutGet:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
 
         # 从缓存获取
@@ -150,6 +180,7 @@ class TestAudioCachePutGet:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
 
         assert cached_path is not None
@@ -163,6 +194,7 @@ class TestAudioCachePutGet:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert result is None
 
@@ -175,12 +207,14 @@ class TestAudioCachePutGet:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         result = cache.get(
             text="Test",
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert result is None
 
@@ -192,6 +226,7 @@ class TestAudioCachePutGet:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
 
         metadata = cache_manager._load_metadata()
@@ -203,6 +238,7 @@ class TestAudioCachePutGet:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert key in metadata
         assert metadata[key]["tts_engine"] == "edge-tts"
@@ -244,6 +280,7 @@ class TestAudioCacheExpiry:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         cache_file = cache_manager._get_cache_file_path(key)
         cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +304,7 @@ class TestAudioCacheExpiry:
             tts_engine="edge-tts",
             voice="en-US-AriaNeural",
             rate="+0%",
+            input_path="/test/demo.pptx",
         )
         assert result is None
 

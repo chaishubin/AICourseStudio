@@ -78,14 +78,29 @@ body {
 
 /* ── Content ──────────────────────────── */
 .content {
-    max-width: 680px;
+    max-width: 1080px;
     width: 100%;
     margin: 0 auto;
     padding: 0 24px 48px;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 20px;
+    flex: 1;
+    justify-content: center;
+}
+
+.content-main {
+    max-width: 680px;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 16px;
-    flex: 1;
+}
+
+.content-aside {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
 }
 
 /* ── Card ─────────────────────────────── */
@@ -97,9 +112,9 @@ body {
     transition: border-color var(--transition);
     animation: fadeUp 0.6s ease both;
 }
-.card:nth-child(2) { animation-delay: 0.08s; }
-.card:nth-child(3) { animation-delay: 0.16s; }
-.card:nth-child(4) { animation-delay: 0.24s; }
+.content-main > .card:nth-child(2) { animation-delay: 0.08s; }
+.content-main > .card:nth-child(3) { animation-delay: 0.16s; }
+.content-main > .card:nth-child(4) { animation-delay: 0.24s; }
 
 .card:hover {
     border-color: var(--color-border-hover);
@@ -309,9 +324,17 @@ body {
 }
 
 .btn-loading {
-    display: inline-flex;
+    display: none;
     align-items: center;
     gap: 8px;
+}
+
+.btn-convert.loading .btn-text {
+    display: none;
+}
+
+.btn-convert.loading .btn-loading {
+    display: inline-flex;
 }
 
 .spinner {
@@ -568,6 +591,7 @@ body {
 
     .content {
         padding: 0 16px 36px;
+        grid-template-columns: 1fr;
     }
 
     .card {

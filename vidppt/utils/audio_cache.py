@@ -47,16 +47,18 @@ class AudioCacheManager:
         tts_engine: str,
         voice: str,
         rate: float,
+        input_path: str = "",
         **kwargs,
     ) -> str:
         """
-        基于文本和 TTS 参数生成缓存键
+        基于文本、TTS 参数和输入文件生成缓存键
 
         Args:
             text: 待转换的文本
             tts_engine: TTS 引擎名称 (e.g., 'edge-tts', 'minimax')
             voice: 语音名称
             rate: 语速
+            input_path: 输入文件路径，用于区分不同 PPT 项目的缓存
             **kwargs: 其他 TTS 参数 (e.g., emotion, model)
 
         Returns:
@@ -64,6 +66,7 @@ class AudioCacheManager:
         """
         # 构建缓存键的基础字符串
         cache_key_data = {
+            "input_path": str(input_path),
             "text": text.strip(),
             "tts_engine": tts_engine,
             "voice": voice,
@@ -135,6 +138,7 @@ class AudioCacheManager:
         tts_engine: str,
         voice: str,
         rate: float,
+        input_path: str = "",
         **kwargs,
     ) -> Optional[Path]:
         """
@@ -145,6 +149,7 @@ class AudioCacheManager:
             tts_engine: TTS 引擎名称
             voice: 语音名称
             rate: 语速
+            input_path: 输入文件路径，用于区分不同 PPT 项目的缓存
             **kwargs: 其他 TTS 参数
 
         Returns:
@@ -153,7 +158,7 @@ class AudioCacheManager:
         if not self.enable_cache:
             return None
 
-        cache_key = self._generate_cache_key(text, tts_engine, voice, rate, **kwargs)
+        cache_key = self._generate_cache_key(text, tts_engine, voice, rate, input_path=input_path, **kwargs)
         cache_file = self._get_cache_file_path(cache_key)
 
         # 检查文件是否存在
@@ -181,6 +186,7 @@ class AudioCacheManager:
         tts_engine: str,
         voice: str,
         rate: float,
+        input_path: str = "",
         **kwargs,
     ) -> None:
         """
@@ -192,12 +198,13 @@ class AudioCacheManager:
             tts_engine: TTS 引擎名称
             voice: 语音名称
             rate: 语速
+            input_path: 输入文件路径，用于区分不同 PPT 项目的缓存
             **kwargs: 其他 TTS 参数
         """
         if not self.enable_cache or not audio_path.exists():
             return
 
-        cache_key = self._generate_cache_key(text, tts_engine, voice, rate, **kwargs)
+        cache_key = self._generate_cache_key(text, tts_engine, voice, rate, input_path=input_path, **kwargs)
         cache_file = self._get_cache_file_path(cache_key)
 
         try:
