@@ -160,8 +160,12 @@
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({
+        container: '#dashboard-column'
+      });
+      window.taskTimer = new TaskTimerDashboard({
         container: '#dashboard-column'
       });
     </script>

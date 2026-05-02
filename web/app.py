@@ -8,6 +8,7 @@ import uuid
 import json
 import threading
 import sys
+import time
 from pathlib import Path
 from queue import Queue
 from flask import Flask, render_template, request, jsonify, send_file, make_response, Response
@@ -108,6 +109,8 @@ class WebProgressTracker:
         self.current_stage = None
         self.current_progress = 0
         self.stage_progress = {}  # stage_name -> {current, total, percentage}
+        self._stage_started_at = None
+        self._update_task(started_at=time.time(), stage_timings={})
 
     def _overall_percentage(self, stage: str, stage_pct: float) -> int:
         """将阶段局部百分比转换为整体百分比"""
@@ -115,10 +118,22 @@ class WebProgressTracker:
         return int(idx * self.STAGE_WEIGHT + (stage_pct / 100) * self.STAGE_WEIGHT)
 
     def _update_task(self, **kwargs):
-        """更新 tasks 字典中的最新状态"""
+        """更新 tasks 字典中的最新状态，合并 stage_timings"""
         task = tasks.get(self.task_id, {})
+        if 'stage_timings' in kwargs:
+            existing = task.get('stage_timings', {})
+            existing.update(kwargs.pop('stage_timings'))
+            task['stage_timings'] = existing
         task.update(kwargs)
         tasks[self.task_id] = task
+
+    def _complete_current_stage(self):
+        """记录当前阶段的耗时"""
+        if self.current_stage and self._stage_started_at:
+            duration = time.time() - self._stage_started_at
+            self._update_task(stage_timings={
+                self.current_stage: {'duration': round(duration, 2)}
+            })
 
     def update(self, stage: str, current: int, total: int, message: str = ""):
         """更新进度"""
@@ -153,12 +168,15 @@ class WebProgressTracker:
 
     def set_stage(self, stage: str, message: str = ""):
         """设置当前阶段"""
+        self._complete_current_stage()
         self.current_stage = stage
+        self._stage_started_at = time.time()
 
         self._update_task(
             status='processing',
             stage=stage,
             message=message,
+            stage_started_at=self._stage_started_at,
         )
 
         self.queue.put({
@@ -169,12 +187,14 @@ class WebProgressTracker:
 
     def complete(self, video_path: str = None):
         """标记完成"""
+        self._complete_current_stage()
         self._update_task(
             status='completed',
             stage='complete',
             percentage=100,
             message='转换完成',
             video_path=video_path,
+            completed_at=time.time(),
         )
 
         self.queue.put({
@@ -185,9 +205,11 @@ class WebProgressTracker:
 
     def error(self, error_msg: str):
         """标记错误"""
+        self._complete_current_stage()
         self._update_task(
             status='error',
             error=error_msg,
+            completed_at=time.time(),
         )
 
         self.queue.put({
@@ -432,6 +454,8 @@ def get_active_task():
                 'message': task.get('message', ''),
                 'video_path': task.get('video_path'),
                 'error': task.get('error'),
+                'started_at': task.get('started_at'),
+                'completed_at': task.get('completed_at'),
             })
     # 也返回最近完成的任务（1个）
     completed = [(tid, t) for tid, t in tasks.items() if t.get('status') in ('completed', 'error')]
@@ -445,8 +469,41 @@ def get_active_task():
             'message': t.get('message', ''),
             'video_path': t.get('video_path'),
             'error': t.get('error'),
+            'started_at': t.get('started_at'),
+            'completed_at': t.get('completed_at'),
         })
     return jsonify({'active': False})
+
+
+@app.route('/api/task-timing')
+def get_task_timing():
+    """获取任务计时信息"""
+    # 优先查找正在运行的任务
+    for task_id, task in tasks.items():
+        status = task.get('status', '')
+        if status in ('pending', 'processing'):
+            return jsonify({
+                'active': True,
+                'status': status,
+                'current_stage': task.get('stage'),
+                'started_at': task.get('started_at'),
+                'stage_started_at': task.get('stage_started_at'),
+                'stage_timings': task.get('stage_timings', {}),
+            })
+    # 再查找最近完成的任务
+    completed = [(tid, t) for tid, t in tasks.items() if t.get('status') in ('completed', 'error')]
+    if completed:
+        tid, t = completed[-1]
+        return jsonify({
+            'active': False,
+            'status': t.get('status'),
+            'current_stage': None,
+            'started_at': t.get('started_at'),
+            'completed_at': t.get('completed_at'),
+            'stage_timings': t.get('stage_timings', {}),
+            'error': t.get('error'),
+        })
+    return jsonify({'active': False, 'no_task': True})
 
 
 @app.route('/api/video')

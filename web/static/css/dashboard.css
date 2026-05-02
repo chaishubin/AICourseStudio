@@ -202,6 +202,180 @@
     height: 22px;
 }
 
+/* ── Task Timer Dashboard ── */
+
+/* Layout: pie left, legend right */
+.timer-body {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
+/* Pie chart wrapper */
+.timer-pie-wrap {
+    position: relative;
+    width: 110px;
+    height: 110px;
+    flex-shrink: 0;
+}
+
+.timer-pie {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: var(--color-surface-3);
+    transition: background 0.3s ease;
+}
+
+.timer-pie-center {
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    background: var(--color-surface);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.timer-total {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--color-text);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.timer-status {
+    font-size: 9px;
+    color: var(--color-text-3);
+    margin-top: 3px;
+    letter-spacing: -0.01em;
+}
+
+/* Clock hand */
+.timer-hand {
+    position: absolute;
+    top: 4px;
+    left: calc(50% - 1px);
+    width: 2px;
+    height: calc(50% - 4px);
+    transform-origin: center bottom;
+    background: rgba(245, 245, 247, 0.5);
+    border-radius: 1px;
+    pointer-events: none;
+    transition: transform 0.15s linear;
+}
+
+.timer-hand-tip {
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-text);
+    box-shadow: 0 0 6px rgba(245, 245, 247, 0.4);
+}
+
+/* Legend */
+.timer-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+}
+
+.timer-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    line-height: 1;
+}
+
+.timer-legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    opacity: 0.25;
+    transition: opacity 0.4s ease, box-shadow 0.4s ease;
+}
+
+.timer-legend-item.completed .timer-legend-dot,
+.timer-legend-item.active .timer-legend-dot {
+    opacity: 1;
+}
+
+.timer-legend-item.active .timer-legend-dot {
+    box-shadow: 0 0 8px var(--dot-glow, rgba(255,255,255,0.3));
+}
+
+.timer-legend-name {
+    color: var(--color-text-3);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.3s ease;
+}
+
+.timer-legend-item.completed .timer-legend-name,
+.timer-legend-item.active .timer-legend-name {
+    color: var(--color-text-2);
+}
+
+.timer-legend-time {
+    color: var(--color-text);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+}
+
+.timer-legend-item.active .timer-legend-time {
+    color: var(--color-text);
+}
+
+.timer-legend-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: 1px 0;
+}
+
+.timer-legend-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+}
+
+.timer-legend-total .timer-legend-name {
+    color: var(--color-text-2);
+    font-weight: 500;
+}
+
+.timer-legend-total .timer-legend-time {
+    color: var(--color-text);
+    font-weight: 700;
+}
+
+/* Empty state */
+.timer-empty {
+    text-align: center;
+    padding: 20px 0;
+    color: var(--color-text-3);
+    font-size: 13px;
+}
+
+/* Timer toggle button — position above system toggle */
+.timer-toggle {
+    bottom: 80px;
+}
+
 /* ── Responsive ── */
 @media (max-width: 640px) {
     .dashboard-gauges {
@@ -222,6 +396,15 @@
     }
 
     .dashboard-card.dashboard-visible {
-        max-height: 360px;
+        max-height: 400px;
+    }
+
+    .timer-pie-wrap {
+        width: 90px;
+        height: 90px;
+    }
+
+    .timer-total {
+        font-size: 15px;
     }
 }
