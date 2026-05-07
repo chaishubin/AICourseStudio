@@ -10,7 +10,7 @@ import threading
 import sys
 import time
 from pathlib import Path
-from queue import Queue
+from queue import Queue, Empty
 from flask import Flask, render_template, request, jsonify, send_file, make_response, Response
 from werkzeug.utils import secure_filename
 
@@ -36,6 +36,7 @@ if DASHBOARD_ENABLED:
 UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
 ALLOWED_EXTENSIONS = {'ppt', 'pptx'}
+STATE_FILE = OUTPUT_FOLDER / 'state.json'
 
 # 确保目录存在
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,49 @@ app.config['OUTPUT_FOLDER'] = str(OUTPUT_FOLDER)
 # 存储任务状态和进度队列
 tasks = {}  # task_id -> {status, file_path, output_dir, stage, percentage, message, video_path, error}
 progress_queues = {}  # task_id -> Queue
+
+
+def save_state(task_id: str):
+    """将指定任务的状态持久化到 state.json"""
+    task = tasks.get(task_id)
+    if not task:
+        return
+    data = {'task_id': task_id}
+    data.update(task)
+    # 提取 original_name
+    file_path = task.get('file_path', '')
+    if file_path and 'original_name' not in data:
+        # 从 uuid_filename.pptx 中还原原始文件名
+        name = Path(file_path).name
+        # 格式: <uuid>_<original_name>
+        parts = name.split('_', 1)
+        data['original_name'] = parts[1] if len(parts) > 1 else name
+    try:
+        STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def load_state():
+    """服务启动时从 state.json 恢复最近任务状态"""
+    if not STATE_FILE.exists():
+        return
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding='utf-8'))
+        task_id = data.get('task_id')
+        if not task_id:
+            return
+        # 只恢复已完成或出错的任务（正在处理的任务重启后已无效）
+        status = data.get('status', '')
+        if status not in ('completed', 'error'):
+            return
+        tasks[task_id] = data
+    except Exception:
+        pass
+
+
+# 启动时恢复状态
+load_state()
 
 
 def allowed_file(filename):
@@ -126,6 +170,8 @@ class WebProgressTracker:
             task['stage_timings'] = existing
         task.update(kwargs)
         tasks[self.task_id] = task
+        # 持久化到 state.json（已完成/出错时写入，处理中也可写入以保留进度）
+        save_state(self.task_id)
 
     def _complete_current_stage(self):
         """记录当前阶段的耗时"""
@@ -363,10 +409,15 @@ def convert_ppt():
 
     # 创建进度队列
     progress_queues[task_id] = Queue()
+    # 从上传文件路径中提取原始文件名（格式: <uuid>_<original_name>）
+    uploaded_name = Path(file_path).name
+    name_parts = uploaded_name.split('_', 1)
+    original_name = name_parts[1] if len(name_parts) > 1 else uploaded_name
     tasks[task_id] = {
         'status': 'pending',
         'file_path': file_path,
-        'output_dir': str(output_dir)
+        'output_dir': str(output_dir),
+        'original_name': original_name,
     }
 
     # 在后台线程中运行转换
@@ -394,24 +445,31 @@ def get_progress(task_id):
         return jsonify({'error': '任务不存在'}), 404
 
     def generate():
+        idle_seconds = 0
+        HEARTBEAT_INTERVAL = 25   # 每 25 秒发一次心跳
+        MAX_IDLE = 600          # 10 分钟无真实消息才判定超时
         while True:
             try:
-                # 阻塞获取进度更新
-                data = queue.get(timeout=300)  # 5分钟超时
+                data = queue.get(timeout=HEARTBEAT_INTERVAL)
+                idle_seconds = 0  # 收到真实消息，重置空闲计时
 
-                # 发送 SSE 事件
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-                # 如果任务完成或出错，结束流
                 if data.get('type') in ('complete', 'error'):
-                    # 仅清理队列，保留 tasks 中的状态以便刷新恢复
                     if task_id in progress_queues:
                         del progress_queues[task_id]
                     break
 
+            except Empty:
+                idle_seconds += HEARTBEAT_INTERVAL
+                if idle_seconds >= MAX_IDLE:
+                    yield f"data: {json.dumps({'type': 'timeout', 'message': '连接超时'})}\n\n"
+                    break
+                # 发送 SSE 注释行作为心跳，浏览器会自动忽略
+                yield ": keepalive\n\n"
+
             except Exception:
-                # 超时或其他错误
-                yield f"data: {json.dumps({'type': 'timeout', 'message': '连接超时'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': '服务内部错误'})}\n\n"
                 break
 
     return Response(
@@ -453,6 +511,8 @@ def get_active_task():
                 'percentage': task.get('percentage', 0),
                 'message': task.get('message', ''),
                 'video_path': task.get('video_path'),
+                'original_name': task.get('original_name', ''),
+                'file_path': task.get('file_path', ''),
                 'error': task.get('error'),
                 'started_at': task.get('started_at'),
                 'completed_at': task.get('completed_at'),
@@ -468,11 +528,44 @@ def get_active_task():
             'percentage': t.get('percentage', 0),
             'message': t.get('message', ''),
             'video_path': t.get('video_path'),
+            'original_name': t.get('original_name', ''),
+            'file_path': t.get('file_path', ''),
             'error': t.get('error'),
             'started_at': t.get('started_at'),
             'completed_at': t.get('completed_at'),
         })
     return jsonify({'active': False})
+
+
+@app.route('/api/last-result')
+def get_last_result():
+    """返回 state.json 中最近完成的任务结果（含 original_name）"""
+    if not STATE_FILE.exists():
+        return jsonify({'found': False})
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding='utf-8'))
+        task_id = data.get('task_id')
+        if not task_id:
+            return jsonify({'found': False})
+        # 验证视频文件是否仍存在
+        video_path = data.get('video_path')
+        if video_path and not Path(video_path).exists():
+            return jsonify({'found': False})
+        return jsonify({
+            'found': True,
+            'task_id': task_id,
+            'status': data.get('status'),
+            'stage': data.get('stage'),
+            'percentage': data.get('percentage', 0),
+            'message': data.get('message', ''),
+            'video_path': video_path,
+            'original_name': data.get('original_name', ''),
+            'error': data.get('error'),
+            'started_at': data.get('started_at'),
+            'completed_at': data.get('completed_at'),
+        })
+    except Exception:
+        return jsonify({'found': False})
 
 
 @app.route('/api/task-timing')

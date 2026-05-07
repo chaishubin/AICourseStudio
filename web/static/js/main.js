@@ -7,6 +7,7 @@ class VidPPTApp {
         this.state = {
             file: null,
             filePath: null,
+            fileName: null,
             taskId: null,
             videoPath: null,
             isUploading: false,
@@ -112,19 +113,30 @@ class VidPPTApp {
 
     async restoreActiveTask() {
         try {
+            // 先尝试恢复进行中的任务
             const resp = await fetch('/api/active-task');
             const data = await resp.json();
-            if (!data.task_id) return;
+            if (data.task_id) {
+                this.state.taskId = data.task_id;
 
-            this.state.taskId = data.task_id;
+                if (data.status === 'processing' || data.status === 'pending') {
+                    this._resumeProgressUI(data);
+                    this.startProgressStream(data.task_id);
+                } else if (data.status === 'completed') {
+                    this._resumeCompletedUI(data);
+                } else if (data.status === 'error') {
+                    this._resumeErrorUI(data);
+                }
+                return;
+            }
 
-            if (data.status === 'processing' || data.status === 'pending') {
-                this._resumeProgressUI(data);
-                this.startProgressStream(data.task_id);
-            } else if (data.status === 'completed') {
-                this._resumeCompletedUI(data);
-            } else if (data.status === 'error') {
-                this._resumeErrorUI(data);
+            // 无活跃任务，尝试从持久化状态恢复上次完成的结果
+            const lastResp = await fetch('/api/last-result');
+            const lastData = await lastResp.json();
+            if (lastData.found && lastData.status === 'completed') {
+                this._resumeCompletedUI(lastData);
+            } else if (lastData.found && lastData.status === 'error') {
+                this._resumeErrorUI(lastData);
             }
         } catch {
             // 无活跃任务，忽略
@@ -153,12 +165,12 @@ class VidPPTApp {
     _resumeCompletedUI(data) {
         const { progressStage, progressPercentage, conversionProgressFill,
                 convertBtn, convertStatus, statusIcon, statusText,
-                videoPlayer, previewPlaceholder, downloadBtn } = this.elements;
+                conversionProgress,
+                videoPlayer, previewPlaceholder, downloadBtn,
+                fileName, filePath, fileInfo, uploadPlaceholder } = this.elements;
 
-        conversionProgress.hidden = false;
-        convertStatus.hidden = false;
-        progressPercentage.textContent = '100%';
         conversionProgressFill.style.width = '100%';
+        progressPercentage.textContent = '100%';
         progressStage.textContent = '完成';
 
         this._restoreStepIndicators('complete', 100);
@@ -166,6 +178,18 @@ class VidPPTApp {
         convertBtn.classList.remove('loading');
         convertBtn.disabled = false;
         this.state.isConverting = false;
+
+        // 恢复文件名信息
+        if (data.original_name) {
+            this.state.fileName = data.original_name;
+            fileName.textContent = data.original_name;
+            // filePath 显示上传路径（如有）
+            if (data.file_path) {
+                filePath.textContent = data.file_path;
+            }
+            fileInfo.hidden = false;
+            uploadPlaceholder.hidden = true;
+        }
 
         if (data.video_path) {
             this.state.videoPath = data.video_path;
@@ -175,6 +199,8 @@ class VidPPTApp {
             downloadBtn.disabled = false;
         }
 
+        conversionProgress.hidden = false;
+        convertStatus.hidden = false;
         convertStatus.classList.remove('success', 'error');
         convertStatus.classList.add('success');
         statusIcon.textContent = '✓';
@@ -322,6 +348,7 @@ class VidPPTApp {
         });
 
         this.state.videoPath = null;
+        this.state.fileName = null;
     }
 
     setStepStatus(stepId, status) {
@@ -390,7 +417,10 @@ class VidPPTApp {
         }
     }
 
-    startProgressStream(taskId) {
+    startProgressStream(taskId, retryCount = 0) {
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 3000; // 3 秒后重试
+
         const eventSource = new EventSource(`/api/progress/${taskId}`);
         const { progressStage, progressPercentage, conversionProgressFill,
                 convertBtn, convertStatus, statusIcon, statusText,
@@ -459,10 +489,9 @@ class VidPPTApp {
 
                     case 'timeout':
                         eventSource.close();
-                        this.showStatus('error', '连接超时，请重试');
-                        convertBtn.classList.remove('loading');
-                        convertBtn.disabled = false;
-                        this.state.isConverting = false;
+                        if (this.state.isConverting) {
+                            this._reconnectOrRestore(taskId, retryCount);
+                        }
                         break;
                 }
             } catch (e) {
@@ -473,12 +502,67 @@ class VidPPTApp {
         eventSource.onerror = () => {
             eventSource.close();
             if (this.state.isConverting) {
-                this.showStatus('error', '连接丢失，请重试');
-                convertBtn.classList.remove('loading');
-                convertBtn.disabled = false;
-                this.state.isConverting = false;
+                this._reconnectOrRestore(taskId, retryCount);
             }
         };
+    }
+
+    _reconnectOrRestore(taskId, retryCount) {
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 3000;
+        const { progressStage, convertBtn } = this.elements;
+
+        if (retryCount >= MAX_RETRIES) {
+            this._showReconnectFailed();
+            return;
+        }
+
+        progressStage.textContent = '重新连接...';
+
+        setTimeout(() => {
+            if (!this.state.isConverting) return;
+
+            // 先查任务最终状态，避免重连已删除的队列
+            fetch('/api/active-task')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status === 'completed') {
+                        this._resumeCompletedUI(d);
+                    } else if (d.status === 'error') {
+                        this._resumeErrorUI(d);
+                    } else if (d.task_id && d.status === 'processing') {
+                        // 任务还在跑，重建 SSE 连接
+                        this.startProgressStream(taskId, retryCount + 1);
+                    } else {
+                        // 内存里没有，查持久化状态
+                        fetch('/api/last-result')
+                            .then(r => r.json())
+                            .then(ld => {
+                                if (ld.found && ld.status === 'completed') {
+                                    this._resumeCompletedUI(ld);
+                                } else if (ld.found && ld.status === 'error') {
+                                    this._resumeErrorUI(ld);
+                                } else {
+                                    // 真的没找到，重连 SSE 碰运气
+                                    this.startProgressStream(taskId, retryCount + 1);
+                                }
+                            })
+                            .catch(() => this.startProgressStream(taskId, retryCount + 1));
+                    }
+                })
+                .catch(() => {
+                    // active-task 请求失败，直接重连 SSE
+                    this.startProgressStream(taskId, retryCount + 1);
+                });
+        }, RETRY_DELAY);
+    }
+
+    _showReconnectFailed() {
+        const { convertBtn } = this.elements;
+        this.showStatus('error', '连接丢失，请刷新页面');
+        convertBtn.classList.remove('loading');
+        convertBtn.disabled = false;
+        this.state.isConverting = false;
     }
 
     showStatus(type, message) {
@@ -500,7 +584,7 @@ class VidPPTApp {
             const downloadUrl = '/api/download?path=' + encodeURIComponent(this.state.videoPath);
             const a = document.createElement('a');
             a.href = downloadUrl;
-            a.download = this.state.file ? this.state.file.name.replace(/\.(ppt|pptx)$/i, '.mp4') : 'video.mp4';
+            a.download = (this.state.file ? this.state.file.name : this.state.fileName || 'video').replace(/\.(ppt|pptx)$/i, '.mp4');
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
