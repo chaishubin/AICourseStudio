@@ -258,6 +258,26 @@ class TestConfigConverter:
         path = ConfigConverter._resolve_path("./outputs")
         assert path == Path("./outputs").expanduser()
 
+    def test_render_engine_from_config_dict(self, temp_dir):
+        """验证 ConfigConverter 正确传递 render_engine"""
+        input_file = temp_dir / "test.pptx"
+        input_file.write_text("test")
+
+        config_dict = {"input": str(input_file), "render_engine": "libreoffice"}
+        config = ConfigConverter.to_process_config(config_dict)
+
+        assert config.render_engine == "libreoffice"
+
+    def test_render_engine_default_value(self, temp_dir):
+        """验证 ConfigConverter 默认 render_engine 为 spire"""
+        input_file = temp_dir / "test.pptx"
+        input_file.write_text("test")
+
+        config_dict = {"input": str(input_file)}
+        config = ConfigConverter.to_process_config(config_dict)
+
+        assert config.render_engine == "spire"
+
 
 class TestLoadConfigFile:
     """测试便捷函数"""

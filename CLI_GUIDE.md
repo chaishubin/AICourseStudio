@@ -20,6 +20,76 @@ python -m vidppt input.pptx -o my_output
 python -m vidppt input.pptx --output my_output
 ```
 
+## 渲染引擎配置
+
+### 选择渲染引擎
+
+VidPPT 支持两种幻灯片渲染引擎，通过 `--render-engine` 参数选择：
+
+```bash
+# 使用 Spire（默认）
+python -m vidppt input.pptx --render-engine spire
+
+# 使用 LibreOffice
+python -m vidppt input.pptx --render-engine libreoffice
+```
+
+**引擎对比**：
+
+| 特性 | Spire | LibreOffice |
+|------|-------|-------------|
+| 默认引擎 | 是 | 否 |
+| 中文排版 | 字形替换风险 | 通过 fontconfig 兼容 |
+| 安装要求 | pip 安装即可 | 需安装 LibreOffice + 中文字体 |
+| 渲染速度 | 较快 | 首次启动较慢 |
+| 渲染质量 | 依赖系统字体 | 对中文更友好 |
+
+### LibreOffice 环境准备
+
+使用 `--render-engine libreoffice` 前需安装系统依赖：
+
+**Arch/Manjaro**：
+```bash
+sudo pacman -S libreoffice-fresh poppler
+# 中文字体（推荐）
+sudo pacman -S noto-fonts-cjk adobe-source-han-sans-cn-fonts adobe-source-han-serif-cn-fonts
+```
+
+**Ubuntu/Debian**：
+```bash
+sudo apt install libreoffice-impress poppler-utils
+sudo apt install fonts-noto-cjk fonts-wqy-zenhei
+```
+
+**macOS**：
+```bash
+brew install --cask libreoffice
+brew install poppler font-noto-sans-cjk-sc
+```
+
+安装后验证：
+```bash
+libreoffice --version
+fc-list :lang=zh | head -5  # 检查中文字体
+```
+
+### 配置文件中指定渲染引擎
+
+在 YAML/JSON 配置文件中添加 `render_engine` 字段：
+
+```yaml
+input: presentation.pptx
+output: outputs
+render_engine: libreoffice
+```
+
+### 仅渲染测试
+
+```bash
+# 使用 LibreOffice 渲染，跳过 TTS 和视频合成
+python -m vidppt input.pptx --render-engine libreoffice --no-tts --no-video
+```
+
 ## 功能开关
 
 ### 跳过语音合成
@@ -232,6 +302,28 @@ cat pyproject.toml | grep version
 
 ## 常见错误
 
+### 错误：LibreOffice 未安装
+
+```
+FileNotFoundError: [Errno 2] No such file or directory: 'libreoffice'
+```
+
+**解决**：安装 LibreOffice（参见上方"LibreOffice 环境准备"）
+
+### 错误：中文字体缺失导致字形替换
+
+**现象**：使用 Spire 渲染时，某些中文字符显示为形近错字（如"径"显示为其他字）
+
+**解决**：
+```bash
+# 方案 1：切换到 LibreOffice 引擎
+python -m vidppt input.pptx --render-engine libreoffice
+
+# 方案 2：安装缺失字体后继续使用 Spire
+sudo pacman -S noto-fonts-cjk
+fc-cache -fv
+```
+
 ### 错误：输入文件不存在
 
 ```
@@ -331,5 +423,5 @@ python -m vidppt input.pptx \
 
 ---
 
-**最后更新**: 2026-04-10  
-**版本**: v0.3.0
+**最后更新**: 2026-05-08
+**版本**: v0.2.0

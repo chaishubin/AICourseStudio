@@ -17,40 +17,55 @@ class VidPPTApp {
         this.stageNames = {
             'init': '初始化',
             'extract': '提取内容',
+            'render': '渲染幻灯片',
             'tts': '文字转语音',
             'video': '合成视频',
             'complete': '完成'
         };
 
-        this.elements = {
-            uploadArea: document.getElementById('upload-area'),
-            fileInput: document.getElementById('file-input'),
-            uploadPlaceholder: document.getElementById('upload-placeholder'),
-            uploadProgress: document.getElementById('upload-progress'),
-            progressFill: document.getElementById('progress-fill'),
-            uploadProgressText: document.getElementById('upload-progress-text'),
-            fileInfo: document.getElementById('file-info'),
-            fileName: document.getElementById('file-name'),
-            filePath: document.getElementById('file-path'),
+        this.slideUrls = [];
 
-            ttsEngine: document.getElementById('tts-engine'),
-            voiceSelect: document.getElementById('voice-select'),
+        try {
+            this.elements = {
+                uploadArea: document.getElementById('upload-area'),
+                fileInput: document.getElementById('file-input'),
+                uploadPlaceholder: document.getElementById('upload-placeholder'),
+                uploadProgress: document.getElementById('upload-progress'),
+                progressFill: document.getElementById('progress-fill'),
+                uploadProgressText: document.getElementById('upload-progress-text'),
+                fileInfo: document.getElementById('file-info'),
+                fileName: document.getElementById('file-name'),
+                filePath: document.getElementById('file-path'),
 
-            convertBtn: document.getElementById('convert-btn'),
-            convertStatus: document.getElementById('convert-status'),
-            statusIcon: document.getElementById('status-icon'),
-            statusText: document.getElementById('status-text'),
+                ttsEngine: document.getElementById('tts-engine'),
+                voiceSelect: document.getElementById('voice-select'),
+                renderEngine: document.getElementById('render-engine'),
 
-            conversionProgress: document.getElementById('conversion-progress'),
-            progressStage: document.getElementById('progress-stage'),
-            progressPercentage: document.getElementById('progress-percentage'),
-            conversionProgressFill: document.getElementById('conversion-progress-fill'),
+                convertBtn: document.getElementById('convert-btn'),
+                renderBtn: document.getElementById('render-btn'),
+                convertStatus: document.getElementById('convert-status'),
+                statusIcon: document.getElementById('status-icon'),
+                statusText: document.getElementById('status-text'),
 
-            previewContainer: document.getElementById('preview-container'),
-            previewPlaceholder: document.getElementById('preview-placeholder'),
-            videoPlayer: document.getElementById('video-player'),
-            downloadBtn: document.getElementById('download-btn')
-        };
+                conversionProgress: document.getElementById('conversion-progress'),
+                progressStage: document.getElementById('progress-stage'),
+                progressPercentage: document.getElementById('progress-percentage'),
+                conversionProgressFill: document.getElementById('conversion-progress-fill'),
+
+                previewContainer: document.getElementById('preview-container'),
+                previewPlaceholder: document.getElementById('preview-placeholder'),
+                videoPlayer: document.getElementById('video-player'),
+                downloadBtn: document.getElementById('download-btn'),
+
+                slidesModule: document.getElementById('slides-module'),
+                slidesToggle: document.getElementById('slides-toggle'),
+                slidesToggleIcon: document.getElementById('slides-toggle-icon'),
+                slidesBody: document.getElementById('slides-body'),
+                slidesGrid: document.getElementById('slides-grid')
+            };
+        } catch(e) {
+            console.error('VidPPT element init failed:', e);
+        }
 
         this.init();
     }
@@ -62,7 +77,7 @@ class VidPPTApp {
     }
 
     bindEvents() {
-        const { uploadArea, fileInput, convertBtn, downloadBtn, ttsEngine } = this.elements;
+        const { uploadArea, fileInput, convertBtn, renderBtn, downloadBtn, ttsEngine } = this.elements;
 
         uploadArea.addEventListener('click', () => fileInput.click());
 
@@ -88,8 +103,19 @@ class VidPPTApp {
         });
 
         convertBtn.addEventListener('click', () => this.handleConvert());
+        renderBtn.addEventListener('click', () => this.handleRender());
         downloadBtn.addEventListener('click', () => this.handleDownload());
         ttsEngine.addEventListener('change', () => this.loadVoices());
+
+        const { slidesToggle } = this.elements;
+        slidesToggle.addEventListener('click', () => this.toggleSlides());
+    }
+
+    toggleSlides() {
+        const { slidesBody, slidesToggleIcon } = this.elements;
+        const isExpanded = !slidesBody.hidden;
+        slidesBody.hidden = isExpanded;
+        slidesToggleIcon.classList.toggle('expanded', !isExpanded);
     }
 
     async loadVoices() {
@@ -113,7 +139,6 @@ class VidPPTApp {
 
     async restoreActiveTask() {
         try {
-            // 先尝试恢复进行中的任务
             const resp = await fetch('/api/active-task');
             const data = await resp.json();
             if (data.task_id) {
@@ -126,11 +151,12 @@ class VidPPTApp {
                     this._resumeCompletedUI(data);
                 } else if (data.status === 'error') {
                     this._resumeErrorUI(data);
+                } else if (data.status === 'rendered') {
+                    this._resumeRenderedUI(data);
                 }
                 return;
             }
 
-            // 无活跃任务，尝试从持久化状态恢复上次完成的结果
             const lastResp = await fetch('/api/last-result');
             const lastData = await lastResp.json();
             if (lastData.found && lastData.status === 'completed') {
@@ -144,27 +170,32 @@ class VidPPTApp {
     }
 
     _resumeProgressUI(data) {
-        const { convertBtn, conversionProgress, convertStatus } = this.elements;
+        const { convertBtn, renderBtn, conversionProgress } = this.elements;
         const { progressStage, progressPercentage, conversionProgressFill } = this.elements;
 
         convertBtn.disabled = true;
         convertBtn.classList.add('loading');
+        renderBtn.disabled = true;
+        renderBtn.classList.add('loading');
         this.state.isConverting = true;
 
         conversionProgress.hidden = false;
-        convertStatus.hidden = true;
 
         const pct = data.percentage || 0;
         progressPercentage.textContent = `${Math.round(pct)}%`;
         conversionProgressFill.style.width = `${pct}%`;
-        progressStage.textContent = data.message || (data.stage ? (this.stageNames[data.stage] || data.stage) + '...' : '处理中...');
+
+        const stageLabel = data.stage ? (this.stageNames[data.stage] || data.stage) : '';
+        const msg = data.message || (stageLabel ? stageLabel + '...' : '处理中...');
+        progressStage.textContent = '转换中：' + msg;
+        this.showConvertingStatus(msg);
 
         this._restoreStepIndicators(data.stage, pct);
     }
 
     _resumeCompletedUI(data) {
         const { progressStage, progressPercentage, conversionProgressFill,
-                convertBtn, convertStatus, statusIcon, statusText,
+                convertBtn, renderBtn,
                 conversionProgress,
                 videoPlayer, previewPlaceholder, downloadBtn,
                 fileName, filePath, fileInfo, uploadPlaceholder } = this.elements;
@@ -177,13 +208,13 @@ class VidPPTApp {
 
         convertBtn.classList.remove('loading');
         convertBtn.disabled = false;
+        renderBtn.classList.remove('loading');
+        renderBtn.disabled = false;
         this.state.isConverting = false;
 
-        // 恢复文件名信息
         if (data.original_name) {
             this.state.fileName = data.original_name;
             fileName.textContent = data.original_name;
-            // filePath 显示上传路径（如有）
             if (data.file_path) {
                 filePath.textContent = data.file_path;
             }
@@ -200,23 +231,43 @@ class VidPPTApp {
         }
 
         conversionProgress.hidden = false;
-        convertStatus.hidden = false;
-        convertStatus.classList.remove('success', 'error');
-        convertStatus.classList.add('success');
-        statusIcon.textContent = '✓';
-        statusText.textContent = data.message || '转换完成';
+        this.showStatus('success', '转换完成');
+
+        // 加载幻灯片预览
+        if (data.task_id) this.loadSlides(data.task_id);
+    }
+
+    _resumeRenderedUI(data) {
+        const { convertBtn, renderBtn } = this.elements;
+        convertBtn.classList.remove('loading');
+        convertBtn.disabled = false;
+        renderBtn.classList.remove('loading');
+        renderBtn.disabled = false;
+        this.state.isConverting = false;
+
+        if (data.original_name) {
+            this.state.fileName = data.original_name;
+            this.elements.fileName.textContent = data.original_name;
+            this.elements.fileInfo.hidden = false;
+            this.elements.uploadPlaceholder.hidden = true;
+        }
+
+        this.showStatus('success', '幻灯片渲染完成');
+        if (data.task_id) this.loadSlides(data.task_id);
     }
 
     _resumeErrorUI(data) {
-        const { convertBtn } = this.elements;
+        const { convertBtn, renderBtn } = this.elements;
         convertBtn.classList.remove('loading');
         convertBtn.disabled = false;
+        renderBtn.classList.remove('loading');
+        renderBtn.disabled = false;
         this.state.isConverting = false;
         this.showStatus('error', data.error || data.message || '转换失败');
     }
 
     _restoreStepIndicators(currentStage, percentage) {
-        const stageOrder = ['init', 'extract', 'tts', 'video'];
+        const stageOrder = ['init', 'extract', 'render', 'tts', 'video'];
         const currentIdx = stageOrder.indexOf(currentStage);
 
         stageOrder.forEach((stage, idx) => {
@@ -253,10 +304,8 @@ class VidPPTApp {
             return;
         }
 
-        this.resetConversion();
         this.state.file = file;
         this.state.filePath = null;
-        this.state.videoPath = null;
 
         this.elements.fileName.textContent = file.name;
         this.elements.fileInfo.hidden = false;
@@ -266,7 +315,7 @@ class VidPPTApp {
     }
 
     async uploadFile(file) {
-        const { uploadProgress, progressFill, uploadProgressText, convertBtn } = this.elements;
+        const { uploadProgress, progressFill, uploadProgressText, convertBtn, renderBtn } = this.elements;
 
         uploadProgress.hidden = false;
         progressFill.style.width = '0%';
@@ -301,6 +350,8 @@ class VidPPTApp {
             const result = await response.json();
             this.state.filePath = result.file_path;
             convertBtn.disabled = false;
+            renderBtn.disabled = false;
+            this.elements.convertStatus.hidden = true;
         } catch (error) {
             console.error('上传错误:', error);
             alert('上传失败: ' + error.message);
@@ -311,33 +362,41 @@ class VidPPTApp {
     }
 
     resetUpload() {
-        const { uploadProgress, uploadPlaceholder, fileInfo, convertBtn } = this.elements;
+        const { uploadProgress, uploadPlaceholder, fileInfo, convertBtn, renderBtn } = this.elements;
         uploadProgress.hidden = true;
         fileInfo.hidden = true;
         uploadPlaceholder.hidden = false;
         convertBtn.disabled = true;
+        renderBtn.disabled = true;
         this.state.file = null;
         this.state.filePath = null;
     }
 
     resetConversion() {
         const { conversionProgress, convertStatus, videoPlayer, previewPlaceholder, downloadBtn,
-                progressStage, progressPercentage, conversionProgressFill, convertBtn } = this.elements;
+                progressStage, progressPercentage, conversionProgressFill, convertBtn, renderBtn,
+                slidesModule, slidesBody, slidesToggleIcon, slidesGrid } = this.elements;
         conversionProgress.hidden = true;
         convertStatus.hidden = true;
+        convertStatus.className = 'convert-status';
         videoPlayer.hidden = true;
         previewPlaceholder.hidden = false;
         downloadBtn.disabled = true;
+        slidesModule.hidden = true;
+        slidesBody.hidden = true;
+        slidesToggleIcon.classList.remove('expanded');
+        slidesGrid.innerHTML = '';
 
-        // Reset progress bar visual state
         progressStage.textContent = '准备中...';
         progressPercentage.textContent = '0%';
         conversionProgressFill.style.width = '0%';
 
-        // Reset button state
         convertBtn.classList.remove('loading');
+        renderBtn.classList.remove('loading');
 
-        ['step-init', 'step-extract', 'step-tts', 'step-video'].forEach(id => {
+        this.slideUrls = [];
+
+        ['step-init', 'step-extract', 'step-render', 'step-tts', 'step-video'].forEach(id => {
             const step = document.getElementById(id);
             if (step) {
                 step.classList.remove('active', 'completed');
@@ -361,12 +420,45 @@ class VidPPTApp {
             step.classList.add('active');
         } else if (status === 'completed') {
             step.classList.add('completed');
-            // Mark the line before this step as completed
             const prevLine = step.previousElementSibling;
             if (prevLine && prevLine.classList.contains('step-line')) {
                 prevLine.classList.add('completed');
             }
         }
+    }
+
+    setButtonsDisabled(disabled) {
+        const { convertBtn, renderBtn } = this.elements;
+        if (disabled) {
+            convertBtn.disabled = true;
+            convertBtn.classList.add('loading');
+            renderBtn.disabled = true;
+            renderBtn.classList.add('loading');
+        } else {
+            convertBtn.disabled = false;
+            convertBtn.classList.remove('loading');
+            renderBtn.disabled = false;
+            renderBtn.classList.remove('loading');
+        }
+    }
+
+    showConvertingStatus(message) {
+        const { convertStatus, statusIcon, statusText } = this.elements;
+        convertStatus.hidden = false;
+        convertStatus.className = 'convert-status converting';
+        statusIcon.textContent = '';
+        statusIcon.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>';
+        statusText.textContent = message || '转换中...';
+    }
+
+    showStatus(type, message) {
+        const { convertStatus, statusIcon, statusText } = this.elements;
+        convertStatus.hidden = false;
+        convertStatus.className = 'convert-status';
+        convertStatus.classList.add(type);
+        statusIcon.innerHTML = '';
+        statusIcon.textContent = type === 'success' ? '\u2713' : '\u2715';
+        statusText.textContent = message;
     }
 
     async handleConvert() {
@@ -375,15 +467,13 @@ class VidPPTApp {
             return;
         }
 
-        const { convertBtn, convertStatus, conversionProgress } = this.elements;
-
         this.resetConversion();
-        convertBtn.disabled = true;
-        convertBtn.classList.add('loading');
+        this.setButtonsDisabled(true);
         this.state.isConverting = true;
 
         const ttsEngine = this.elements.ttsEngine.value;
         const voice = this.elements.voiceSelect.value;
+        const renderEngine = this.elements.renderEngine.value;
 
         try {
             const response = await fetch('/api/convert', {
@@ -392,7 +482,8 @@ class VidPPTApp {
                 body: JSON.stringify({
                     file_path: this.state.filePath,
                     tts_engine: ttsEngine,
-                    voice: voice
+                    voice: voice,
+                    render_engine: renderEngine
                 })
             });
 
@@ -404,26 +495,65 @@ class VidPPTApp {
             const result = await response.json();
             this.state.taskId = result.task_id;
 
-            // Only show conversion progress after API call succeeds
-            conversionProgress.hidden = false;
-            convertStatus.hidden = true;
+            this.elements.conversionProgress.hidden = false;
+            this.showConvertingStatus('正在初始化...');
             this.startProgressStream(result.task_id);
         } catch (error) {
             console.error('转换错误:', error);
             this.showStatus('error', '转换失败: ' + error.message);
-            convertBtn.disabled = false;
-            convertBtn.classList.remove('loading');
+            this.setButtonsDisabled(false);
             this.state.isConverting = false;
         }
     }
 
-    startProgressStream(taskId, retryCount = 0) {
+    async handleRender() {
+        if (!this.state.filePath) {
+            alert('请先上传PPT文件');
+            return;
+        }
+
+        this.resetConversion();
+        this.setButtonsDisabled(true);
+        this.state.isConverting = true;
+
+        const renderEngine = this.elements.renderEngine.value;
+
+        try {
+            const response = await fetch('/api/render-slides', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    file_path: this.state.filePath,
+                    render_engine: renderEngine
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '渲染失败');
+            }
+
+            const result = await response.json();
+            this.state.taskId = result.task_id;
+
+            this.elements.conversionProgress.hidden = false;
+            this.showConvertingStatus('正在渲染...');
+            this.startProgressStream(result.task_id, 0, true);
+        } catch (error) {
+            console.error('渲染错误:', error);
+            this.showStatus('error', '渲染失败: ' + error.message);
+            this.setButtonsDisabled(false);
+            this.state.isConverting = false;
+        }
+    }
+
+    startProgressStream(taskId, retryCount = 0, renderOnly = false) {
         const MAX_RETRIES = 3;
-        const RETRY_DELAY = 3000; // 3 秒后重试
+        const RETRY_DELAY = 3000;
 
         const eventSource = new EventSource(`/api/progress/${taskId}`);
         const { progressStage, progressPercentage, conversionProgressFill,
-                convertBtn, convertStatus, statusIcon, statusText,
+                convertStatus, statusIcon, statusText,
                 videoPlayer, previewPlaceholder, downloadBtn } = this.elements;
 
         eventSource.onmessage = (event) => {
@@ -433,8 +563,9 @@ class VidPPTApp {
                 switch (data.type) {
                     case 'stage':
                         const stageName = this.stageNames[data.stage] || data.stage;
-                        progressStage.textContent = stageName + '...';
+                        progressStage.textContent = '转换中：' + stageName + '...';
                         this.setStepStatus(`step-${data.stage}`, 'active');
+                        this.showConvertingStatus(stageName + '...');
                         break;
 
                     case 'progress':
@@ -446,15 +577,29 @@ class VidPPTApp {
                         conversionProgressFill.style.width = `${percentage}%`;
 
                         if (data.message) {
-                            progressStage.textContent = data.message;
+                            progressStage.textContent = '转换中：' + data.message;
+                            this.showConvertingStatus(data.message);
                         } else if (data.stage) {
                             const stageName = this.stageNames[data.stage] || data.stage;
-                            progressStage.textContent = `${stageName} (${current}/${total})`;
+                            progressStage.textContent = `转换中：${stageName} (${current}/${total})`;
+                            this.showConvertingStatus(`${stageName} (${current}/${total})`);
                         }
 
                         if (percentage >= 100 && data.stage) {
                             this.setStepStatus(`step-${data.stage}`, 'completed');
                         }
+                        break;
+
+                    case 'rendered':
+                        eventSource.close();
+                        this.setButtonsDisabled(false);
+                        this.state.isConverting = false;
+                        this.showStatus('success', '幻灯片渲染完成');
+                        this.setStepStatus('step-render', 'completed');
+                        progressPercentage.textContent = '100%';
+                        conversionProgressFill.style.width = '100%';
+                        progressStage.textContent = '渲染完成';
+                        this.loadSlides(taskId);
                         break;
 
                     case 'complete':
@@ -468,29 +613,28 @@ class VidPPTApp {
                             downloadBtn.disabled = false;
                         }
 
-                        this.showStatus('success', data.message || '转换完成');
+                        this.showStatus('success', '转换完成');
                         this.setStepStatus('step-video', 'completed');
                         progressPercentage.textContent = '100%';
                         conversionProgressFill.style.width = '100%';
                         progressStage.textContent = '完成';
 
-                        convertBtn.classList.remove('loading');
-                        convertBtn.disabled = false;
+                        this.setButtonsDisabled(false);
                         this.state.isConverting = false;
+                        this.loadSlides(taskId);
                         break;
 
                     case 'error':
                         eventSource.close();
                         this.showStatus('error', data.message || '转换失败');
-                        convertBtn.classList.remove('loading');
-                        convertBtn.disabled = false;
+                        this.setButtonsDisabled(false);
                         this.state.isConverting = false;
                         break;
 
                     case 'timeout':
                         eventSource.close();
                         if (this.state.isConverting) {
-                            this._reconnectOrRestore(taskId, retryCount);
+                            this._reconnectOrRestore(taskId, retryCount, renderOnly);
                         }
                         break;
                 }
@@ -502,15 +646,15 @@ class VidPPTApp {
         eventSource.onerror = () => {
             eventSource.close();
             if (this.state.isConverting) {
-                this._reconnectOrRestore(taskId, retryCount);
+                this._reconnectOrRestore(taskId, retryCount, renderOnly);
             }
         };
     }
 
-    _reconnectOrRestore(taskId, retryCount) {
+    _reconnectOrRestore(taskId, retryCount, renderOnly = false) {
         const MAX_RETRIES = 3;
         const RETRY_DELAY = 3000;
-        const { progressStage, convertBtn } = this.elements;
+        const { progressStage } = this.elements;
 
         if (retryCount >= MAX_RETRIES) {
             this._showReconnectFailed();
@@ -522,19 +666,18 @@ class VidPPTApp {
         setTimeout(() => {
             if (!this.state.isConverting) return;
 
-            // 先查任务最终状态，避免重连已删除的队列
             fetch('/api/active-task')
                 .then(r => r.json())
                 .then(d => {
                     if (d.status === 'completed') {
                         this._resumeCompletedUI(d);
+                    } else if (d.status === 'rendered') {
+                        this._resumeRenderedUI(d);
                     } else if (d.status === 'error') {
                         this._resumeErrorUI(d);
                     } else if (d.task_id && d.status === 'processing') {
-                        // 任务还在跑，重建 SSE 连接
-                        this.startProgressStream(taskId, retryCount + 1);
+                        this.startProgressStream(taskId, retryCount + 1, renderOnly);
                     } else {
-                        // 内存里没有，查持久化状态
                         fetch('/api/last-result')
                             .then(r => r.json())
                             .then(ld => {
@@ -543,35 +686,97 @@ class VidPPTApp {
                                 } else if (ld.found && ld.status === 'error') {
                                     this._resumeErrorUI(ld);
                                 } else {
-                                    // 真的没找到，重连 SSE 碰运气
-                                    this.startProgressStream(taskId, retryCount + 1);
+                                    this.startProgressStream(taskId, retryCount + 1, renderOnly);
                                 }
                             })
-                            .catch(() => this.startProgressStream(taskId, retryCount + 1));
+                            .catch(() => this.startProgressStream(taskId, retryCount + 1, renderOnly));
                     }
                 })
                 .catch(() => {
-                    // active-task 请求失败，直接重连 SSE
-                    this.startProgressStream(taskId, retryCount + 1);
+                    this.startProgressStream(taskId, retryCount + 1, renderOnly);
                 });
         }, RETRY_DELAY);
     }
 
     _showReconnectFailed() {
-        const { convertBtn } = this.elements;
         this.showStatus('error', '连接丢失，请刷新页面');
-        convertBtn.classList.remove('loading');
-        convertBtn.disabled = false;
+        this.setButtonsDisabled(false);
         this.state.isConverting = false;
     }
 
-    showStatus(type, message) {
-        const { convertStatus, statusIcon, statusText } = this.elements;
-        convertStatus.hidden = false;
-        convertStatus.classList.remove('success', 'error');
-        convertStatus.classList.add(type);
-        statusIcon.textContent = type === 'success' ? '✓' : '✕';
-        statusText.textContent = message;
+    async loadSlides(taskId) {
+        try {
+            const resp = await fetch(`/api/slides/${taskId}`);
+            const data = await resp.json();
+            if (data.slides && data.slides.length > 0) {
+                this.renderSlides(data.slides);
+            }
+        } catch (e) {
+            console.error('加载幻灯片失败:', e);
+        }
+    }
+
+    renderSlides(slides) {
+        const { slidesModule, slidesBody, slidesToggleIcon, slidesGrid } = this.elements;
+        slidesGrid.innerHTML = '';
+        this.slideUrls = slides;
+
+        slides.forEach(slide => {
+            const thumb = document.createElement('div');
+            thumb.className = 'slide-thumb';
+            thumb.innerHTML = `
+                <img src="${slide.url}" alt="第${slide.page}页" loading="lazy">
+                <span class="slide-num">${slide.page}</span>
+            `;
+            thumb.addEventListener('click', () => this.openLightbox(slide.url, slide.page, slides));
+            slidesGrid.appendChild(thumb);
+        });
+
+        slidesModule.hidden = false;
+        slidesBody.hidden = true;
+        slidesToggleIcon.classList.remove('expanded');
+    }
+
+    openLightbox(url, page, slides) {
+        const overlay = document.createElement('div');
+        overlay.className = 'slide-lightbox';
+
+        const currentIndex = slides.findIndex(s => s.url === url);
+
+        overlay.innerHTML = `
+            <span class="lightbox-close">&times;</span>
+            <span class="lightbox-nav lightbox-prev">&lsaquo;</span>
+            <img src="${url}" alt="第${page}页">
+            <span class="lightbox-nav lightbox-next">&rsaquo;</span>
+        `;
+
+        const close = () => overlay.remove();
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay || e.target.classList.contains('lightbox-close')) close();
+        });
+
+        const img = overlay.querySelector('img');
+        const prev = overlay.querySelector('.lightbox-prev');
+        const next = overlay.querySelector('.lightbox-next');
+
+        const navigate = (delta) => {
+            const newIdx = currentIndex + delta;
+            if (newIdx >= 0 && newIdx < slides.length) {
+                img.src = slides[newIdx].url;
+                img.alt = `第${slides[newIdx].page}页`;
+            }
+        };
+
+        prev.addEventListener('click', (e) => { e.stopPropagation(); navigate(-1); });
+        next.addEventListener('click', (e) => { e.stopPropagation(); navigate(1); });
+
+        document.addEventListener('keydown', function handler(e) {
+            if (e.key === 'Escape') { close(); document.removeEventListener('keydown', handler); }
+            if (e.key === 'ArrowLeft') navigate(-1);
+            if (e.key === 'ArrowRight') navigate(1);
+        });
+
+        document.body.appendChild(overlay);
     }
 
     async handleDownload() {

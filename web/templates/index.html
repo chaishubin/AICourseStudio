@@ -59,6 +59,13 @@
                 <section class="card" id="options-module">
                     <div class="options-grid">
                         <div class="option-group">
+                            <label for="render-engine">渲染引擎</label>
+                            <select id="render-engine" class="select-input">
+                                <option value="spire">Spire (默认)</option>
+                                <option value="libreoffice">LibreOffice (中文更友好)</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
                             <label for="tts-engine">语音引擎</label>
                             <select id="tts-engine" class="select-input">
                                 <option value="edge-tts">Edge TTS (免费)</option>
@@ -86,6 +93,13 @@
                                 转换中...
                             </span>
                         </button>
+                        <button class="btn-preview" id="render-btn" disabled>
+                            <span class="btn-text">预览幻灯片</span>
+                            <span class="btn-loading" hidden>
+                                <span class="spinner"></span>
+                                渲染中...
+                            </span>
+                        </button>
                     </div>
 
                     <div class="conversion-progress" id="conversion-progress" hidden>
@@ -107,6 +121,11 @@
                                 <span class="step-label">提取内容</span>
                             </div>
                             <div class="step-line"></div>
+                            <div class="step" id="step-render">
+                                <span class="step-dot"></span>
+                                <span class="step-label">渲染幻灯片</span>
+                            </div>
+                            <div class="step-line"></div>
                             <div class="step" id="step-tts">
                                 <span class="step-dot"></span>
                                 <span class="step-label">文字转语音</span>
@@ -122,6 +141,17 @@
                     <div class="convert-status" id="convert-status" hidden>
                         <div class="status-icon" id="status-icon"></div>
                         <p class="status-text" id="status-text"></p>
+                    </div>
+                </section>
+
+                <!-- 幻灯片预览 -->
+                <section class="card slides-card" id="slides-module" hidden>
+                    <div class="slides-header" id="slides-toggle">
+                        <h3 class="slides-title">幻灯片预览</h3>
+                        <span class="slides-toggle-icon" id="slides-toggle-icon">&#9654;</span>
+                    </div>
+                    <div class="slides-body" id="slides-body" hidden>
+                        <div class="slides-grid" id="slides-grid"></div>
                     </div>
                 </section>
 
@@ -158,7 +188,7 @@
         </footer>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=4"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>

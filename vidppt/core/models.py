@@ -60,6 +60,9 @@ class ProcessConfig:
     audio_cache_dir: Optional[Path] = None  # 音频缓存目录，默认为 ~/.cache/vidppt/audio
     audio_cache_expiry_days: int = 30  # 音频缓存过期天数
 
+    # 渲染配置
+    render_engine: str = "spire"  # "spire" 或 "libreoffice"
+
     # OCR 配置
     ocr_engine: str = "builtin"  # builtin, tesseract, api
 

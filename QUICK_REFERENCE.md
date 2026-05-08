@@ -75,6 +75,25 @@ git log -p vidppt/engines/tts/api_tts_engine.py
 
 ## ✨ 核心功能
 
+### 渲染引擎选择
+
+```bash
+# Spire（默认，pip 安装即可）
+python -m vidppt input.pptx --render-engine spire
+
+# LibreOffice（中文排版更友好，需安装系统依赖）
+python -m vidppt input.pptx --render-engine libreoffice
+```
+
+**LibreOffice 依赖安装**：
+```bash
+# Arch/Manjaro
+sudo pacman -S libreoffice-fresh poppler noto-fonts-cjk
+
+# Ubuntu/Debian
+sudo apt install libreoffice-impress poppler-utils fonts-noto-cjk
+```
+
 ### MiniMax TTS 引擎选项
 
 ```python
@@ -110,6 +129,13 @@ config = ProcessConfig(
 - 范围：0.5x ~ 2.0x
 
 ## 🐛 故障排查
+
+### 错误：LibreOffice 未安装
+```
+FileNotFoundError: [Errno 2] No such file or directory: 'libreoffice'
+```
+
+**解决**：`sudo pacman -S libreoffice-fresh`
 
 ### 错误：MiniMax API key 未设置
 ```
@@ -265,6 +291,5 @@ os.environ['MINIMAX_API'] = 'old-key'
 
 ---
 
-**最后更新**: 2026-04-10  
-**版本**: v0.3.0  
-**状态**: ✅ 生产就绪
+**最后更新**: 2026-05-08
+**版本**: v0.2.0

@@ -143,8 +143,8 @@ def upload_ppt():
 class WebProgressTracker:
     """Web端进度跟踪器，将进度推送到队列"""
 
-    STAGE_ORDER = ['init', 'extract', 'tts', 'video']
-    STAGE_WEIGHT = 100 / len(STAGE_ORDER)  # 每个阶段占 25%
+    STAGE_ORDER = ['init', 'extract', 'render', 'tts', 'video']
+    STAGE_WEIGHT = 100 / len(STAGE_ORDER)  # 每个阶段占 20%
 
     def __init__(self, task_id: str, queue: Queue, total_pages: int = 0):
         self.task_id = task_id
@@ -265,7 +265,8 @@ class WebProgressTracker:
 
 
 def run_conversion(task_id: str, file_path: str, output_dir: Path,
-                   tts_engine: str = 'edge-tts', voice: str = 'zh-CN-XiaoxiaoNeural'):
+                   tts_engine: str = 'edge-tts', voice: str = 'zh-CN-XiaoxiaoNeural',
+                   render_engine: str = 'spire'):
     """在后台线程中运行转换"""
     queue = progress_queues.get(task_id)
     if not queue:
@@ -281,20 +282,19 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         config = ProcessConfig(
             input_path=Path(file_path),
             output_dir=output_dir,
-            save_intermediate=False,
+            save_intermediate=True,
+            skip_existing=True,
             tts_engine=tts_engine,
             tts_voice=voice,
+            render_engine=render_engine,
         )
 
-        # 3. 创建 Pipeline
+        # 3. 创建 Pipeline（仅用于 TTS 引擎）
         pipeline = Pipeline(config)
 
         progress.update('init', 1, 1, '初始化完成')
 
-        # 4. 运行转换（需要修改 pipeline 以支持进度回调）
-        # 这里我们用一种简化的方式：监控输出文件变化来估计进度
-
-        progress.set_stage('extract', '提取PPT内容...')
+        # 4. 分步执行，实时推送进度
 
         # 获取处理器
         from vidppt.core.registry import ProcessorRegistry
@@ -304,12 +304,19 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
 
         processor = processor_class()
 
-        # 提取内容
-        content = processor.process(config)
+        # 4a. 提取内容
+        progress.set_stage('extract', '提取PPT内容...')
+        content = processor.extract_content(config)
         total_pages = content.total_pages
         progress.total_pages = total_pages
-
         progress.update('extract', total_pages, total_pages, f'提取完成，共 {total_pages} 页')
+
+        # 4b. 渲染幻灯片
+        progress.set_stage('render', '渲染幻灯片截图...')
+        slide_images = processor.render_pages(config)
+        for page, image in zip(content.pages, slide_images):
+            page.slide_image = image
+        progress.update('render', len(slide_images), len(slide_images), f'渲染完成，共 {len(slide_images)} 页')
 
         # 5. TTS 转换
         progress.set_stage('tts', '文字转语音...')
@@ -324,7 +331,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             page_texts = []
             for page in content.pages:
                 if page.text and page.text.strip():
-                    audio_path = output_dir / f"temp_audio_{page.page_number}.mp3"
+                    audio_path = output_dir / str(page.page_number) / "audio.mp3"
                     audio_path.parent.mkdir(parents=True, exist_ok=True)
                     page.audio = audio_path
                     page_texts.append((page.page_number, page.text, audio_path))
@@ -382,6 +389,63 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         progress.error(str(e))
 
 
+def run_render_only(task_id: str, file_path: str, output_dir: Path,
+                    render_engine: str = 'spire'):
+    """仅渲染幻灯片截图，不做 TTS 和视频合成"""
+    queue = progress_queues.get(task_id)
+    if not queue:
+        return
+
+    progress = WebProgressTracker(task_id, queue)
+
+    try:
+        progress.set_stage('render', '渲染幻灯片截图...')
+
+        from vidppt.core.registry import ProcessorRegistry
+        processor_class = ProcessorRegistry.get_processor(Path(file_path))
+        if not processor_class:
+            raise ValueError(f"不支持的文件类型: {Path(file_path).suffix}")
+
+        processor = processor_class()
+
+        config = ProcessConfig(
+            input_path=Path(file_path),
+            output_dir=output_dir,
+            render_engine=render_engine,
+            save_intermediate=True,
+            skip_existing=False,
+            enable_tts=False,
+            enable_video=False,
+        )
+
+        slide_images = processor.render_pages(config)
+        total = len(slide_images)
+
+        tasks[task_id]['status'] = 'rendered'
+        tasks[task_id]['slide_count'] = total
+        save_state(task_id)
+
+        progress.update('render', total, total, f'渲染完成，共 {total} 页')
+
+        queue.put({
+            'type': 'rendered',
+            'slide_count': total,
+            'message': f'渲染完成，共 {total} 页'
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        tasks[task_id]['status'] = 'error'
+        tasks[task_id]['error'] = str(e)
+        save_state(task_id)
+
+        queue.put({
+            'type': 'error',
+            'message': str(e)
+        })
+
+
 @app.route('/api/convert', methods=['POST'])
 def convert_ppt():
     """
@@ -392,6 +456,7 @@ def convert_ppt():
     file_path = data.get('file_path')
     tts_engine = data.get('tts_engine', 'edge-tts')
     voice = data.get('voice', 'zh-CN-XiaoxiaoNeural')
+    render_engine = data.get('render_engine', 'spire')
 
     if not file_path:
         return jsonify({'error': '未提供文件路径'}), 400
@@ -423,7 +488,7 @@ def convert_ppt():
     # 在后台线程中运行转换
     thread = threading.Thread(
         target=run_conversion,
-        args=(task_id, file_path, output_dir, tts_engine, voice)
+        args=(task_id, file_path, output_dir, tts_engine, voice, render_engine)
     )
     thread.daemon = True
     thread.start()
@@ -433,6 +498,84 @@ def convert_ppt():
         'task_id': task_id,
         'message': '转换已启动'
     })
+
+
+@app.route('/api/render-slides', methods=['POST'])
+def render_slides():
+    """仅渲染幻灯片截图接口"""
+    data = request.get_json()
+    file_path = data.get('file_path')
+    render_engine = data.get('render_engine', 'spire')
+
+    if not file_path:
+        return jsonify({'error': '未提供文件路径'}), 400
+
+    if not Path(file_path).exists():
+        return jsonify({'error': '文件不存在'}), 404
+
+    task_id = uuid.uuid4().hex
+    output_dir = OUTPUT_FOLDER / task_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    progress_queues[task_id] = Queue()
+    uploaded_name = Path(file_path).name
+    name_parts = uploaded_name.split('_', 1)
+    original_name = name_parts[1] if len(name_parts) > 1 else uploaded_name
+    tasks[task_id] = {
+        'status': 'pending',
+        'file_path': file_path,
+        'output_dir': str(output_dir),
+        'original_name': original_name,
+    }
+
+    thread = threading.Thread(
+        target=run_render_only,
+        args=(task_id, file_path, output_dir, render_engine)
+    )
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({
+        'success': True,
+        'task_id': task_id,
+        'message': '渲染已启动'
+    })
+
+
+@app.route('/api/slides/<task_id>')
+def get_slides(task_id):
+    """获取任务的所有幻灯片图片路径"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+
+    output_dir = Path(task.get('output_dir', ''))
+    if not output_dir.exists():
+        return jsonify({'slides': []})
+
+    slides = []
+    page_num = 1
+    while True:
+        slide_path = output_dir / str(page_num) / "slide.png"
+        if not slide_path.exists():
+            break
+        slides.append({
+            'page': page_num,
+            'url': f'/api/slide-image?path={str(slide_path)}'
+        })
+        page_num += 1
+
+    return jsonify({'slides': slides})
+
+
+@app.route('/api/slide-image')
+def get_slide_image():
+    """获取单张幻灯片图片"""
+    slide_path = request.args.get('path', '')
+    try:
+        return send_file(slide_path, mimetype='image/png')
+    except FileNotFoundError:
+        return jsonify({'error': '图片不存在'}), 404
 
 
 @app.route('/api/progress/<task_id>')

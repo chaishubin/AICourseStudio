@@ -72,6 +72,8 @@ class ConfigConverter:
             ocr_engine=config_dict.get("ocr_engine", "builtin"),
             # 图像转换配置
             image_converter=config_dict.get("image_converter", "builtin"),
+            # 渲染配置
+            render_engine=config_dict.get("render_engine", "spire"),
             # 视频配置
             video_fps=config_dict.get("video_fps", 24),
             video_codec=config_dict.get("video_codec", "libx264"),

@@ -239,6 +239,34 @@ class TestEdgeTTSCLIOptions:
 class TestCLIEdgeCases:
     """测试 CLI 边界情况"""
 
+    def test_render_engine_default(self):
+        """测试默认 render_engine 为 spire"""
+        with patch("sys.argv", ["vidppt", "test.pptx"]):
+            with patch("vidppt.cli.Pipeline") as mock_pipeline:
+                with patch("pathlib.Path.exists", return_value=True):
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+
+                    call_args = mock_pipeline.call_args
+                    config = call_args[0][0]
+                    assert config.render_engine == "spire"
+
+    def test_render_engine_libreoffice(self):
+        """测试 --render-engine libreoffice 时 config.render_engine == libreoffice"""
+        with patch("sys.argv", ["vidppt", "test.pptx", "--render-engine", "libreoffice"]):
+            with patch("vidppt.cli.Pipeline") as mock_pipeline:
+                with patch("pathlib.Path.exists", return_value=True):
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+
+                    call_args = mock_pipeline.call_args
+                    config = call_args[0][0]
+                    assert config.render_engine == "libreoffice"
+
     def test_no_tts_options_for_edgetts(self):
         """测试 EdgeTTS 不需要 tts_options"""
         with patch("sys.argv", ["vidppt", "test.pptx", "--tts-engine", "edge-tts"]):

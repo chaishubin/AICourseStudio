@@ -160,6 +160,14 @@ MiniMax TTS 示例:
         help="音频缓存过期天数（默认: 30）",
     )
 
+    # 渲染配置
+    parser.add_argument(
+        "--render-engine",
+        default="spire",
+        choices=["spire", "libreoffice"],
+        help="幻灯片渲染引擎（默认: spire）",
+    )
+
     # 数字人配置
     parser.add_argument(
         "--face",
@@ -282,6 +290,8 @@ MiniMax TTS 示例:
         cli_config["audio_cache_dir"] = args.cache_dir
     if args.cache_expiry != 30:
         cli_config["audio_cache_expiry_days"] = args.cache_expiry
+    if args.render_engine != "spire":
+        cli_config["render_engine"] = args.render_engine
 
     # 数字人参数
     if args.face:

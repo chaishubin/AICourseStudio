@@ -249,6 +249,193 @@ class TestPPTProcessor:
         assert images[1].name == "image_2.png"
 
 
+class TestPPTProcessorRenderPages:
+    """测试 PPTProcessor render_pages 方法"""
+
+    def test_render_pages_uses_spire_by_default(self, temp_dir):
+        """验证默认走 spire 分支"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            save_intermediate=True,
+            skip_existing=False,
+        )
+
+        processor = PPTProcessor()
+
+        with patch.object(processor, "_render_with_spire", return_value=[Path("1/slide.png")]) as mock_spire:
+            with patch.object(processor, "_render_with_libreoffice") as mock_lo:
+                result = processor.render_pages(config)
+                mock_spire.assert_called_once_with(config)
+                mock_lo.assert_not_called()
+                assert result == [Path("1/slide.png")]
+
+    def test_render_pages_uses_libreoffice_when_configured(self, temp_dir):
+        """验证 render_engine=libreoffice 时走 libreoffice 分支"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            render_engine="libreoffice",
+            save_intermediate=True,
+            skip_existing=False,
+        )
+
+        processor = PPTProcessor()
+
+        with patch.object(processor, "_render_with_libreoffice", return_value=[Path("1/slide.png")]) as mock_lo:
+            with patch.object(processor, "_render_with_spire") as mock_spire:
+                result = processor.render_pages(config)
+                mock_lo.assert_called_once_with(config)
+                mock_spire.assert_not_called()
+                assert result == [Path("1/slide.png")]
+
+    def test_render_with_libreoffice_skip_existing(self, temp_dir):
+        """预创建 1/slide.png，验证 skip_existing 生效时不重复渲染该页"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        # 创建输入文件
+        input_file = temp_dir / "test.pptx"
+        input_file.write_text("test")
+
+        # 预创建第1页的 slide.png
+        output_dir = temp_dir / "output"
+        page1_dir = output_dir / "1"
+        page1_dir.mkdir(parents=True, exist_ok=True)
+        (page1_dir / "slide.png").write_bytes(b"existing")
+
+        config = ProcessConfig(
+            input_path=input_file,
+            output_dir=output_dir,
+            render_engine="libreoffice",
+            save_intermediate=True,
+            skip_existing=True,
+        )
+
+        processor = PPTProcessor()
+
+        # Mock _get_slide_count 返回 2 页
+        with patch.object(processor, "_get_slide_count", return_value=2):
+            with patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run:
+                def fake_run(cmd, **kwargs):
+                    if "pdf" in cmd:
+                        # Step 1: LO → PDF (output is always input.pdf now)
+                        outdir = cmd[5]
+                        (Path(outdir) / "input.pdf").write_bytes(b"fake_pdf")
+                    else:
+                        # Step 2: pdftoppm → PNG
+                        prefix = cmd[-1]  # slide
+                        (Path(f"{prefix}-2.png")).write_bytes(b"page2")
+                    return MagicMock(returncode=0)
+
+                mock_run.side_effect = fake_run
+
+                result = processor._render_with_libreoffice(config)
+
+                # 应该调用了 subprocess.run（因为第2页不存在）
+                assert mock_run.called
+
+    def test_render_with_libreoffice_all_exist_skip(self, temp_dir):
+        """所有页的 slide.png 都已存在，验证完全不调用 subprocess.run"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        # 创建输入文件
+        input_file = temp_dir / "test.pptx"
+        input_file.write_text("test")
+
+        # 预创建所有页的 slide.png
+        output_dir = temp_dir / "output"
+        for i in range(1, 3):
+            page_dir = output_dir / str(i)
+            page_dir.mkdir(parents=True, exist_ok=True)
+            (page_dir / "slide.png").write_bytes(b"existing")
+
+        config = ProcessConfig(
+            input_path=input_file,
+            output_dir=output_dir,
+            render_engine="libreoffice",
+            save_intermediate=True,
+            skip_existing=True,
+        )
+
+        processor = PPTProcessor()
+
+        with patch.object(processor, "_get_slide_count", return_value=2):
+            with patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run:
+                result = processor._render_with_libreoffice(config)
+                mock_run.assert_not_called()
+                assert len(result) == 2
+                assert all(p.exists() for p in result)
+
+    def test_render_with_libreoffice_file_naming(self, temp_dir):
+        """验证 pdftoppm 输出 slide-1.png slide-2.png 被 rename 到 1/slide.png 2/slide.png"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        input_file = temp_dir / "演示文稿.pptx"
+        input_file.write_text("test")
+        output_dir = temp_dir / "output"
+
+        config = ProcessConfig(
+            input_path=input_file,
+            output_dir=output_dir,
+            render_engine="libreoffice",
+            save_intermediate=True,
+            skip_existing=False,
+        )
+
+        processor = PPTProcessor()
+
+        with patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run:
+            def fake_run(cmd, **kwargs):
+                if "pdf" in cmd:
+                    # Step 1: LO → PDF (output is always input.pdf now)
+                    outdir = cmd[5]
+                    (Path(outdir) / "input.pdf").write_bytes(b"fake_pdf")
+                else:
+                    # Step 2: pdftoppm → PNG
+                    prefix = cmd[-1]  # e.g. /tmp/xxx/slide
+                    (Path(f"{prefix}-1.png")).write_bytes(b"page1")
+                    (Path(f"{prefix}-2.png")).write_bytes(b"page2")
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = fake_run
+
+            result = processor._render_with_libreoffice(config)
+
+            assert len(result) == 2
+            # 验证最终路径
+            assert result[0] == output_dir / "1" / "slide.png"
+            assert result[1] == output_dir / "2" / "slide.png"
+            # 验证文件内容
+            assert result[0].read_bytes() == b"page1"
+            assert result[1].read_bytes() == b"page2"
+
+    def test_render_engine_not_installed_raises(self, temp_dir):
+        """mock subprocess.run 抛 FileNotFoundError，验证错误被正确抛出"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        input_file = temp_dir / "test.pptx"
+        input_file.write_text("test")
+        output_dir = temp_dir / "output"
+
+        config = ProcessConfig(
+            input_path=input_file,
+            output_dir=output_dir,
+            render_engine="libreoffice",
+            save_intermediate=True,
+            skip_existing=False,
+        )
+
+        processor = PPTProcessor()
+
+        with patch("vidppt.processors.ppt_processor.subprocess.run", side_effect=FileNotFoundError("libreoffice not found")):
+            with pytest.raises(FileNotFoundError, match="libreoffice not found"):
+                processor._render_with_libreoffice(config)
+
+
 class TestPPTProcessorIntegration:
     """测试 PPTProcessor 集成场景"""
 
