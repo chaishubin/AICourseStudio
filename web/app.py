@@ -121,23 +121,26 @@ def upload_ppt():
     if file_size == 0:
         return jsonify({'error': '文件为空，请选择有效的PPT文件'}), 400
 
-    if file and allowed_file(file.filename):
-        # 生成唯一文件名
-        filename = secure_filename(file.filename)
-        ext = filename.rsplit('.', 1)[1].lower()
-        unique_filename = f"{uuid.uuid4().hex}_{filename}"
-        file_path = UPLOAD_FOLDER / unique_filename
+    # 直接从原始文件名取扩展名，不依赖 secure_filename 保留中文
+    original_filename = file.filename
+    if '.' in original_filename:
+        ext = original_filename.rsplit('.', 1)[1].lower()
+    else:
+        ext = ''
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({'error': '不支持的文件类型'}), 400
 
-        # 保存文件
-        file.save(file_path)
+    unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
+    file_path = UPLOAD_FOLDER / unique_filename
 
-        return jsonify({
-            'success': True,
-            'file_path': str(file_path),
-            'original_name': filename
-        })
+    # 保存文件
+    file.save(file_path)
 
-    return jsonify({'error': '不支持的文件类型'}), 400
+    return jsonify({
+        'success': True,
+        'file_path': str(file_path),
+        'original_name': original_filename
+    })
 
 
 class WebProgressTracker:
