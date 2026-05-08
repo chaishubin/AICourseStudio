@@ -13,6 +13,7 @@ from pathlib import Path
 from queue import Queue, Empty
 from flask import Flask, render_template, request, jsonify, send_file, make_response, Response
 from werkzeug.utils import secure_filename
+from loguru import logger
 
 # 导入 vidppt
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -282,6 +283,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         progress.set_stage('init', '初始化转换...')
 
         # 2. 创建配置
+        logger.info(f"render_engine = {render_engine}")
         config = ProcessConfig(
             input_path=Path(file_path),
             output_dir=output_dir,

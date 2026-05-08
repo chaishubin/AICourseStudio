@@ -78,11 +78,45 @@ class PPTProcessor(DocumentProcessor):
             return self._render_with_libreoffice(config)
         return self._render_with_spire(config)
 
+    def _existing_slide_count(self, config: ProcessConfig) -> int:
+        """统计已存在的 slide.png 数量"""
+        count = 0
+        while True:
+            if not (config.output_dir / str(count + 1) / "slide.png").exists():
+                break
+            count += 1
+        return count
+
+    def _clear_slides(self, config: ProcessConfig) -> None:
+        """清除旧的幻灯片截图"""
+        page_num = 1
+        while True:
+            page_dir = config.output_dir / str(page_num)
+            if not page_dir.exists():
+                break
+            slide_path = page_dir / "slide.png"
+            if slide_path.exists():
+                slide_path.unlink()
+            # 如果目录为空则删除
+            try:
+                page_dir.rmdir()
+            except OSError:
+                pass
+            page_num += 1
+
     def _render_with_spire(self, config: ProcessConfig) -> list[Path]:
         """使用 Spire 渲染 PPT 页面为图像"""
         from spire.presentation import Presentation as SpirePresentation
 
         logger.info("开始渲染幻灯片截图（spire）...")
+
+        # 如果当前引擎与上次渲染不同，清除旧截图
+        marker = config.output_dir / ".render_engine"
+        if marker.exists() and marker.read_text().strip() != "spire":
+            logger.info("检测到上次使用其他引擎渲染，清除旧截图")
+            self._clear_slides(config)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("spire")
 
         # 预检查哪些页需要渲染
         if config.save_intermediate and config.skip_existing:
@@ -163,6 +197,14 @@ class PPTProcessor(DocumentProcessor):
         两步流程：LibreOffice 转 PDF → pdftoppm 逐页转 PNG
         """
         logger.info("开始渲染幻灯片截图（libreoffice）...")
+
+        # 如果当前引擎与上次渲染不同，清除旧截图
+        marker = config.output_dir / ".render_engine"
+        if marker.exists() and marker.read_text().strip() != "libreoffice":
+            logger.info("检测到上次使用其他引擎渲染，清除旧截图")
+            self._clear_slides(config)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("libreoffice")
 
         # 预检查 skip_existing
         if config.save_intermediate and config.skip_existing:
