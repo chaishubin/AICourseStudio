@@ -49,6 +49,24 @@ class DocumentProcessor(ABC):
         return content
 
 
+class LLMEngine(ABC):
+    """LLM 文本摘要引擎抽象基类"""
+
+    @abstractmethod
+    def summarize(self, text: str, **kwargs) -> str:
+        """对单段文本进行摘要/改写"""
+        pass
+
+    def summarize_pages(self, pages: list[str], **kwargs) -> list[str]:
+        """逐页摘要（默认：逐个调用 summarize）"""
+        return [self.summarize(text, **kwargs) for text in pages]
+
+    @abstractmethod
+    def summarize_document(self, pages: list[str], **kwargs) -> str:
+        """对整个文档统一摘要"""
+        pass
+
+
 class TTSEngine(ABC):
     """文字转语音引擎抽象基类"""
 

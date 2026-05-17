@@ -30,6 +30,24 @@ class TestPipelineInit:
 
         assert pipeline.config == config
         assert pipeline.tts_engine is not None
+        assert pipeline.llm_engine is None  # LLM 默认不启用
+
+    def test_pipeline_init_with_llm(self, temp_dir):
+        """测试 Pipeline 初始化时启用 LLM"""
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            tts_engine="edge-tts",
+            llm_enabled=True,
+            llm_engine="minimax",
+            llm_options={"api_key": "test-key"},
+        )
+
+        pipeline = Pipeline(config)
+
+        assert pipeline.llm_engine is not None
+        from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
+        assert isinstance(pipeline.llm_engine, MiniMaxLLMEngine)
 
     def test_create_edge_tts_engine(self, temp_dir):
         """测试创建 Edge TTS 引擎"""
@@ -57,6 +75,20 @@ class TestPipelineInit:
             Pipeline(config)
 
         assert "不支持的 TTS 引擎" in str(exc_info.value)
+
+    def test_unsupported_llm_engine(self, temp_dir):
+        """测试不支持的 LLM 引擎"""
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            llm_enabled=True,
+            llm_engine="unsupported-llm",
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            Pipeline(config)
+
+        assert "不支持的 LLM 引擎" in str(exc_info.value)
 
 
 class TestPipelineRun:
@@ -400,3 +432,187 @@ class TestPipelineCleanup:
 
         # 正常文件应该保留
         assert (config.output_dir / "normal_file.txt").exists()
+
+
+class TestPipelineSummarizeContent:
+    """测试 LLM 文本摘要"""
+
+    def test_summarize_content_per_page(self, temp_dir):
+        """测试逐页摘要模式"""
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            llm_enabled=True,
+            llm_engine="minimax",
+            llm_mode="per-page",
+            llm_options={"api_key": "test-key"},
+        )
+
+        pipeline = Pipeline(config)
+
+        # Mock LLM 引擎
+        mock_llm = Mock()
+        mock_llm.summarize.side_effect = lambda text, **kw: f"改写: {text}"
+        pipeline.llm_engine = mock_llm
+
+        content = DocumentContent(
+            pages=[
+                PageContent(page_number=1, text="第一页"),
+                PageContent(page_number=2, text="第二页"),
+                PageContent(page_number=3, text=""),  # 空页
+            ]
+        )
+
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=3, enable_progress=False)
+
+        pipeline._summarize_content(content, progress)
+
+        # 验证原文保存到 metadata
+        assert content.pages[0].metadata["original_text"] == "第一页"
+        assert content.pages[1].metadata["original_text"] == "第二页"
+        assert content.pages[2].metadata["original_text"] == ""
+
+        # 验证文本被改写
+        assert content.pages[0].text == "改写: 第一页"
+        assert content.pages[1].text == "改写: 第二页"
+        # 空页不调用 summarize
+        assert content.pages[2].text == ""
+
+        # summarize 只对有文本的页调用
+        assert mock_llm.summarize.call_count == 2
+
+    def test_summarize_content_whole_document(self, temp_dir):
+        """测试整文档摘要模式"""
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            llm_enabled=True,
+            llm_engine="minimax",
+            llm_mode="whole-document",
+            llm_options={"api_key": "test-key"},
+        )
+
+        pipeline = Pipeline(config)
+
+        # Mock LLM 引擎
+        mock_llm = Mock()
+        mock_llm.summarize_document.return_value = "整文档摘要文本"
+        pipeline.llm_engine = mock_llm
+
+        content = DocumentContent(
+            pages=[
+                PageContent(page_number=1, text="第一页"),
+                PageContent(page_number=2, text="第二页"),
+                PageContent(page_number=3, text="第三页"),
+            ]
+        )
+
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=3, enable_progress=False)
+
+        pipeline._summarize_content(content, progress)
+
+        # 摘要放第一页，其余页 text 置空
+        assert content.pages[0].text == "整文档摘要文本"
+        assert content.pages[1].text == ""
+        assert content.pages[2].text == ""
+
+        # 原文保存到 metadata
+        assert content.pages[0].metadata["original_text"] == "第一页"
+        assert content.pages[1].metadata["original_text"] == "第二页"
+
+        mock_llm.summarize_document.assert_called_once()
+
+    def test_summarize_content_error_raises(self, temp_dir):
+        """测试 LLM 摘要失败时抛出异常"""
+        config = ProcessConfig(
+            input_path=temp_dir / "test.pptx",
+            output_dir=temp_dir / "output",
+            llm_enabled=True,
+            llm_engine="minimax",
+            llm_mode="per-page",
+            llm_options={"api_key": "test-key"},
+        )
+
+        pipeline = Pipeline(config)
+
+        mock_llm = Mock()
+        mock_llm.summarize.side_effect = RuntimeError("API 调用失败")
+        pipeline.llm_engine = mock_llm
+
+        content = DocumentContent(
+            pages=[PageContent(page_number=1, text="测试")]
+        )
+
+        from vidppt.utils.progress import ProgressTracker
+
+        progress = ProgressTracker(total_pages=1, enable_progress=False)
+
+        with pytest.raises(RuntimeError, match="API 调用失败"):
+            pipeline._summarize_content(content, progress)
+
+    def test_run_with_llm_enabled(self, temp_dir):
+        """测试启用 LLM 的完整流程"""
+        test_file = temp_dir / "test.pptx"
+        test_file.write_text("test")
+
+        config = ProcessConfig(
+            input_path=test_file,
+            output_dir=temp_dir / "output",
+            llm_enabled=True,
+            llm_engine="minimax",
+            llm_mode="per-page",
+            llm_options={"api_key": "test-key"},
+            enable_tts=True,
+            enable_video=True,
+        )
+
+        mock_processor = Mock()
+        mock_content = DocumentContent(
+            pages=[PageContent(page_number=1, text="测试文本")]
+        )
+        mock_processor.process.return_value = mock_content
+        mock_processor_class = Mock(return_value=mock_processor)
+        mock_processor_class.__name__ = "MockProcessor"
+
+        pipeline = Pipeline(config)
+
+        with patch("vidppt.pipeline.ProcessorRegistry.get_processor") as mock_get:
+            mock_get.return_value = mock_processor_class
+            with patch.object(pipeline, "_summarize_content") as mock_summarize:
+                with patch.object(pipeline, "_generate_audio"):
+                    with patch.object(pipeline, "_compose_video"):
+                        with patch.object(pipeline, "_cleanup_temp_files"):
+                            pipeline.run()
+                            mock_summarize.assert_called_once()
+
+    def test_run_without_llm_does_not_call_summarize(self, temp_dir):
+        """测试禁用 LLM 时不调用摘要"""
+        test_file = temp_dir / "test.pptx"
+        test_file.write_text("test")
+
+        config = ProcessConfig(
+            input_path=test_file,
+            output_dir=temp_dir / "output",
+            llm_enabled=False,
+        )
+
+        mock_processor = Mock()
+        mock_content = DocumentContent(pages=[])
+        mock_processor.process.return_value = mock_content
+        mock_processor_class = Mock(return_value=mock_processor)
+        mock_processor_class.__name__ = "MockProcessor"
+
+        pipeline = Pipeline(config)
+
+        with patch("vidppt.pipeline.ProcessorRegistry.get_processor") as mock_get:
+            mock_get.return_value = mock_processor_class
+            with patch.object(pipeline, "_summarize_content") as mock_summarize:
+                with patch.object(pipeline, "_generate_audio"):
+                    with patch.object(pipeline, "_compose_video"):
+                        with patch.object(pipeline, "_cleanup_temp_files"):
+                            pipeline.run()
+                            mock_summarize.assert_not_called()

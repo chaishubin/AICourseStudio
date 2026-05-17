@@ -17,6 +17,7 @@ class ProcessStage(Enum):
 
     INIT = "初始化"
     EXTRACT = "提取内容"
+    LLM = "文本摘要"
     TTS = "文字转语音"
     VIDEO = "合成视频"
     CLEANUP = "清理"

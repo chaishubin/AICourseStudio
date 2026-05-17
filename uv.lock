@@ -1547,9 +1547,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
 ]
-libreoffice = [
-    { name = "pdf2image" },
-]
 ocr = [
     { name = "pytesseract" },
 ]
@@ -1566,7 +1563,6 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'api'", specifier = ">=0.25.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "moviepy", specifier = ">=2.2.1" },
-    { name = "pdf2image", marker = "extra == 'libreoffice'", specifier = ">=1.16.0" },
     { name = "pdf2image", marker = "extra == 'pdf'", specifier = ">=1.16.0" },
     { name = "pdfplumber", marker = "extra == 'pdf'", specifier = ">=0.10.0" },
     { name = "pillow", specifier = ">=10.0.0" },
@@ -1578,7 +1574,7 @@ requires-dist = [
     { name = "python-pptx", specifier = ">=1.0.2" },
     { name = "spire-presentation", specifier = ">=9.0.0" },
 ]
-provides-extras = ["libreoffice", "pdf", "ocr", "api", "dashboard", "dev"]
+provides-extras = ["pdf", "ocr", "api", "dashboard", "dev"]
 
 [[package]]
 name = "werkzeug"

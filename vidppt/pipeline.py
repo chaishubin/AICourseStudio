@@ -10,6 +10,7 @@ from loguru import logger
 from .core.models import ProcessConfig, DocumentContent
 from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
+from .engines.llm.minimax_llm_engine import MiniMaxLLMEngine
 from .utils.video_composer import VideoComposer
 from .utils.audio_cache import AudioCacheManager
 from .utils.progress import ProgressTracker, ProcessStage
@@ -49,6 +50,7 @@ class Pipeline:
     def __init__(self, config: ProcessConfig):
         self.config = config
         self.tts_engine = self._create_tts_engine()
+        self.llm_engine = self._create_llm_engine() if config.llm_enabled else None
         self.cache_manager = AudioCacheManager(
             cache_dir=config.audio_cache_dir,
             enable_cache=config.enable_audio_cache,
@@ -79,6 +81,25 @@ class Pipeline:
             )
         else:
             raise ValueError(f"不支持的 TTS 引擎: {self.config.tts_engine}")
+
+    def _create_llm_engine(self):
+        """根据配置创建 LLM 引擎"""
+        if self.config.llm_engine == "minimax":
+            llm_opts = self.config.llm_options
+            return MiniMaxLLMEngine(
+                api_key=llm_opts.get("api_key"),
+                api_url=llm_opts.get("api_url", MiniMaxLLMEngine.DEFAULT_API_URL),
+                model=llm_opts.get("model", MiniMaxLLMEngine.DEFAULT_MODEL),
+                system_prompt=llm_opts.get(
+                    "system_prompt", MiniMaxLLMEngine.DEFAULT_SYSTEM_PROMPT
+                ),
+                temperature=llm_opts.get("temperature", MiniMaxLLMEngine.DEFAULT_TEMPERATURE),
+                max_tokens=llm_opts.get("max_tokens", MiniMaxLLMEngine.DEFAULT_MAX_TOKENS),
+                timeout=llm_opts.get("timeout", MiniMaxLLMEngine.DEFAULT_TIMEOUT),
+                max_retries=llm_opts.get("max_retries", MiniMaxLLMEngine.DEFAULT_MAX_RETRIES),
+            )
+        else:
+            raise ValueError(f"不支持的 LLM 引擎: {self.config.llm_engine}")
 
     def run(self) -> None:
         """执行完整的处理流程"""
@@ -113,15 +134,19 @@ class Pipeline:
             progress.stages[ProcessStage.EXTRACT].total = content.total_pages
             progress.complete_stage(ProcessStage.EXTRACT)
 
-            # 4. 文字转语音
+            # 4. LLM 文本摘要
+            if self.config.llm_enabled and self.llm_engine:
+                self._summarize_content(content, progress)
+
+            # 5. 文字转语音
             if self.config.enable_tts:
                 self._generate_audio(content, progress)
 
-            # 5. 合成视频
+            # 6. 合成视频
             if self.config.enable_video:
                 self._compose_video(content, progress)
 
-            # 6. 清理临时文件（如果需要）
+            # 7. 清理临时文件（如果需要）
             if not self.config.save_intermediate:
                 self._cleanup_temp_files(progress)
 
@@ -131,6 +156,60 @@ class Pipeline:
         except Exception as e:
             logger.error(f"处理失败: {e}")
             progress.print_summary()
+            raise
+
+    def _summarize_content(
+        self, content: DocumentContent, progress: ProgressTracker
+    ) -> None:
+        """使用 LLM 引擎对文本进行摘要/改写"""
+        logger.info(
+            f"开始文本摘要（引擎: {self.config.llm_engine}, "
+            f"模式: {self.config.llm_mode}）"
+        )
+
+        try:
+            progress.start_stage(ProcessStage.LLM)
+            progress.stages[ProcessStage.LLM].total = content.total_pages
+
+            # 保存原文到 metadata
+            for page in content.pages:
+                page.metadata["original_text"] = page.text
+
+            # 构建逐页调用时的额外参数
+            llm_kwargs = {}
+            for key in ("system_prompt", "temperature", "max_tokens"):
+                if key in self.config.llm_options:
+                    llm_kwargs[key] = self.config.llm_options[key]
+
+            if self.config.llm_mode == "per-page":
+                # 逐页摘要
+                for i, page in enumerate(content.pages, 1):
+                    if not page.text or not page.text.strip():
+                        logger.debug(f"第 {page.page_number} 页 无文本，跳过 LLM 摘要")
+                        progress.update_stage(ProcessStage.LLM, i)
+                        continue
+                    logger.debug(f"LLM 摘要: 第 {page.page_number} 页")
+                    page.text = self.llm_engine.summarize(page.text, **llm_kwargs)
+                    progress.update_stage_incremental(
+                        ProcessStage.LLM, i,
+                        force_display=(i == 1 or i == content.total_pages)
+                    )
+
+            elif self.config.llm_mode == "whole-document":
+                # 整文档摘要
+                pages_text = [page.text for page in content.pages]
+                summary = self.llm_engine.summarize_document(pages_text, **llm_kwargs)
+                # 摘要放第一页，其余页 text 置空
+                content.pages[0].text = summary
+                for page in content.pages[1:]:
+                    page.text = ""
+                progress.update_stage(ProcessStage.LLM, content.total_pages)
+
+            progress.complete_stage(ProcessStage.LLM)
+
+        except Exception as e:
+            logger.error(f"LLM 摘要失败: {e}")
+            progress.fail_stage(ProcessStage.LLM, str(e))
             raise
 
     def _generate_audio(

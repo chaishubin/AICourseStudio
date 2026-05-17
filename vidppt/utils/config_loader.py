@@ -114,6 +114,7 @@ class ConfigLoader:
             "enable_video",
             "save_intermediate",
             "enable_audio_cache",
+            "llm_enabled",
         ]
         for field in bool_fields:
             if field in config:
@@ -133,6 +134,28 @@ class ConfigLoader:
                 raise ValueError("'audio_cache_expiry_days' 必须是整数")
             if config["audio_cache_expiry_days"] < 1:
                 raise ValueError("'audio_cache_expiry_days' 必须大于等于 1")
+
+        # 验证 LLM 引擎
+        if "llm_engine" in config:
+            llm_engine = config["llm_engine"]
+            if llm_engine not in ["minimax"]:
+                raise ValueError(
+                    f"不支持的 LLM 引擎: {llm_engine}。支持的引擎: minimax"
+                )
+
+        # 验证 LLM 模式
+        if "llm_mode" in config:
+            llm_mode = config["llm_mode"]
+            if llm_mode not in ["per-page", "whole-document"]:
+                raise ValueError(
+                    f"不支持的 LLM 模式: {llm_mode}。"
+                    f"支持的模式: per-page, whole-document"
+                )
+
+        # 验证 llm_options 类型
+        if "llm_options" in config:
+            if not isinstance(config["llm_options"], dict):
+                raise ValueError("'llm_options' 必须是对象/字典")
 
         logger.debug("配置验证通过")
 
@@ -185,6 +208,11 @@ class ConfigValidator:
         "audio_cache_expiry_days",
         # OCR 配置
         "ocr_engine",
+        # LLM 配置
+        "llm_enabled",
+        "llm_engine",
+        "llm_mode",
+        "llm_options",
         # 图像转换配置
         "image_converter",
         # 视频配置

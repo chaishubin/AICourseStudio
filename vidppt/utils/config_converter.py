@@ -70,6 +70,11 @@ class ConfigConverter:
             audio_cache_expiry_days=config_dict.get("audio_cache_expiry_days", 30),
             # OCR 配置
             ocr_engine=config_dict.get("ocr_engine", "builtin"),
+            # LLM 配置
+            llm_enabled=config_dict.get("llm_enabled", False),
+            llm_engine=config_dict.get("llm_engine", "minimax"),
+            llm_mode=config_dict.get("llm_mode", "per-page"),
+            llm_options=config_dict.get("llm_options", {}),
             # 图像转换配置
             image_converter=config_dict.get("image_converter", "builtin"),
             # 渲染配置

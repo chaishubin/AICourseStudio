@@ -18,6 +18,7 @@ class VidPPTApp {
             'init': '初始化',
             'extract': '提取内容',
             'render': '渲染幻灯片',
+            'llm': '文本摘要',
             'tts': '文字转语音',
             'video': '合成视频',
             'complete': '完成'
@@ -40,6 +41,10 @@ class VidPPTApp {
                 ttsEngine: document.getElementById('tts-engine'),
                 voiceSelect: document.getElementById('voice-select'),
                 renderEngine: document.getElementById('render-engine'),
+
+                llmEnabled: document.getElementById('llm-enabled'),
+                llmModeGroup: document.getElementById('llm-mode-group'),
+                llmMode: document.getElementById('llm-mode'),
 
                 convertBtn: document.getElementById('convert-btn'),
                 renderBtn: document.getElementById('render-btn'),
@@ -107,6 +112,9 @@ class VidPPTApp {
         downloadBtn.addEventListener('click', () => this.handleDownload());
         ttsEngine.addEventListener('change', () => this.loadVoices());
 
+        const { llmEnabled } = this.elements;
+        llmEnabled.addEventListener('change', () => this.toggleLLMMode());
+
         const { slidesToggle } = this.elements;
         slidesToggle.addEventListener('click', () => this.toggleSlides());
     }
@@ -116,6 +124,11 @@ class VidPPTApp {
         const isExpanded = !slidesBody.hidden;
         slidesBody.hidden = isExpanded;
         slidesToggleIcon.classList.toggle('expanded', !isExpanded);
+    }
+
+    toggleLLMMode() {
+        const { llmEnabled, llmModeGroup } = this.elements;
+        llmModeGroup.classList.toggle('visible', llmEnabled.checked);
     }
 
     async loadVoices() {
@@ -267,7 +280,7 @@ class VidPPTApp {
     }
 
     _restoreStepIndicators(currentStage, percentage) {
-        const stageOrder = ['init', 'extract', 'render', 'tts', 'video'];
+        const stageOrder = ['init', 'extract', 'render', 'llm', 'tts', 'video'];
         const currentIdx = stageOrder.indexOf(currentStage);
 
         stageOrder.forEach((stage, idx) => {
@@ -396,7 +409,7 @@ class VidPPTApp {
 
         this.slideUrls = [];
 
-        ['step-init', 'step-extract', 'step-render', 'step-tts', 'step-video'].forEach(id => {
+        ['step-init', 'step-extract', 'step-render', 'step-llm', 'step-tts', 'step-video'].forEach(id => {
             const step = document.getElementById(id);
             if (step) {
                 step.classList.remove('active', 'completed');
@@ -474,6 +487,8 @@ class VidPPTApp {
         const ttsEngine = this.elements.ttsEngine.value;
         const voice = this.elements.voiceSelect.value;
         const renderEngine = this.elements.renderEngine.value;
+        const llmEnabled = this.elements.llmEnabled.checked;
+        const llmMode = this.elements.llmMode.value;
 
         try {
             const response = await fetch('/api/convert', {
@@ -483,7 +498,9 @@ class VidPPTApp {
                     file_path: this.state.filePath,
                     tts_engine: ttsEngine,
                     voice: voice,
-                    render_engine: renderEngine
+                    render_engine: renderEngine,
+                    llm_enabled: llmEnabled,
+                    llm_mode: llmMode
                 })
             });
 

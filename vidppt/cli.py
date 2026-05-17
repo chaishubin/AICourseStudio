@@ -58,6 +58,12 @@ MiniMax TTS 示例:
    %(prog)s input.pptx --cache-dir /tmp/cache   # 自定义缓存目录
    %(prog)s input.pptx --cache-expiry 7         # 7天后缓存过期
 
+LLM 文本摘要示例:
+   %(prog)s input.pptx --llm                    # 启用逐页摘要
+   %(prog)s input.pptx --llm --llm-mode whole-document  # 整文档摘要
+   %(prog)s input.pptx --llm --llm-model MiniMax-Text-01  # 指定模型
+   %(prog)s input.pptx --llm --llm-temperature 0.5       # 降低随机性
+
 可用的 TTS 声音（edge-tts）:
   zh-CN-XiaoxiaoNeural  女声·温暖（默认）
   zh-CN-YunyangNeural   男声·专业
@@ -210,6 +216,47 @@ MiniMax TTS 示例:
         help="转场淡入淡出时长，单位秒（默认: 1.0）",
     )
 
+    # LLM 配置
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="启用 LLM 文本摘要/改写",
+    )
+    parser.add_argument(
+        "--llm-engine",
+        default="minimax",
+        choices=["minimax"],
+        help="LLM 引擎（默认: minimax）",
+    )
+    parser.add_argument(
+        "--llm-mode",
+        default="per-page",
+        choices=["per-page", "whole-document"],
+        help="LLM 摘要模式（默认: per-page）",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default=None,
+        help="LLM 模型名称（默认: 引擎默认模型）",
+    )
+    parser.add_argument(
+        "--llm-system-prompt",
+        default=None,
+        help="自定义 LLM 系统提示词",
+    )
+    parser.add_argument(
+        "--llm-temperature",
+        type=float,
+        default=None,
+        help="LLM 生成温度（默认: 0.7）",
+    )
+    parser.add_argument(
+        "--llm-max-tokens",
+        type=int,
+        default=None,
+        help="LLM 最大 token 数（默认: 4096）",
+    )
+
     # 日志配置
     parser.add_argument(
         "--verbose",
@@ -311,6 +358,23 @@ MiniMax TTS 示例:
         cli_config["avatar_face_size"] = args.face_size
         cli_config["avatar_face_margin"] = args.face_margin
         cli_config["avatar_transition_duration"] = args.transition
+
+    # LLM 参数
+    if args.llm:
+        cli_config["llm_enabled"] = True
+        cli_config["llm_engine"] = args.llm_engine
+        cli_config["llm_mode"] = args.llm_mode
+        llm_options_cli = cli_config.get("llm_options", {})
+        if args.llm_model:
+            llm_options_cli["model"] = args.llm_model
+        if args.llm_system_prompt:
+            llm_options_cli["system_prompt"] = args.llm_system_prompt
+        if args.llm_temperature is not None:
+            llm_options_cli["temperature"] = args.llm_temperature
+        if args.llm_max_tokens is not None:
+            llm_options_cli["max_tokens"] = args.llm_max_tokens
+        if llm_options_cli:
+            cli_config["llm_options"] = llm_options_cli
 
     # 合并配置
     if args.config and not config_dict.get("input") and not args.input:

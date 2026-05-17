@@ -66,6 +66,12 @@ class ProcessConfig:
     # OCR 配置
     ocr_engine: str = "builtin"  # builtin, tesseract, api
 
+    # LLM 配置
+    llm_enabled: bool = False
+    llm_engine: str = "minimax"
+    llm_mode: str = "per-page"  # "per-page" 或 "whole-document"
+    llm_options: dict = field(default_factory=dict)
+
     # 图像转换配置
     image_converter: str = "builtin"  # builtin, api
 

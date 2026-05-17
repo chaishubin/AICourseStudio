@@ -147,7 +147,7 @@ def upload_ppt():
 class WebProgressTracker:
     """Web端进度跟踪器，将进度推送到队列"""
 
-    STAGE_ORDER = ['init', 'extract', 'render', 'tts', 'video']
+    STAGE_ORDER = ['init', 'extract', 'render', 'llm', 'tts', 'video']
     STAGE_WEIGHT = 100 / len(STAGE_ORDER)  # 每个阶段占 20%
 
     def __init__(self, task_id: str, queue: Queue, total_pages: int = 0):
@@ -270,7 +270,8 @@ class WebProgressTracker:
 
 def run_conversion(task_id: str, file_path: str, output_dir: Path,
                    tts_engine: str = 'edge-tts', voice: str = 'zh-CN-XiaoxiaoNeural',
-                   render_engine: str = 'spire'):
+                   render_engine: str = 'spire',
+                   llm_enabled: bool = False, llm_mode: str = 'per-page'):
     """在后台线程中运行转换"""
     queue = progress_queues.get(task_id)
     if not queue:
@@ -282,7 +283,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         # 1. 初始化
         progress.set_stage('init', '初始化转换...')
 
-        # 2. 创建配置
+        # 2. 创建配置（LLM 由内联逻辑处理，不通过 Pipeline）
         logger.info(f"render_engine = {render_engine}")
         config = ProcessConfig(
             input_path=Path(file_path),
@@ -322,6 +323,41 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         for page, image in zip(content.pages, slide_images):
             page.slide_image = image
         progress.update('render', len(slide_images), len(slide_images), f'渲染完成，共 {len(slide_images)} 页')
+
+        # 4c. LLM 文本摘要
+        if llm_enabled:
+            progress.set_stage('llm', 'LLM 文本摘要...')
+
+            # 检查 API key
+            api_key = os.getenv("MINIMAX_API")
+            if not api_key:
+                raise RuntimeError("LLM 摘要需要 MiniMax API。请设置环境变量 MINIMAX_API。")
+
+            from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
+            llm_engine = MiniMaxLLMEngine(api_key=api_key)
+
+            # 保存原文
+            for page in content.pages:
+                page.metadata["original_text"] = page.text
+
+            total_pages = content.total_pages
+
+            if llm_mode == "per-page":
+                for i, page in enumerate(content.pages, 1):
+                    if not page.text or not page.text.strip():
+                        progress.update('llm', i, total_pages, f'第 {i} 页无文本，跳过')
+                        continue
+                    page.text = llm_engine.summarize(page.text)
+                    progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
+            elif llm_mode == "whole-document":
+                pages_text = [page.text for page in content.pages]
+                summary = llm_engine.summarize_document(pages_text)
+                content.pages[0].text = summary
+                for page in content.pages[1:]:
+                    page.text = ""
+                progress.update('llm', total_pages, total_pages, '整文档摘要完成')
+
+            progress.update('llm', total_pages, total_pages, '文本摘要完成')
 
         # 5. TTS 转换
         progress.set_stage('tts', '文字转语音...')
@@ -462,6 +498,8 @@ def convert_ppt():
     tts_engine = data.get('tts_engine', 'edge-tts')
     voice = data.get('voice', 'zh-CN-XiaoxiaoNeural')
     render_engine = data.get('render_engine', 'spire')
+    llm_enabled = data.get('llm_enabled', False)
+    llm_mode = data.get('llm_mode', 'per-page')
 
     if not file_path:
         return jsonify({'error': '未提供文件路径'}), 400
@@ -493,7 +531,7 @@ def convert_ppt():
     # 在后台线程中运行转换
     thread = threading.Thread(
         target=run_conversion,
-        args=(task_id, file_path, output_dir, tts_engine, voice, render_engine)
+        args=(task_id, file_path, output_dir, tts_engine, voice, render_engine, llm_enabled, llm_mode)
     )
     thread.daemon = True
     thread.start()
@@ -611,18 +649,18 @@ def get_progress(task_id):
             except Empty:
                 idle_seconds += HEARTBEAT_INTERVAL
                 if idle_seconds >= MAX_IDLE:
-                    yield f"data: {json.dumps({'type': 'timeout', 'message': '连接超时'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'timeout', 'message': '连接超时'}, ensure_ascii=False)}\n\n"
                     break
                 # 发送 SSE 注释行作为心跳，浏览器会自动忽略
                 yield ": keepalive\n\n"
 
             except Exception:
-                yield f"data: {json.dumps({'type': 'error', 'message': '服务内部错误'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': '服务内部错误'}, ensure_ascii=False)}\n\n"
                 break
 
     return Response(
         generate(),
-        mimetype='text/event-stream',
+        mimetype='text/event-stream; charset=utf-8',
         headers={
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no'

@@ -144,6 +144,12 @@ class TestProgressTracker:
             tracker.update_stage(ProcessStage.EXTRACT, i, 5)
         tracker.complete_stage(ProcessStage.EXTRACT)
 
+        # LLM 阶段
+        tracker.start_stage(ProcessStage.LLM)
+        for i in range(1, 6):
+            tracker.update_stage(ProcessStage.LLM, i, 5)
+        tracker.complete_stage(ProcessStage.LLM)
+
         # TTS 阶段
         tracker.start_stage(ProcessStage.TTS)
         for i in range(1, 6):
@@ -157,7 +163,7 @@ class TestProgressTracker:
         tracker.complete_stage(ProcessStage.VIDEO)
 
         overall = tracker.get_overall_progress()
-        assert overall["completed_stages"] == 3
+        assert overall["completed_stages"] == 4
 
     def test_progress_with_disabled_progress_bar(self):
         """测试禁用进度条时的行为"""
@@ -219,6 +225,14 @@ class TestProgressTrackerIntegration:
         tracker.complete_stage(ProcessStage.EXTRACT)
 
         # 模拟 TTS 阶段（部分缓存命中）
+        tracker.start_stage(ProcessStage.LLM)
+        for i in range(1, 101):
+            tracker.update_stage(ProcessStage.LLM, i, 100)
+            if i % 20 == 0:
+                time.sleep(0.01)  # 模拟处理时间
+        tracker.complete_stage(ProcessStage.LLM)
+
+        # 模拟 TTS 阶段（部分缓存命中）
         tracker.start_stage(ProcessStage.TTS)
         for i in range(1, 101):
             tracker.update_stage(ProcessStage.TTS, i, 100)
@@ -235,7 +249,7 @@ class TestProgressTrackerIntegration:
         tracker.complete_stage(ProcessStage.VIDEO)
 
         overall = tracker.get_overall_progress()
-        assert overall["completed_stages"] == 3
+        assert overall["completed_stages"] == 4
         assert overall["overall_progress_percentage"] == 100  # 所有阶段都完成
         assert overall["elapsed_seconds"] > 0
 
