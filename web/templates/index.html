@@ -20,7 +20,7 @@
                 <!-- 上传 -->
                 <section class="card" id="upload-module">
                     <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" accept=".ppt,.pptx" hidden>
+                        <input type="file" id="file-input" accept=".ppt,.pptx" multiple hidden>
                         <div class="upload-placeholder" id="upload-placeholder">
                             <div class="upload-icon-wrap">
                                 <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -30,7 +30,7 @@
                                 </svg>
                             </div>
                             <p class="upload-text">拖拽文件至此处，或点击上传</p>
-                            <p class="upload-hint">支持 .ppt / .pptx</p>
+                            <p class="upload-hint">支持 .ppt / .pptx，可多选</p>
                         </div>
                         <div class="upload-progress" id="upload-progress" hidden>
                             <div class="progress-bar">
@@ -53,6 +53,7 @@
                             <p class="file-path" id="file-path"></p>
                         </div>
                     </div>
+                    <div class="file-list" id="file-list"></div>
                 </section>
 
                 <!-- 选项 -->
@@ -120,6 +121,14 @@
                         </button>
                     </div>
 
+                    <div class="batch-summary" id="batch-summary" hidden>
+                        <span class="batch-count" id="batch-count">0/0</span>
+                        <span class="batch-label">已完成</span>
+                        <div class="batch-progress-bar">
+                            <div class="batch-progress-fill" id="batch-progress-fill"></div>
+                        </div>
+                    </div>
+
                     <div class="conversion-progress" id="conversion-progress" hidden>
                         <div class="progress-header">
                             <span class="progress-stage" id="progress-stage">准备中...</span>
@@ -178,27 +187,10 @@
                     </div>
                 </section>
 
-                <!-- 预览 -->
-                <section class="card" id="preview-module">
-                    <div class="preview-container" id="preview-container">
-                        <div class="preview-placeholder" id="preview-placeholder">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
-                                <polygon points="5 3 19 12 5 21 5 3"/>
-                            </svg>
-                            <p>转换完成后将在此显示预览</p>
-                        </div>
-                        <video id="video-player" class="video-player" controls hidden></video>
-                    </div>
-                    <div class="preview-actions">
-                        <button class="btn-download" id="download-btn" disabled>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <polyline points="7 10 12 15 17 10"/>
-                                <line x1="12" y1="15" x2="12" y2="3"/>
-                            </svg>
-                            下载视频
-                        </button>
-                    </div>
+                <!-- 转换结果 -->
+                <section class="card" id="results-module" hidden>
+                    <h3 class="results-title">转换结果</h3>
+                    <div class="results-grid" id="results-grid"></div>
                 </section>
             </div>
 
@@ -211,7 +203,7 @@
         </footer>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=5"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=6"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>

@@ -38,6 +38,8 @@ UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
 ALLOWED_EXTENSIONS = {'ppt', 'pptx'}
 STATE_FILE = OUTPUT_FOLDER / 'state.json'
+_state_lock = threading.Lock()
+MAX_STATE_ENTRIES = 50
 
 # 确保目录存在
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -51,43 +53,85 @@ tasks = {}  # task_id -> {status, file_path, output_dir, stage, percentage, mess
 progress_queues = {}  # task_id -> Queue
 
 
+class ConversionQueue:
+    """串行转换队列，保证同一时刻只运行一个转换任务"""
+
+    def __init__(self):
+        self._queue = Queue()
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+
+    def enqueue(self, func, *args, **kwargs):
+        self._queue.put((func, args, kwargs))
+
+    def _run(self):
+        while True:
+            func, args, kwargs = self._queue.get()
+            try:
+                func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"ConversionQueue worker error: {e}")
+
+
+conversion_queue = ConversionQueue()
+
+
 def save_state(task_id: str):
-    """将指定任务的状态持久化到 state.json"""
+    """将指定任务的状态持久化到 state.json（JSON 数组格式）"""
     task = tasks.get(task_id)
     if not task:
         return
-    data = {'task_id': task_id}
-    data.update(task)
-    # 提取 original_name
-    file_path = task.get('file_path', '')
-    if file_path and 'original_name' not in data:
-        # 从 uuid_filename.pptx 中还原原始文件名
-        name = Path(file_path).name
-        # 格式: <uuid>_<original_name>
-        parts = name.split('_', 1)
-        data['original_name'] = parts[1] if len(parts) > 1 else name
+    with _state_lock:
+        data = _read_state_file()
+        # 构建当前任务条目
+        entry = {'task_id': task_id}
+        entry.update(task)
+        file_path = task.get('file_path', '')
+        if file_path and 'original_name' not in entry:
+            name = Path(file_path).name
+            parts = name.split('_', 1)
+            entry['original_name'] = parts[1] if len(parts) > 1 else name
+        # 按 task_id 查找并更新/追加
+        found = False
+        for i, item in enumerate(data):
+            if item.get('task_id') == task_id:
+                data[i] = entry
+                found = True
+                break
+        if not found:
+            data.append(entry)
+        # 限制最近 50 条
+        data = data[-MAX_STATE_ENTRIES:]
+        try:
+            STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        except Exception:
+            pass
+
+
+def _read_state_file() -> list:
+    """读取 state.json，兼容旧版单对象格式"""
+    if not STATE_FILE.exists():
+        return []
     try:
-        STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        raw = json.loads(STATE_FILE.read_text(encoding='utf-8'))
+        if isinstance(raw, list):
+            return raw
+        # 旧版单对象格式
+        return [raw]
     except Exception:
-        pass
+        return []
 
 
 def load_state():
-    """服务启动时从 state.json 恢复最近任务状态"""
-    if not STATE_FILE.exists():
-        return
-    try:
-        data = json.loads(STATE_FILE.read_text(encoding='utf-8'))
-        task_id = data.get('task_id')
+    """服务启动时从 state.json 恢复所有已完成/出错的任务状态"""
+    data = _read_state_file()
+    for entry in data:
+        task_id = entry.get('task_id')
         if not task_id:
-            return
-        # 只恢复已完成或出错的任务（正在处理的任务重启后已无效）
-        status = data.get('status', '')
-        if status not in ('completed', 'error'):
-            return
-        tasks[task_id] = data
-    except Exception:
-        pass
+            continue
+        status = entry.get('status', '')
+        if status in ('completed', 'error'):
+            tasks[task_id] = entry
 
 
 # 启动时恢复状态
@@ -528,13 +572,8 @@ def convert_ppt():
         'original_name': original_name,
     }
 
-    # 在后台线程中运行转换
-    thread = threading.Thread(
-        target=run_conversion,
-        args=(task_id, file_path, output_dir, tts_engine, voice, render_engine, llm_enabled, llm_mode)
-    )
-    thread.daemon = True
-    thread.start()
+    # 入队串行执行
+    conversion_queue.enqueue(run_conversion, task_id, file_path, output_dir, tts_engine, voice, render_engine, llm_enabled, llm_mode)
 
     return jsonify({
         'success': True,
@@ -571,12 +610,7 @@ def render_slides():
         'original_name': original_name,
     }
 
-    thread = threading.Thread(
-        target=run_render_only,
-        args=(task_id, file_path, output_dir, render_engine)
-    )
-    thread.daemon = True
-    thread.start()
+    conversion_queue.enqueue(run_render_only, task_id, file_path, output_dir, render_engine)
 
     return jsonify({
         'success': True,
@@ -683,6 +717,26 @@ def get_status(task_id):
     })
 
 
+@app.route('/api/tasks')
+def get_tasks():
+    """返回所有任务的列表（最近 50 条）"""
+    all_tasks = []
+    for task_id, task in tasks.items():
+        all_tasks.append({
+            'task_id': task_id,
+            'status': task.get('status', 'unknown'),
+            'original_name': task.get('original_name', ''),
+            'stage': task.get('stage'),
+            'percentage': task.get('percentage', 0),
+            'message': task.get('message', ''),
+            'video_path': task.get('video_path'),
+            'error': task.get('error'),
+        })
+    # 按最近排序，限制 50 条
+    all_tasks = all_tasks[-MAX_STATE_ENTRIES:]
+    return jsonify({'tasks': all_tasks})
+
+
 @app.route('/api/active-task')
 def get_active_task():
     """获取当前正在运行或刚完成的任务，供前端刷新后恢复状态"""
@@ -726,32 +780,30 @@ def get_active_task():
 @app.route('/api/last-result')
 def get_last_result():
     """返回 state.json 中最近完成的任务结果（含 original_name）"""
-    if not STATE_FILE.exists():
+    data = _read_state_file()
+    if not data:
         return jsonify({'found': False})
-    try:
-        data = json.loads(STATE_FILE.read_text(encoding='utf-8'))
-        task_id = data.get('task_id')
-        if not task_id:
-            return jsonify({'found': False})
-        # 验证视频文件是否仍存在
-        video_path = data.get('video_path')
-        if video_path and not Path(video_path).exists():
-            return jsonify({'found': False})
-        return jsonify({
-            'found': True,
-            'task_id': task_id,
-            'status': data.get('status'),
-            'stage': data.get('stage'),
-            'percentage': data.get('percentage', 0),
-            'message': data.get('message', ''),
-            'video_path': video_path,
-            'original_name': data.get('original_name', ''),
-            'error': data.get('error'),
-            'started_at': data.get('started_at'),
-            'completed_at': data.get('completed_at'),
-        })
-    except Exception:
-        return jsonify({'found': False})
+    # 查找最后一个已完成且有视频的任务
+    for entry in reversed(data):
+        status = entry.get('status')
+        if status in ('completed', 'error'):
+            video_path = entry.get('video_path')
+            if video_path and not Path(video_path).exists():
+                continue
+            return jsonify({
+                'found': True,
+                'task_id': entry.get('task_id'),
+                'status': status,
+                'stage': entry.get('stage'),
+                'percentage': entry.get('percentage', 0),
+                'message': entry.get('message', ''),
+                'video_path': video_path,
+                'original_name': entry.get('original_name', ''),
+                'error': entry.get('error'),
+                'started_at': entry.get('started_at'),
+                'completed_at': entry.get('completed_at'),
+            })
+    return jsonify({'found': False})
 
 
 @app.route('/api/task-timing')

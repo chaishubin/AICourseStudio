@@ -29,10 +29,11 @@ class MiniMaxLLMEngine(LLMEngine):
     DEFAULT_API_URL = "https://api.minimaxi.com/v1/text/chatcompletion_v2"
     DEFAULT_MODEL = "MiniMax-M2.7"
     DEFAULT_SYSTEM_PROMPT = (
-        "你是一位专业的文稿编辑，擅长将幻灯片（PPT）中的内容改写为适合语音播报的自然叙述。"
-        "请将以下幻灯片内容改写为流畅的口语化叙述，保持原意不变，"
-        "去除项目符号和列表格式，使其适合作为视频旁白朗读。"
-        "直接输出改写后的文本，不要添加任何前缀或解释。"
+        "你是一位专业的文稿编辑，擅长将幻灯片（PPT）中的内容精简为适合语音播报的简短叙述。"
+        "请将以下幻灯片内容摘要为流畅的口语化叙述，保持核心原意，"
+        "去除项目符号、列表格式和冗余细节，使文本比原文更短。"
+        "输出长度不超过原文的70%。"
+        "直接输出摘要文本，不要添加任何前缀或解释。"
     )
     DEFAULT_TEMPERATURE = 0.7
     DEFAULT_MAX_TOKENS = 4096
@@ -203,8 +204,8 @@ class MiniMaxLLMEngine(LLMEngine):
         system_prompt = kwargs.pop("system_prompt", self.system_prompt)
         doc_system_prompt = (
             system_prompt
-            + "\n\n以下内容是整个文档的所有页面，请对全部内容进行统一摘要改写，"
-            "输出一段完整的、适合语音播报的叙述文本。"
+            + "\n\n以下内容是整个文档的所有页面，请对全部内容进行统一精简摘要，"
+            "输出一段简洁的、适合语音播报的叙述文本，总长度不超过原文的50%。"
         )
 
         # 拼接所有页内容，标注页码
