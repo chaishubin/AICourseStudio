@@ -1,7 +1,7 @@
 [project]
-name = "vidppt"
-version = "0.2.0"
-description = "Convert documents (PPT/PDF/Word) to narrated videos with extensible architecture"
+ name = "ai-course-studio"
+ version = "0.3.0"
+ description = "AI Course Studio - 从教案/PPT 到课程视频/PPT/HTML 的 AI 课程生产平台"
 requires-python = ">=3.12"
 dependencies = [
     "python-pptx>=1.0.2",
@@ -35,8 +35,9 @@ dev = [
 ]
 
 [project.scripts]
-vidppt = "vidppt.cli:main"
-extract-ppt = "extract_ppt:main"
+ ai-course-studio = "vidppt.cli:main"
+ vidppt = "vidppt.cli:main"
+ extract-ppt = "extract_ppt:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -86,4 +87,3 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
-

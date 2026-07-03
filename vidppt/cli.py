@@ -25,19 +25,17 @@ def main():
     supported_formats = ", ".join(ProcessorRegistry.list_supported_extensions())
 
     parser = argparse.ArgumentParser(
-        description="将文档（PPT/PDF/Word）转换为配音视频",
+        description="AI Course Studio - AI 课程生产平台\n从教案（Word/PDF）或演示文稿（PPT）经 AI 理解与知识建模，生成课程视频、幻灯片、HTML 三路输出。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 示例:
-  %(prog)s input.pptx                           # 完整流程
-  %(prog)s input.pptx -o outputs                # 指定输出目录
+  %(prog)s input.pptx                           # 路线 B：PPT → 视频（保留原样式）
+  %(prog)s input.docx -o outputs                # 路线 A：教案 → 课程产出（规划中）
   %(prog)s input.pptx --no-tts                  # 跳过语音合成
   %(prog)s input.pptx --no-video                # 跳过视频合成
-  %(prog)s input.pptx --no-intermediate         # 不保存中间文件
   %(prog)s input.pptx --voice zh-CN-YunyangNeural  # 使用男声 (edge-tts)
   %(prog)s input.pptx --rate +20%%              # 加速20%%
   %(prog)s input.pptx --face face.jpg           # 启用数字人叠加（默认 sadtalker）
-  %(prog)s input.pptx --face face.jpg --provider heygen --provider-config '{{"api_key":"xxx"}}'
 
 配置文件示例:
   %(prog)s --config config.yaml                 # 使用 YAML 配置文件
@@ -283,7 +281,7 @@ LLM 文本摘要示例:
         log_file=args.log_file,
     )
 
-    logger.info(f"VidPPT 启动 (日志等级: {args.log_level})")
+    logger.info(f"AI Course Studio 启动 (日志等级: {args.log_level})")
     if args.log_file:
         logger.info(f"日志文件: {args.log_file}")
 

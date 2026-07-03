@@ -1,8 +1,8 @@
 /* ==========================================================================
-   VidPPT Web界面 - 主JavaScript文件
+   AI Course Studio - 主JavaScript文件
    ========================================================================== */
 
-class VidPPTApp {
+class AICourseStudioApp {
     constructor() {
         this.state = {
             files: [],  // [{file, filePath, fileName, taskId, status, percentage, stage, message, videoPath, error}]
@@ -69,7 +69,7 @@ class VidPPTApp {
                 slidesGrid: document.getElementById('slides-grid')
             };
         } catch(e) {
-            console.error('VidPPT element init failed:', e);
+            console.error('AICourseStudio element init failed:', e);
         }
 
         this.init();
@@ -814,5 +814,5 @@ class VidPPTApp {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new VidPPTApp();
+    window.app = new AICourseStudioApp();
 });

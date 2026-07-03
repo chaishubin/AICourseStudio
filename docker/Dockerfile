@@ -1,5 +1,5 @@
-FROM ubuntu:24.04
-
+ FROM docker.m.daocloud.io/library/ubuntu:24.04
+ 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=zh_CN.UTF-8
 ENV LC_ALL=zh_CN.UTF-8
@@ -12,8 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
     libreoffice-impress libreoffice-common \
+    libreoffice-writer libreoffice-gtk3 \
     poppler-utils \
     ffmpeg \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 生成中文 locale
@@ -53,7 +55,9 @@ WORKDIR /app
 
 # 5. 安装 Python 依赖（利用缓存层）
 COPY pyproject.toml .
-RUN pip install --break-system-packages --no-cache-dir \
+# 配置 pip 使用清华镜像源
+RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+     pip install --break-system-packages --no-cache-dir \
     python-pptx>=1.0.2 \
     Pillow>=10.0.0 \
     spire.presentation>=9.0.0 \

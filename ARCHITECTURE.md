@@ -1,330 +1,282 @@
-# VidPPT 架构设计文档
+# AI Course Studio 架构设计
 
 ## 设计目标
 
-1. **可扩展性**：支持轻松添加新的文档格式、TTS 引擎、OCR 引擎等
-2. **模块化**：不同功能模块分离，便于维护和测试
-3. **灵活配置**：支持多种配置选项，满足不同场景需求
-4. **插件化**：通过注册机制动态加载处理器
+1. **Course 为中心** — 所有输入路线和输出渲染器共享同一个结构化课程知识模型
+2. **双输入路线** — 教案理解（路线 A）和 PPT 保留原样（路线 B）处理不同的输入场景
+3. **三路渲染器** — PPTX、MP4、HTML 三种输出共享同一份 Course 数据
+4. **增量演进** — 现有视频管线作为 Video Renderer 自然融入新架构
+5. **模块化** — 各组件可独立开发、测试、替换
 
-## 核心架构
+---
 
-### 1. 分层设计
-
-```
-┌─────────────────────────────────────────┐
-│         CLI / API Layer                 │  命令行/API 接口
-├─────────────────────────────────────────┤
-│         Pipeline Layer                  │  流程控制层
-├─────────────────────────────────────────┤
-│    Processors  │  Engines  │  Utils     │  处理器/引擎/工具层
-├────────────────┴───────────┴────────────┤
-│         Core Abstractions               │  核心抽象层
-├─────────────────────────────────────────┤
-│         Data Models                     │  数据模型层
-└─────────────────────────────────────────┘
-```
-
-### 2. 核心抽象接口
-
-#### DocumentProcessor（文档处理器）
-
-所有文档处理器的基类，定义统一的处理流程：
-
-```python
-class DocumentProcessor(ABC):
-    @classmethod
-    @abstractmethod
-    def supported_extensions(cls) -> list[str]:
-        """返回支持的文件扩展名"""
-        
-    @abstractmethod
-    def extract_content(self, config: ProcessConfig) -> DocumentContent:
-        """提取文档内容（文字、图片等）"""
-        
-    @abstractmethod
-    def render_pages(self, config: ProcessConfig) -> list[Path]:
-        """渲染页面为图像"""
-    
-    def process(self, config: ProcessConfig) -> DocumentContent:
-        """完整处理流程（模板方法）"""
-```
-
-**设计要点**：
-- 使用模板方法模式，`process()` 定义标准流程
-- 子类实现 `extract_content()` 和 `render_pages()`
-- 通过 `supported_extensions()` 声明支持的格式
-
-#### TTSEngine（文字转语音引擎）
-
-支持多种 TTS 实现：
-
-```python
-class TTSEngine(ABC):
-    @abstractmethod
-    async def convert_async(
-        self,
-        text: str,
-        output_path: Path,
-        voice: str,
-        rate: str,
-    ) -> None:
-        """异步转换单个文本为音频"""
-    
-    async def batch_convert(
-        self,
-        texts: list[tuple[int, str, Path]],
-        voice: str,
-        rate: str,
-        batch_size: int = 5,
-    ) -> None:
-        """批量转换（内置并发控制）"""
-```
-
-**设计要点**：
-- 使用异步设计提高效率
-- 内置批量处理和并发控制
-- 易于对接不同的 TTS 服务
-
-#### OCREngine（OCR 引擎）
-
-支持多种 OCR 实现：
-
-```python
-class OCREngine(ABC):
-    @abstractmethod
-    def extract_text(self, image_path: Path) -> str:
-        """从图像中提取文字"""
-    
-    @abstractmethod
-    def extract_text_batch(self, image_paths: list[Path]) -> list[str]:
-        """批量提取"""
-```
-
-#### ImageConverter（图像转换器）
-
-支持多种图像转换方式：
-
-```python
-class ImageConverter(ABC):
-    @abstractmethod
-    def convert_to_image(
-        self,
-        source_path: Path,
-        output_path: Path,
-        page_number: Optional[int] = None,
-    ) -> Path:
-        """转换单页"""
-    
-    @abstractmethod
-    def convert_all_pages(
-        self,
-        source_path: Path,
-        output_dir: Path,
-    ) -> list[Path]:
-        """转换所有页"""
-```
-
-### 3. 注册机制
-
-使用装饰器模式实现处理器自动注册：
-
-```python
-@register_processor
-class PPTProcessor(DocumentProcessor):
-    @classmethod
-    def supported_extensions(cls) -> list[str]:
-        return ['.ppt', '.pptx']
-```
-
-**工作原理**：
-1. 导入处理器模块时，`@register_processor` 装饰器被执行
-2. 处理器类注册到 `ProcessorRegistry`
-3. 根据文件扩展名自动路由到对应处理器
-
-**优势**：
-- 零配置：添加新处理器只需实现接口和添加装饰器
-- 动态加载：无需修改主流程代码
-- 易于扩展：支持第三方插件
-
-### 4. 数据流
+## 系统总览
 
 ```
-输入文档
-   ↓
-[DocumentProcessor]
-   ├─→ extract_content()  → DocumentContent
-   │                          ├─ pages[]
-   │                          │   ├─ text
-   │                          │   ├─ images[]
-   │                          │   └─ metadata
-   │                          └─ metadata
-   └─→ render_pages()      → slide_images[]
-   ↓
-[TTSEngine]
-   └─→ batch_convert()     → audio_files[]
-   ↓
-[VideoComposer]
-   └─→ compose()           → final_video.mp4
+┌─────────────────────────────────────────────────────────────────────┐
+│                         AI Course Studio                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  输入层                                        输出层               │
+│  ┌─────────┐   ┌──────────────────┐    ┌──────────────────┐        │
+│  │ 路线 B  │   │    路线 A        │    │  PPTX Renderer   │        │
+│  │ PPT 文件 │   │ Word/PDF 教案   │    │  (规划中)         │        │
+│  │    ↓    │   │    ↓             │    └──────────────────┘        │
+│  │PPT Parser│   │ Docling/MinerU  │    ┌──────────────────┐        │
+│  │(保留样式)│   │ 文档理解        │    │  Video Renderer  │        │
+│  └────┬────┘   └──────┬──────────┘    │  (现有 pipeline)  │        │
+│       │               │               └──────────────────┘        │
+│       └───────┬───────┘               ┌──────────────────┐        │
+│               ▼                       │  Web Renderer    │        │
+│      ┌────────────────┐               │  (规划中)         │        │
+│      │   Course JSON  │               └──────────────────┘        │
+│      │ (核心数据模型)  │                                            │
+│      └────────────────┘                                            │
+│               │                                                    │
+│               ▼                                                    │
+│      ┌────────────────┐                                            │
+│      │    Web 编排层   │  ← 编辑 Course、选择渲染器、预览、下载    │
+│      └────────────────┘                                            │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5. 配置管理
+---
 
-统一的配置模型：
+## 核心数据模型
 
-```python
-@dataclass
-class ProcessConfig:
-    # 输入输出
-    input_path: Path
-    output_dir: Path
-    
-    # 功能开关
-    enable_tts: bool = True
-    enable_video: bool = True
-    save_intermediate: bool = True
-    
-    # 引擎选择
-    tts_engine: str = "edge-tts"
-    ocr_engine: str = "builtin"
-    image_converter: str = "builtin"
-    
-    # 引擎参数
-    tts_voice: str = "zh-CN-XiaoxiaoNeural"
-    tts_rate: str = "+0%"
-    video_fps: int = 24
-    # ...
+### Course（课程知识模型）
+
+`Course` 是整个平台的枢纽数据结构，定义在 [`vidppt/core/course.py`](vidppt/core/course.py)：
+
+```
+Course
+ ├── title: str              课程名称
+ ├── description: str        课程描述
+ ├── source_type: str        来源类型："lesson_plan" | "presentation"
+ ├── source_path: Path       原始文件路径
+ ├── sections: list<Section> 课程章节/页面列表
+ └── metadata: dict          扩展元数据
+
+CourseSection
+ ├── id: str                 章节标识
+ ├── title: str              章节标题
+ ├── script: str             讲解脚本/逐字稿
+ ├── knowledge_points[]      知识点列表
+ ├── slide_image: Path       幻灯片截图(路线B保留原设计)
+ ├── audio: Path             配音音频文件
+ ├── duration: float         章节时长(秒)
+ └── metadata: dict          扩展元数据
+
+KnowledgePoint
+ ├── id: str                 知识点标识
+ ├── title: str              知识点标题
+ ├── content: str            知识点内容
+ └── order: int              排序序号
 ```
 
-**设计要点**：
-- 使用 `dataclass` 提供类型提示
-- 集中管理所有配置项
-- 提供合理的默认值
+**设计要点：**
 
-## 扩展指南
+- 路线 A（教案）的章节对应教案的"节"，路线 B（PPT）的章节对应幻灯片的一"页"
+- `slide_image` 是路线 B 的核心资产——保留原 PPT 的每一页视觉设计
+- `script` 是供 TTS 引擎使用的讲解文本，可通过 LLM 改写
+- `knowledge_points` 让结构化知识在 HTML/PPTX 渲染器中可以做更多交互展示
 
-### 添加新文档处理器
+### 与旧模型的兼容
 
-1. 在 `vidppt/processors/` 创建新文件
-2. 继承 `DocumentProcessor`
-3. 实现必需方法
-4. 添加 `@register_processor` 装饰器
-5. 在 `cli.py` 中导入以触发注册
+现有的 `DocumentContent` / `PageContent` / `ProcessConfig` 模型保留不动，`Course` 是一个新的、语义更丰富的上层模型。
 
-示例：支持 Markdown
-
-```python
-@register_processor
-class MarkdownProcessor(DocumentProcessor):
-    @classmethod
-    def supported_extensions(cls) -> list[str]:
-        return ['.md', '.markdown']
-    
-    def extract_content(self, config: ProcessConfig) -> DocumentContent:
-        # 解析 Markdown 文件
-        # 可以按标题拆分为多页
-        pass
-    
-    def render_pages(self, config: ProcessConfig) -> list[Path]:
-        # 使用 Pillow/reportlab 渲染
-        # 或调用 pandoc 转换
-        pass
+```
+路线 B 流程：
+  PPT → PPTProcessor → DocumentContent → Course（自动映射）
+                                        → Video Renderer（使用现有 pipeline）
 ```
 
-### 添加新 TTS 引擎
+现有代码在 `vidppt/core/models.py` 中保持不变。
 
-1. 在 `vidppt/engines/tts/` 创建新文件
-2. 继承 `TTSEngine`
-3. 实现 `convert_async()`
-4. 在 `Pipeline._create_tts_engine()` 中注册
+---
 
-示例：阿里云 TTS
+## 路线 A — 教案输入（规划中）
 
-```python
-class AliyunTTSEngine(TTSEngine):
-    def __init__(self, access_key: str, access_secret: str):
-        self.client = AliyunClient(access_key, access_secret)
-    
-    async def convert_async(self, text: str, output_path: Path, 
-                           voice: str, rate: str) -> None:
-        response = await self.client.synthesize(
-            text=text,
-            voice=voice,
-            speed=self._parse_rate(rate),
-        )
-        output_path.write_bytes(response.audio_data)
+```
+Word/PDF 教案文档
+        │
+        ▼
+  ┌─────────────────┐
+  │ Document        │  Docling: 解析章节结构、标题层级、表格、公式
+  │ Understanding   │  MinerU:  中文文档理解，提取知识单元
+  └────────┬────────┘
+           ▼
+  ┌─────────────────┐
+  │ Course Builder  │  将结构化文档映射为 Course JSON
+  └────────┬────────┘
+           ▼
+  ┌─────────────────┐
+  │ Content         │  AI 生成：补充讲解脚本、设计幻灯片主题
+  │ Enrichment      │  知识点提取、学习目标识别
+  └────────┬────────┘
+           ▼
+  Course JSON → 三路渲染器（PPTX / MP4 / HTML）
 ```
 
-### 添加新 OCR 引擎
+**涉及的组件：**
 
-1. 在 `vidppt/engines/ocr/` 创建或修改文件
-2. 继承 `OCREngine`
-3. 实现文字提取方法
+- `vidppt/ingestion/` — 文档理解与 Course 构建
+  - `docling_adapter.py` — Docling 集成
+  - `mineru_adapter.py` — MinerU 集成
+  - `course_builder.py` — 结构化文档 → Course 映射
+  - `enrichment.py` — AI 补充生成（讲解脚本、知识点提取）
 
-### 自定义处理流程
+---
 
-如果标准流程不满足需求，可以重写 `DocumentProcessor.process()`：
+## 路线 B — PPT 直接输入（已实现）
 
-```python
-class CustomProcessor(DocumentProcessor):
-    def process(self, config: ProcessConfig) -> DocumentContent:
-        # 自定义流程
-        content = self.extract_content(config)
-        
-        # 添加自定义步骤
-        self.preprocess_images(content)
-        self.enhance_text(content)
-        
-        # 继续标准流程
-        slide_images = self.render_pages(config)
-        for i, page in enumerate(content.pages):
-            page.slide_image = slide_images[i]
-        
-        return content
+```
+PPT (.ppt / .pptx)
+        │
+        ▼
+  ┌─────────────────┐
+  │ PPTProcessor    │  提取文本框内容 + 内嵌图片
+  └────────┬────────┘
+           ▼
+  ┌─────────────────┐
+  │ Slide Renderer  │  Spire / LibreOffice → PNG 截图
+  └────────┬────────┘
+           ▼
+  ┌─────────────────┐
+  │ Course Mapper   │  PageContent → CourseSection 映射
+  └────────┬────────┘
+           ▼
+  Course JSON → Video Renderer（保持原视觉设计）
 ```
 
-## 最佳实践
+**现有实现：**
+- `vidppt/processors/ppt_processor.py` — 内容提取与页面渲染
+- `vidppt/pipeline.py` — 流程编排（TTS + 视频合成）
+- `vidppt/engines/tts/` — TTS 引擎（edge-tts / minimax）
+- `vidppt/engines/llm/` — LLM 文本摘要（minimax）
+- `vidppt/utils/video_composer.py` — 视频合成
+- `vidppt/video_composer/` — 数字人叠加合成
 
-### 1. 错误处理
+---
 
-- 在关键操作处添加 try-except
-- 提供清晰的错误提示
-- 优雅降级（如 TTS 失败时继续处理其他页）
+## 三路渲染器
 
-### 2. 资源管理
+所有渲染器消费同一个 `Course` 数据，各自专注产出格式：
 
-- 及时释放大对象（如图像、视频片段）
-- 使用上下文管理器
-- 清理临时文件
+### PPTX Renderer（规划中）
+- 根据 Course JSON 生成可编辑的 PowerPoint 文件
+- 路线 A：AI 生成幻灯片布局和内容
+- 路线 B：从原始 PPT 还原编辑能力
 
-### 3. 性能优化
+### Video Renderer（已实现，当前默认输出）
+- 逐页使用 `slide_image` 作为视频帧（路线 B 保留原设计）
+- 用 `script` 生成 TTS 音频
+- 合成带配音的视频 MP4
+- 可选：数字人叠加、字幕生成
 
-- 使用异步批量处理
-- 控制并发数量避免资源耗尽
-- 缓存中间结果
+### Web Renderer（规划中）
+- 生成交互式 HTML 课程页面
+- 支持知识点导航、脚本展示、音频同步播放
+- 可嵌入 LMS（如 Moodle、Canvas）
 
-### 4. 测试
+---
 
-- 为每个处理器编写单元测试
-- 测试边界条件（空文档、超大文档等）
-- 集成测试验证完整流程
+## Web 编排层
 
-## 未来改进
+`web/app.py` 提供 REST API 和前端界面：
 
-1. **流式处理**：支持处理超大文档，逐页处理而非全部加载
-2. **插件系统**：支持从外部加载处理器插件
-3. **任务队列**：支持异步任务和进度跟踪
-4. **Web API**：提供 RESTful API 接口
-5. **分布式处理**：支持多机并行处理大批量文档
+| 端点 | 功能 | 状态 |
+|------|------|------|
+| `/api/upload` | 上传 PPT/教案文件 | 已实现 |
+| `/api/convert` | 启动路线 B 视频转换 | 已实现 |
+| `/api/progress/<task_id>` | SSE 进度推送 | 已实现 |
+| `/api/tasks` | 任务列表 | 已实现 |
+| `/api/course` | Course JSON 查询/编辑 | 规划中 |
+| `/api/render/<format>` | 指定渲染器输出 | 规划中 |
 
-## 总结
+未来 Web 界面将从"上传→转换"演进为"课程编辑工作室"：
+1. 上传教案/PPT → 生成 Course JSON
+2. 在 Web 中编辑 Course（title、script、knowledge_points）
+3. 选择输出格式（PPTX / MP4 / HTML）
+4. 预览和下载
 
-该架构具有以下优势：
+---
 
-- **开放封闭原则**：对扩展开放，对修改封闭
-- **依赖倒置**：依赖抽象而非具体实现
-- **单一职责**：每个类专注于单一功能
-- **可测试性**：模块化设计便于单元测试
-- **可维护性**：清晰的结构和文档
+## 当前代码文件结构
 
-通过这种设计，添加新功能只需实现对应接口，无需修改核心代码。
+```
+vidppt/                   核心 Python 包
+├── __init__.py           项目入口，导出版本号和新版 Course 模型
+├── cli.py                命令行入口
+├── pipeline.py           流程编排（TTS + 视频合成）
+│
+├── core/                 核心抽象层
+│   ├── interfaces.py     抽象基类（DocumentProcessor, TTSEngine...）
+│   ├── models.py         旧数据模型（DocumentContent, ProcessConfig）
+│   ├── course.py         新数据模型（Course, CourseSection, KnowledgePoint）
+│   └── registry.py       处理器注册机制
+│
+├── processors/           文档处理器
+│   ├── ppt_processor.py  PPT 处理器（内容提取 + 页面渲染）
+│   └── pdf_processor.py  PDF 处理器
+│
+├── engines/              引擎实现
+│   ├── tts/              TTS 引擎（edge-tts, minimax）
+│   ├── llm/              LLM 引擎（minimax）
+│   └── ocr/              OCR 引擎
+│
+├── video_composer/       数字人视频合成
+│   └── composer.py       数字人叠加合成引擎
+│
+└── utils/                工具
+    ├── video_composer.py 普通视频合成
+    ├── audio_cache.py    音频缓存管理
+    ├── config_loader.py  配置文件加载
+    ├── config_converter.py 配置转换
+    ├── progress.py       进度跟踪
+    └── logger.py         日志配置
+
+web/                      Web 服务
+├── app.py                Flask 后端
+├── templates/index.html  前端页面
+├── static/css/main.css   样式
+└── static/js/main.js     前端逻辑
+
+tests/                    测试
+├── unit/                 单元测试
+└── integration/          集成测试
+
+docker/                   Docker 部署配置
+datas/                    示例数据
+examples/                 示例配置文件
+```
+
+---
+
+## 增量演进路线
+
+```
+Phase 0（当前）：路线 B 视频输出（PPT → MP4）
+├── CLI + Web 转换
+├── TTS（edge-tts / minimax）
+├── LLM 文本摘要
+└── 数字人叠加
+
+Phase 1（近期）：重塑叙事 + Course 模型
+├── ✅ 项目命名改为 AI Course Studio
+├── ✅ 文档更新（README / ARCHITECTURE）
+├── ✅ Course 数据模型上线
+├── Course ↔ DocumentContent 映射
+└── Web 界面品牌更新
+
+Phase 2：路线 A 初版
+├── Docling / MinerU 集成
+├── Course Builder
+├── AI 内容补全（脚本生成、知识点提取）
+└── Web Course 编辑器
+
+Phase 3：三路渲染器
+├── PPTX Renderer
+├── Web Renderer
+└── 统一的渲染器接口抽象
+```

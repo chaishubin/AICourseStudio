@@ -230,7 +230,10 @@ class PPTProcessor(DocumentProcessor):
                 shutil.copy2(config.input_path, safe_input)
 
                 # Step 1: LibreOffice PPT → PDF
-                cmd_pdf = [
+                cmd_pdf = []
+                if shutil.which("xvfb-run"):
+                    cmd_pdf.append("xvfb-run")
+                cmd_pdf.extend([
                     "libreoffice",
                     "--headless",
                     "--convert-to",
@@ -238,9 +241,12 @@ class PPTProcessor(DocumentProcessor):
                     "--outdir",
                     tmp_dir,
                     str(safe_input),
-                ]
+                ])
                 try:
                     subprocess.run(cmd_pdf, check=True, capture_output=True)
+                    pdf_path = Path(tmp_dir) / "input.pdf"
+                    if not pdf_path.exists():
+                        raise subprocess.CalledProcessError(1, cmd_pdf)
                 except subprocess.CalledProcessError:
                     # 某些 PPTX 格式 LO 无法直接加载，用 python-pptx 重新保存后再试
                     logger.info("LibreOffice 加载原始文件失败，尝试重新保存后转换...")

@@ -1,6 +1,7 @@
 """
-Web界面后端API
-提供文件上传和PPT转视频的接口
+AI Course Studio - Web 服务
+
+提供教案/PPT 上传、课程知识模型编辑与三路渲染器调度的 Web 界面。
 """
 
 import os
@@ -18,6 +19,7 @@ from loguru import logger
 # 导入 vidppt
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from vidppt import Pipeline, ProcessConfig
+from vidppt.core.course import Course, CourseSection, KnowledgePoint
 from vidppt.utils.progress import ProcessStage
 
 # 导入处理器以触发注册
@@ -893,7 +895,8 @@ def list_voices():
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='VidPPT Web Server')
+    parser = argparse.ArgumentParser(description='AI Course Studio - Web Server')
+    parser.description = 'AI Course Studio - Web Server'
     parser.add_argument('port', nargs='?', type=int, default=5000, help='端口号 (默认: 5000)')
     args = parser.parse_args()
     app.run(debug=True, host='0.0.0.0', port=args.port)
