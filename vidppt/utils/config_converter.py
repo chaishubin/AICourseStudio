@@ -72,7 +72,7 @@ class ConfigConverter:
             ocr_engine=config_dict.get("ocr_engine", "builtin"),
             # LLM 配置
             llm_enabled=config_dict.get("llm_enabled", False),
-            llm_engine=config_dict.get("llm_engine", "minimax"),
+            llm_engine=config_dict.get("llm_engine", "qwen"),
             llm_mode=config_dict.get("llm_mode", "per-page"),
             llm_options=config_dict.get("llm_options", {}),
             # 图像转换配置
@@ -80,9 +80,20 @@ class ConfigConverter:
             # 渲染配置
             render_engine=config_dict.get("render_engine", "spire"),
             # 视频配置
+            video_width=config_dict.get("video_width", 1920),
+            video_height=config_dict.get("video_height", 1080),
             video_fps=config_dict.get("video_fps", 24),
             video_codec=config_dict.get("video_codec", "libx264"),
+            video_preset=config_dict.get("video_preset", "veryfast"),
+            video_crf=config_dict.get("video_crf", 21),
+            video_pixel_format=config_dict.get("video_pixel_format", "yuv420p"),
+            video_gop_seconds=config_dict.get("video_gop_seconds", 2),
+            video_profile=config_dict.get("video_profile", "high"),
             audio_codec=config_dict.get("audio_codec", "aac"),
+            audio_bitrate=config_dict.get("audio_bitrate", "128k"),
+            audio_sample_rate=config_dict.get("audio_sample_rate", 48000),
+            audio_channels=config_dict.get("audio_channels", 1),
+            audio_loudness_lufs=config_dict.get("audio_loudness_lufs", -16.0),
             # 数字人配置
             enable_avatar=config_dict.get("enable_avatar", False),
             avatar_face_image=ConfigConverter._resolve_path(

@@ -585,6 +585,11 @@ class Pipeline:
                 fps=video_config.fps,
                 codec=cfg.video_codec,
                 audio_codec=cfg.audio_codec,
+                audio_fps=cfg.audio_sample_rate,
+                audio_bitrate=cfg.audio_bitrate,
+                preset=cfg.video_preset,
+                pixel_format=cfg.video_pixel_format,
+                ffmpeg_params=VideoComposer.ffmpeg_params(cfg),
                 logger=None,
             )
             logger.info(f"数字人视频输出: {video_path}")
