@@ -38,7 +38,7 @@ if DASHBOARD_ENABLED:
 # 配置
 UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
-ALLOWED_EXTENSIONS = {'ppt', 'pptx'}
+ALLOWED_EXTENSIONS = {'docx', 'pdf', 'ppt', 'pptx'}
 STATE_FILE = OUTPUT_FOLDER / 'state.json'
 _state_lock = threading.Lock()
 MAX_STATE_ENTRIES = 50
@@ -177,7 +177,8 @@ def upload_ppt():
     if ext not in ALLOWED_EXTENSIONS:
         return jsonify({'error': '不支持的文件类型'}), 400
 
-    unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
+    # 磁盘文件名只使用服务端生成的 UUID，原始名称仅作为展示元数据。
+    unique_filename = f"{uuid.uuid4().hex}.{ext}"
     file_path = UPLOAD_FOLDER / unique_filename
 
     # 保存文件
@@ -281,7 +282,7 @@ class WebProgressTracker:
             'message': message
         })
 
-    def complete(self, video_path: str = None):
+    def complete(self, video_path: str = None, **artifacts):
         """标记完成"""
         self._complete_current_stage()
         self._update_task(
@@ -291,13 +292,16 @@ class WebProgressTracker:
             message='转换完成',
             video_path=video_path,
             completed_at=time.time(),
+            **artifacts,
         )
 
-        self.queue.put({
+        event = {
             'type': 'complete',
             'video_path': video_path,
-            'message': '转换完成'
-        })
+            'message': '转换完成',
+        }
+        event.update(artifacts)
+        self.queue.put(event)
 
     def error(self, error_msg: str):
         """标记错误"""
@@ -317,7 +321,8 @@ class WebProgressTracker:
 def run_conversion(task_id: str, file_path: str, output_dir: Path,
                    tts_engine: str = 'edge-tts', voice: str = 'zh-CN-XiaoxiaoNeural',
                    render_engine: str = 'spire',
-                   llm_enabled: bool = False, llm_mode: str = 'per-page'):
+                   llm_enabled: bool = False, llm_mode: str = 'per-page',
+                   llm_engine: str = 'qwen'):
     """在后台线程中运行转换"""
     queue = progress_queues.get(task_id)
     if not queue:
@@ -331,14 +336,26 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
 
         # 2. 创建配置（LLM 由内联逻辑处理，不通过 Pipeline）
         logger.info(f"render_engine = {render_engine}")
+        tts_options = {}
+        tts_voice = voice
+        if tts_engine == 'volcengine':
+            tts_options['voice_type'] = voice
+            tts_voice = None
+        elif tts_engine == 'minimax':
+            tts_options['voice_id'] = voice
+            tts_voice = None
+
         config = ProcessConfig(
             input_path=Path(file_path),
             output_dir=output_dir,
             save_intermediate=True,
             skip_existing=True,
             tts_engine=tts_engine,
-            tts_voice=voice,
+            tts_voice=tts_voice,
+            tts_options=tts_options,
             render_engine=render_engine,
+            llm_enabled=llm_enabled,
+            llm_engine=llm_engine,
         )
 
         # 3. 创建 Pipeline（仅用于 TTS 引擎）
@@ -374,13 +391,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         if llm_enabled:
             progress.set_stage('llm', 'LLM 文本摘要...')
 
-            # 检查 API key
-            api_key = os.getenv("MINIMAX_API")
-            if not api_key:
-                raise RuntimeError("LLM 摘要需要 MiniMax API。请设置环境变量 MINIMAX_API。")
-
-            from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
-            llm_engine = MiniMaxLLMEngine(api_key=api_key)
+            llm_provider = pipeline.llm_engine
 
             # 保存原文
             for page in content.pages:
@@ -393,11 +404,11 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     if not page.text or not page.text.strip():
                         progress.update('llm', i, total_pages, f'第 {i} 页无文本，跳过')
                         continue
-                    page.text = llm_engine.summarize(page.text)
+                    page.text = llm_provider.summarize(page.text)
                     progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
             elif llm_mode == "whole-document":
                 pages_text = [page.text for page in content.pages]
-                summary = llm_engine.summarize_document(pages_text)
+                summary = llm_provider.summarize_document(pages_text)
                 content.pages[0].text = summary
                 for page in content.pages[1:]:
                     page.text = ""
@@ -438,7 +449,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     errors = loop.run_until_complete(
                         tts_engine.batch_convert(
                             page_texts,
-                            voice=config.tts_voice,
+                            voice=pipeline._api_voice(),
                             rate=config.tts_rate,
                             progress_callback=tts_callback,
                         )
@@ -470,6 +481,74 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         else:
             progress.complete(None)
 
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        progress.error(str(e))
+
+
+def run_course_generation(
+    task_id: str,
+    file_path: str,
+    output_dir: Path,
+    tts_engine: str,
+    voice: str,
+    render_engine: str,
+    llm_enabled: bool,
+    llm_engine: str,
+):
+    """Word/PDF 教案生成 Course、PPTX、字幕和视频。"""
+    queue = progress_queues.get(task_id)
+    if not queue:
+        return
+    progress = WebProgressTracker(task_id, queue)
+
+    try:
+        progress.set_stage('extract', '读取教案结构...')
+        tts_options = {}
+        tts_voice = voice
+        if tts_engine == 'volcengine':
+            tts_options['voice_type'] = voice
+            tts_voice = None
+        elif tts_engine == 'minimax':
+            tts_options['voice_id'] = voice
+            tts_voice = None
+
+        llm_provider = None
+        if llm_enabled:
+            progress.set_stage('llm', 'AI 正在设计课程结构与逐页讲稿...')
+            if llm_engine == 'qwen':
+                from vidppt.engines.llm.qwen_llm_engine import QwenLLMEngine
+                llm_provider = QwenLLMEngine()
+            elif llm_engine == 'minimax':
+                from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
+                llm_provider = MiniMaxLLMEngine()
+            else:
+                raise ValueError(f"不支持的文本模型: {llm_engine}")
+
+        config = ProcessConfig(
+            input_path=Path(file_path),
+            output_dir=output_dir,
+            tts_engine=tts_engine,
+            tts_voice=tts_voice,
+            tts_options=tts_options,
+            render_engine=render_engine,
+            enable_tts=True,
+            enable_video=True,
+        )
+
+        progress.set_stage('render', '生成可编辑 PPT 与课程资源...')
+        from vidppt.course_pipeline import CoursePipeline
+        result = CoursePipeline(llm_provider).run(
+            Path(file_path), output_dir, media_config=config
+        )
+
+        progress.complete(
+            str(result.video) if result.video else None,
+            course_json_path=str(result.course_json),
+            presentation_path=str(result.presentation),
+            subtitles_path=str(result.subtitles) if result.subtitles else None,
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -541,11 +620,13 @@ def convert_ppt():
     """
     data = request.get_json()
     file_path = data.get('file_path')
+    original_name = data.get('original_name') or Path(file_path or '').name
     tts_engine = data.get('tts_engine', 'edge-tts')
     voice = data.get('voice', 'zh-CN-XiaoxiaoNeural')
     render_engine = data.get('render_engine', 'spire')
     llm_enabled = data.get('llm_enabled', False)
     llm_mode = data.get('llm_mode', 'per-page')
+    llm_engine = data.get('llm_engine', 'qwen')
 
     if not file_path:
         return jsonify({'error': '未提供文件路径'}), 400
@@ -563,10 +644,6 @@ def convert_ppt():
 
     # 创建进度队列
     progress_queues[task_id] = Queue()
-    # 从上传文件路径中提取原始文件名（格式: <uuid>_<original_name>）
-    uploaded_name = Path(file_path).name
-    name_parts = uploaded_name.split('_', 1)
-    original_name = name_parts[1] if len(name_parts) > 1 else uploaded_name
     tasks[task_id] = {
         'status': 'pending',
         'file_path': file_path,
@@ -574,8 +651,17 @@ def convert_ppt():
         'original_name': original_name,
     }
 
-    # 入队串行执行
-    conversion_queue.enqueue(run_conversion, task_id, file_path, output_dir, tts_engine, voice, render_engine, llm_enabled, llm_mode)
+    suffix = Path(file_path).suffix.lower()
+    if suffix in {'.docx', '.pdf'}:
+        conversion_queue.enqueue(
+            run_course_generation, task_id, file_path, output_dir,
+            tts_engine, voice, render_engine, llm_enabled, llm_engine
+        )
+    else:
+        conversion_queue.enqueue(
+            run_conversion, task_id, file_path, output_dir, tts_engine, voice,
+            render_engine, llm_enabled, llm_mode, llm_engine
+        )
 
     return jsonify({
         'success': True,
@@ -715,6 +801,9 @@ def get_status(task_id):
         'task_id': task_id,
         'status': task.get('status', 'unknown'),
         'video_path': task.get('video_path'),
+        'course_json_path': task.get('course_json_path'),
+        'presentation_path': task.get('presentation_path'),
+        'subtitles_path': task.get('subtitles_path'),
         'error': task.get('error')
     })
 
@@ -732,6 +821,9 @@ def get_tasks():
             'percentage': task.get('percentage', 0),
             'message': task.get('message', ''),
             'video_path': task.get('video_path'),
+            'course_json_path': task.get('course_json_path'),
+            'presentation_path': task.get('presentation_path'),
+            'subtitles_path': task.get('subtitles_path'),
             'error': task.get('error'),
         })
     # 按最近排序，限制 50 条
@@ -888,7 +980,19 @@ def list_voices():
             {'id': 'female-qn-nana', 'name': '娜娜女声', 'gender': 'female'},
             {'id': 'male-qn-jingying', 'name': '精英男声', 'gender': 'male'},
             {'id': 'female-shaonv', 'name': '少女女声', 'gender': 'female'},
-        ]
+        ],
+        'volcengine': [
+            {
+                'id': 'zh_female_cancan_mars_bigtts',
+                'name': '灿灿（女声）',
+                'gender': 'female'
+            },
+            {
+                'id': 'zh_male_M392_conversation_wvae_bigtts',
+                'name': '通用男声',
+                'gender': 'male'
+            },
+        ],
     }
     return jsonify(voices)
 

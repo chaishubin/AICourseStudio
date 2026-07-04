@@ -15,7 +15,7 @@ class AICourseStudioApp {
             'init': '初始化',
             'extract': '提取内容',
             'render': '渲染幻灯片',
-            'llm': '文本摘要',
+            'llm': 'AI 课程设计',
             'tts': '文字转语音',
             'video': '合成视频',
             'complete': '完成'
@@ -41,6 +41,7 @@ class AICourseStudioApp {
                 renderEngine: document.getElementById('render-engine'),
 
                 llmEnabled: document.getElementById('llm-enabled'),
+                llmEngine: document.getElementById('llm-engine'),
                 llmModeGroup: document.getElementById('llm-mode-group'),
                 llmMode: document.getElementById('llm-mode'),
 
@@ -165,15 +166,15 @@ class AICourseStudioApp {
 
     // ── Multi-file upload ──────────────────────────────
     async handleFileSelect(file) {
-        const allowedExtensions = ['.ppt', '.pptx'];
+        const allowedExtensions = ['.docx', '.pdf', '.ppt', '.pptx'];
         const ext = '.' + file.name.split('.').pop().toLowerCase();
         if (!allowedExtensions.includes(ext)) {
-            alert('不支持的文件类型，请上传 .ppt 或 .pptx 文件');
+            alert('不支持的文件类型，请上传 Word、PDF 或 PowerPoint 文件');
             return;
         }
 
         if (file.size === 0) {
-            alert('文件为空，请选择有效的PPT文件');
+            alert('文件为空，请选择有效的课程文件');
             return;
         }
 
@@ -182,12 +183,16 @@ class AICourseStudioApp {
             file,
             filePath: null,
             fileName: file.name,
+            sourceType: ['.docx', '.pdf'].includes(ext) ? 'lesson-plan' : 'presentation',
             taskId: null,
             status: 'uploading',
             percentage: 0,
             stage: null,
             message: '上传中...',
             videoPath: null,
+            courseJsonPath: null,
+            presentationPath: null,
+            subtitlesPath: null,
             error: null
         });
 
@@ -263,8 +268,11 @@ class AICourseStudioApp {
 
         // Update convert/render buttons
         const pendingCount = this.state.files.filter(f => f.status === 'pending' && f.filePath).length;
+        const previewableCount = this.state.files.filter(
+            f => f.status === 'pending' && f.filePath && f.sourceType !== 'lesson-plan'
+        ).length;
         this.elements.convertBtn.disabled = pendingCount === 0 || this.state.isConverting;
-        this.elements.renderBtn.disabled = pendingCount === 0 || this.state.isConverting;
+        this.elements.renderBtn.disabled = previewableCount === 0 || this.state.isConverting;
     }
 
     _fileStatusText(item) {
@@ -314,6 +322,7 @@ class AICourseStudioApp {
         const voice = this.elements.voiceSelect.value;
         const renderEngine = this.elements.renderEngine.value;
         const llmEnabled = this.elements.llmEnabled.checked;
+        const llmEngine = this.elements.llmEngine.value;
         const llmMode = this.elements.llmMode.value;
 
         this.elements.conversionProgress.hidden = false;
@@ -329,10 +338,12 @@ class AICourseStudioApp {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         file_path: item.filePath,
+                        original_name: item.fileName,
                         tts_engine: ttsEngine,
                         voice: voice,
                         render_engine: renderEngine,
                         llm_enabled: llmEnabled,
+                        llm_engine: llmEngine,
                         llm_mode: llmMode
                     })
                 });
@@ -387,7 +398,9 @@ class AICourseStudioApp {
     // ── Render only (single file for now) ──────────────
     async handleRender() {
         // Find first pending file
-        const item = this.state.files.find(f => f.status === 'pending' && f.filePath);
+        const item = this.state.files.find(
+            f => f.status === 'pending' && f.filePath && f.sourceType !== 'lesson-plan'
+        );
         if (!item) return;
 
         const index = this.state.files.indexOf(item);
@@ -485,7 +498,10 @@ class AICourseStudioApp {
                             status: 'completed',
                             percentage: 100,
                             message: '转换完成',
-                            videoPath: data.video_path
+                            videoPath: data.video_path,
+                            courseJsonPath: data.course_json_path || null,
+                            presentationPath: data.presentation_path || null,
+                            subtitlesPath: data.subtitles_path || null
                         });
                         this.renderFileList();
                         this.renderResultsGrid();
@@ -581,6 +597,7 @@ class AICourseStudioApp {
             if (item.status === 'error') card.classList.add('error-card');
 
             if (item.status === 'completed' && item.videoPath) {
+                const artifacts = this._artifactLinks(item);
                 card.innerHTML = `
                     <div class="result-video-wrap">
                         <video src="/api/video?path=${encodeURIComponent(item.videoPath)}" controls preload="metadata"></video>
@@ -596,8 +613,19 @@ class AICourseStudioApp {
                             下载
                         </button>
                     </div>
+                    ${artifacts}
                 `;
                 card.querySelector('.result-card-download').addEventListener('click', () => this.handleDownload(index));
+            } else if (item.status === 'completed') {
+                card.innerHTML = `
+                    <div class="result-video-wrap">
+                        <div class="result-placeholder"><p>课程文件已生成</p></div>
+                    </div>
+                    <div class="result-card-footer">
+                        <span class="result-card-name">${this._esc(item.fileName)}</span>
+                    </div>
+                    ${this._artifactLinks(item)}
+                `;
             } else {
                 const placeholderText = item.status === 'error'
                     ? this._esc(item.error || '转换失败')
@@ -646,6 +674,19 @@ class AICourseStudioApp {
         }
     }
 
+    _artifactLinks(item) {
+        const artifacts = [
+            ['课程 JSON', item.courseJsonPath],
+            ['可编辑 PPT', item.presentationPath],
+            ['字幕 SRT', item.subtitlesPath],
+            ['课程视频', item.videoPath]
+        ].filter(([, path]) => path);
+        if (!artifacts.length) return '';
+        return `<div class="artifact-links">${artifacts.map(([label, path]) =>
+            `<a class="artifact-link" href="/api/download?path=${encodeURIComponent(path)}">${label}</a>`
+        ).join('')}</div>`;
+    }
+
     // ── Batch summary ──────────────────────────────────
     updateBatchSummary() {
         const total = this.state.files.filter(f => ['completed', 'processing', 'queued', 'error'].includes(f.status)).length;
@@ -670,8 +711,11 @@ class AICourseStudioApp {
 
     _refreshButtons() {
         const pendingCount = this.state.files.filter(f => f.status === 'pending' && f.filePath).length;
+        const previewableCount = this.state.files.filter(
+            f => f.status === 'pending' && f.filePath && f.sourceType !== 'lesson-plan'
+        ).length;
         this.elements.convertBtn.disabled = pendingCount === 0 || this.state.isConverting;
-        this.elements.renderBtn.disabled = pendingCount === 0 || this.state.isConverting;
+        this.elements.renderBtn.disabled = previewableCount === 0 || this.state.isConverting;
         if (this.state.isConverting) {
             this.elements.convertBtn.classList.add('loading');
             this.elements.renderBtn.classList.add('loading');
@@ -711,12 +755,16 @@ class AICourseStudioApp {
                     file: null,
                     filePath: null,
                     fileName: t.original_name || '未知文件',
+                    sourceType: /\.(docx|pdf)$/i.test(t.original_name || '') ? 'lesson-plan' : 'presentation',
                     taskId: t.task_id,
                     status: t.status === 'processing' || t.status === 'pending' ? 'processing' : t.status,
                     percentage: t.percentage || 0,
                     stage: t.stage,
                     message: t.message || '',
                     videoPath: t.video_path || null,
+                    courseJsonPath: t.course_json_path || null,
+                    presentationPath: t.presentation_path || null,
+                    subtitlesPath: t.subtitles_path || null,
                     error: t.error || null
                 }));
 

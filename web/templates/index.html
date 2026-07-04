@@ -12,7 +12,7 @@
         <!-- Hero -->
         <header class="hero">
             <h1 class="hero-title">AI Course Studio</h1>
-            <p class="hero-subtitle">从教案与演示文稿，生成课程视频、幻灯片与互动网页。</p>
+            <p class="hero-subtitle">上传 Word / PDF 教案，用 AI 生成可编辑课件、讲稿、配音字幕与课程视频。</p>
         </header>
 
         <main class="content">
@@ -20,7 +20,7 @@
                 <!-- 上传 -->
                 <section class="card" id="upload-module">
                     <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" accept=".ppt,.pptx" multiple hidden>
+                        <input type="file" id="file-input" accept=".docx,.pdf,.ppt,.pptx" multiple hidden>
                         <div class="upload-placeholder" id="upload-placeholder">
                             <div class="upload-icon-wrap">
                                 <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -30,7 +30,7 @@
                                 </svg>
                             </div>
                             <p class="upload-text">拖拽文件至此处，或点击上传</p>
-                            <p class="upload-hint">支持 .ppt / .pptx，可多选</p>
+                            <p class="upload-hint">支持 .docx / .pdf / .ppt / .pptx，可多选</p>
                         </div>
                         <div class="upload-progress" id="upload-progress" hidden>
                             <div class="progress-bar">
@@ -58,6 +58,10 @@
 
                 <!-- 选项 -->
                 <section class="card" id="options-module">
+                    <div class="workflow-note">
+                        <span class="workflow-badge">教案模式</span>
+                        <span>Word/PDF 将依次生成 Course JSON、可编辑 PPT、逐页讲稿、配音、字幕和视频。</span>
+                    </div>
                     <div class="options-grid">
                         <div class="option-group">
                             <label for="render-engine">渲染引擎</label>
@@ -70,6 +74,7 @@
                             <label for="tts-engine">语音引擎</label>
                             <select id="tts-engine" class="select-input">
                                 <option value="edge-tts">Edge TTS (免费)</option>
+                                <option value="volcengine">火山引擎 TTS</option>
                                 <option value="minimax">MiniMax (需API)</option>
                             </select>
                         </div>
@@ -82,21 +87,26 @@
                             </select>
                         </div>
                         <div class="option-group toggle-group">
-                            <label>LLM 文本摘要</label>
+                            <label>AI 内容生成</label>
                             <div class="toggle-row">
                                 <span style="font-size:13px;color:var(--color-text-3)">关闭</span>
                                 <label class="toggle-switch">
-                                    <input type="checkbox" id="llm-enabled">
+                                    <input type="checkbox" id="llm-enabled" checked>
                                     <span class="toggle-slider"></span>
                                 </label>
                                 <span style="font-size:13px;color:var(--color-text-3)">开启</span>
                             </div>
                         </div>
-                        <div class="option-group llm-mode-group" id="llm-mode-group">
+                        <div class="option-group llm-mode-group visible" id="llm-mode-group">
+                            <label for="llm-engine">文本模型</label>
+                            <select id="llm-engine" class="select-input">
+                                <option value="qwen">通义千问（百炼）</option>
+                                <option value="minimax">MiniMax</option>
+                            </select>
                             <label for="llm-mode">摘要模式</label>
                             <select id="llm-mode" class="select-input">
-                                <option value="per-page">逐页摘要</option>
-                                <option value="whole-document">整文档摘要</option>
+                                <option value="per-page">逐页讲稿</option>
+                                <option value="whole-document">整篇理解</option>
                             </select>
                         </div>
                     </div>
@@ -106,7 +116,7 @@
                 <section class="card" id="convert-module">
                     <div class="convert-area">
                         <button class="btn-convert" id="convert-btn" disabled>
-                            <span class="btn-text">开始转换</span>
+                            <span class="btn-text">生成课程</span>
                             <span class="btn-loading" hidden>
                                 <span class="spinner"></span>
                                 转换中...
@@ -155,7 +165,7 @@
                             <div class="step-line"></div>
                             <div class="step" id="step-llm">
                                 <span class="step-dot"></span>
-                                <span class="step-label">文本摘要</span>
+                                <span class="step-label">AI 课程设计</span>
                             </div>
                             <div class="step-line"></div>
                             <div class="step" id="step-tts">
@@ -189,7 +199,7 @@
 
                 <!-- 转换结果 -->
                 <section class="card" id="results-module" hidden>
-                    <h3 class="results-title">转换结果</h3>
+                    <h3 class="results-title">课程产物</h3>
                     <div class="results-grid" id="results-grid"></div>
                 </section>
             </div>
@@ -203,7 +213,7 @@
         </footer>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=6"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=7"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>
