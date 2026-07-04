@@ -1,0 +1,62 @@
+# MacOS-friendly Dockerfile for vidppt (does NOT modify original docker/Dockerfile)
+# Supports multi-arch builds (amd64 & arm64) via buildx
+# Build example:
+# docker buildx build --platform linux/amd64,linux/arm64 -t vidppt:latest -f docker/Dockerfile.macos .
+
+ARG BUILDPLATFORM
+FROM --platform=${BUILDPLATFORM} python:3.11-slim
+
+ARG INSTALL_LIBREOFFICE=yes
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=zh_CN.UTF-8
+ENV LC_ALL=zh_CN.UTF-8
+ENV PYTHONIOENCODING=utf-8
+ENV PYTHONUTF8=1
+
+# 安装系统依赖（可通过 BUILD ARG 控制是否安装 LibreOffice 来减小镜像）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    locales \
+    fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
+    poppler-utils \
+    ffmpeg \
+    libglib2.0-0 libsm6 libxrender1 libxext6 \
+    ca-certificates \
+    && if [ "${INSTALL_LIBREOFFICE}" = "yes" ]; then apt-get install -y --no-install-recommends libreoffice-impress libreoffice-common; fi \
+    && rm -rf /var/lib/apt/lists/*
+
+# 生成中文 locale
+RUN locale-gen zh_CN.UTF-8 && update-locale LANG=zh_CN.UTF-8
+
+# 优先使用 Droid Sans 作为中文字体
+RUN rm -f /etc/fonts/conf.d/40-wqy-microhei.conf /etc/fonts/conf.d/90-non-tt-wqy-microhei.conf || true
+# 使用预先添加的配置文件替代 heredoc（避免 Dockerfile 解析问题）
+COPY docker/99-vidppt-fonts.conf /etc/fonts/conf.d/99-vidppt-fonts.conf
+RUN fc-cache -fv || true
+
+WORKDIR /app
+
+# 复制并安装 Python 依赖（利用层缓存）
+COPY pyproject.toml .
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+    python-pptx>=1.0.2 \
+    Pillow>=10.0.0 \
+    spire.presentation>=9.0.0 \
+    edge-tts>=7.2.8 \
+    moviepy>=2.2.1 \
+    loguru>=0.7.0 \
+    flask>=3.0.0 \
+    pdfplumber>=0.10.0 \
+    pdf2image>=1.16.0 \
+    httpx>=0.25.0 \
+    psutil>=5.9.0
+
+# 复制项目代码（不覆盖原有 docker/Dockerfile）
+COPY vidppt/ vidppt/
+COPY web/ web/
+
+RUN mkdir -p /app/web/uploads /app/web/outputs
+
+EXPOSE 5000
+
+CMD ["python3", "web/app.py", "5000"]

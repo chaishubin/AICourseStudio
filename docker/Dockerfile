@@ -58,17 +58,18 @@ COPY pyproject.toml .
 # 配置 pip 使用清华镜像源
 RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
      pip install --break-system-packages --no-cache-dir \
-    python-pptx>=1.0.2 \
-    Pillow>=10.0.0 \
-    spire.presentation>=9.0.0 \
-    edge-tts>=7.2.8 \
-    moviepy>=2.2.1 \
-    loguru>=0.7.0 \
-    flask>=3.0.0 \
-    pdfplumber>=0.10.0 \
-    pdf2image>=1.16.0 \
-    httpx>=0.25.0 \
-    psutil>=5.9.0
+    "python-pptx>=1.0.2" \
+    "python-docx>=1.1.0" \
+    "Pillow>=10.0.0" \
+    "spire.presentation>=9.0.0" \
+    "edge-tts>=7.2.8" \
+    "moviepy>=2.2.1" \
+    "loguru>=0.7.0" \
+    "flask>=3.0.0" \
+    "pdfplumber>=0.10.0" \
+    "pdf2image>=1.16.0" \
+    "httpx>=0.25.0" \
+    "psutil>=5.9.0"
 
 # 6. 复制项目代码
 COPY vidppt/ vidppt/

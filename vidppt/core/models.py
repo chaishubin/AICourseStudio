@@ -68,7 +68,7 @@ class ProcessConfig:
 
     # LLM 配置
     llm_enabled: bool = False
-    llm_engine: str = "minimax"
+    llm_engine: str = "qwen"
     llm_mode: str = "per-page"  # "per-page" 或 "whole-document"
     llm_options: dict = field(default_factory=dict)
 

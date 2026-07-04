@@ -79,6 +79,10 @@ class Pipeline:
                 timeout=self.config.tts_options.get("timeout", 60.0),
                 max_retries=self.config.tts_options.get("max_retries", 3),
             )
+        elif self.config.tts_engine == "volcengine":
+            from .engines.tts.volcengine_tts_engine import VolcengineTTSEngine
+
+            return VolcengineTTSEngine(**self.config.tts_options)
         else:
             raise ValueError(f"不支持的 TTS 引擎: {self.config.tts_engine}")
 
@@ -98,6 +102,10 @@ class Pipeline:
                 timeout=llm_opts.get("timeout", MiniMaxLLMEngine.DEFAULT_TIMEOUT),
                 max_retries=llm_opts.get("max_retries", MiniMaxLLMEngine.DEFAULT_MAX_RETRIES),
             )
+        elif self.config.llm_engine == "qwen":
+            from .engines.llm.qwen_llm_engine import QwenLLMEngine
+
+            return QwenLLMEngine(**self.config.llm_options)
         else:
             raise ValueError(f"不支持的 LLM 引擎: {self.config.llm_engine}")
 
@@ -219,7 +227,7 @@ class Pipeline:
         logger.info(
             f"开始文字转语音"
             f"（引擎: {self.config.tts_engine}, "
-            f"声音: {self.config.tts_voice if self.config.tts_engine == 'edge-tts' else self.config.tts_options.get('voice_id', 'male-qn-qingse')}, "
+            f"声音: {self._api_voice()}, "
             f"语速: {self.config.tts_rate}）"
         )
 
@@ -267,17 +275,17 @@ class Pipeline:
                         input_path=str(self.config.input_path),
                     )
                 else:
-                    # minimax：voice 来自 tts_options，其余 tts_options 也作为 cache key
+                    # API TTS：voice 来自 tts_options，其余选项也作为 cache key
                     cached_audio = self.cache_manager.get(
                         text=page.text,
                         tts_engine=self.config.tts_engine,
-                        voice=self.config.tts_options.get("voice_id", "male-qn-qingse"),
+                        voice=self._api_voice(),
                         rate=self.config.tts_rate,
                         input_path=str(self.config.input_path),
                         **{
                             k: v
                             for k, v in self.config.tts_options.items()
-                            if k != "api_key"
+                            if k not in {"api_key", "access_token"}
                         },
                     )
 
@@ -321,19 +329,15 @@ class Pipeline:
                             progress_callback=tts_progress_callback,
                         )
                     )
-                elif self.config.tts_engine == "minimax":
-                    # MiniMax 引擎：voice_id 来自 tts_options，
-                    # 额外参数（emotion、pronunciation_dict）也来自 tts_options
-                    # 引擎级参数（model、sample_rate 等）已在初始化时传入，不重复传递
-                    minimax_voice = self.config.tts_options.get(
-                        "voice_id", "male-qn-qingse"
-                    )
-                    minimax_extra = {
+                elif self.config.tts_engine in {"minimax", "volcengine"}:
+                    api_extra = {
                         k: v
                         for k, v in self.config.tts_options.items()
                         if k
                         not in (
                             "api_key",
+                            "appid",
+                            "access_token",
                             "api_url",
                             "model",
                             "sample_rate",
@@ -341,6 +345,9 @@ class Pipeline:
                             "audio_format",
                             "channel",
                             "voice_id",
+                            "voice_type",
+                            "cluster",
+                            "uid",
                             "timeout",
                             "max_retries",
                         )
@@ -348,10 +355,10 @@ class Pipeline:
                     errors = _run_async(
                         self.tts_engine.batch_convert(
                             page_texts,
-                            voice=minimax_voice,
+                            voice=self._api_voice(),
                             rate=self.config.tts_rate,
                             progress_callback=tts_progress_callback,
-                            **minimax_extra,
+                            **api_extra,
                         )
                     )
                 else:
@@ -385,15 +392,13 @@ class Pipeline:
                             audio_path=audio_path,
                             text=text,
                             tts_engine=self.config.tts_engine,
-                            voice=self.config.tts_options.get(
-                                "voice_id", "male-qn-qingse"
-                            ),
+                            voice=self._api_voice(),
                             rate=self.config.tts_rate,
                             input_path=str(self.config.input_path),
                             **{
                                 k: v
                                 for k, v in self.config.tts_options.items()
-                                if k != "api_key"
+                                if k not in {"api_key", "access_token"}
                             },
                         )
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
@@ -425,6 +430,15 @@ class Pipeline:
             if "edge-tts" in self.config.tts_engine:
                 logger.warning("请检查网络连接，edge-tts 需要访问微软服务器")
                 logger.info("提示: 可以使用 --tts-engine minimax 并设置 MINIMAX_API 环境变量")
+
+    def _api_voice(self) -> str:
+        if self.config.tts_engine == "edge-tts":
+            return self.config.tts_voice or "zh-CN-XiaoxiaoNeural"
+        if self.config.tts_engine == "volcengine":
+            return self.config.tts_options.get(
+                "voice_type", "zh_female_cancan_mars_bigtts"
+            )
+        return self.config.tts_options.get("voice_id", "male-qn-qingse")
 
     def _compose_video(
         self, content: DocumentContent, progress: ProgressTracker

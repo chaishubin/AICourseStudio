@@ -14,8 +14,6 @@ from .core.interfaces import DocumentProcessor, TTSEngine, OCREngine, ImageConve
 from .core.models import DocumentContent, PageContent, ProcessConfig
 from .core.course import Course, CourseSection, KnowledgePoint
 from .core.registry import ProcessorRegistry, register_processor
-from .pipeline import Pipeline
-
 __all__ = [
     "DocumentProcessor",
     "TTSEngine",
@@ -30,4 +28,22 @@ __all__ = [
     "ProcessorRegistry",
     "register_processor",
     "Pipeline",
+    "CoursePipeline",
+    "CoursePipelineResult",
 ]
+
+
+def __getattr__(name):
+    """延迟加载媒体流水线，避免导入数据模型时强制加载 TTS/MoviePy。"""
+    if name == "Pipeline":
+        from .pipeline import Pipeline
+
+        return Pipeline
+    if name in {"CoursePipeline", "CoursePipelineResult"}:
+        from .course_pipeline import CoursePipeline, CoursePipelineResult
+
+        return {
+            "CoursePipeline": CoursePipeline,
+            "CoursePipelineResult": CoursePipelineResult,
+        }[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
