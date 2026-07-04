@@ -41,6 +41,7 @@ OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'ppt', 'pptx'}
 STATE_FILE = OUTPUT_FOLDER / 'state.json'
 _state_lock = threading.Lock()
+_continue_lock = threading.Lock()
 MAX_STATE_ENTRIES = 50
 
 # 确保目录存在
@@ -132,7 +133,7 @@ def load_state():
         if not task_id:
             continue
         status = entry.get('status', '')
-        if status in ('completed', 'error'):
+        if status in ('awaiting_confirmation', 'completed', 'error'):
             tasks[task_id] = entry
 
 
@@ -303,6 +304,24 @@ class WebProgressTracker:
         event.update(artifacts)
         self.queue.put(event)
 
+    def preview_ready(self, preview_path: str, **artifacts):
+        """暂停任务并通知前端进入逐页讲稿确认阶段。"""
+        self._complete_current_stage()
+        self._update_task(
+            status='awaiting_confirmation',
+            stage='preview',
+            percentage=50,
+            message='预览已生成，请确认逐页讲稿',
+            preview_path=preview_path,
+            **artifacts,
+        )
+        self.queue.put({
+            'type': 'preview_ready',
+            'preview_path': preview_path,
+            'message': '预览已生成，请确认逐页讲稿',
+            **artifacts,
+        })
+
     def error(self, error_msg: str):
         """标记错误"""
         self._complete_current_stage()
@@ -416,70 +435,21 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
 
             progress.update('llm', total_pages, total_pages, '文本摘要完成')
 
-        # 5. TTS 转换
-        progress.set_stage('tts', '文字转语音...')
-
-        if config.enable_tts:
-            # 手动执行 TTS（简化版本，实际应该使用 pipeline 的方法）
-            import asyncio
-            from vidppt.core.interfaces import TTSEngine
-
-            tts_engine = pipeline.tts_engine
-
-            page_texts = []
-            for page in content.pages:
-                if page.text and page.text.strip():
-                    audio_path = output_dir / str(page.page_number) / "audio.mp3"
-                    audio_path.parent.mkdir(parents=True, exist_ok=True)
-                    page.audio = audio_path
-                    page_texts.append((page.page_number, page.text, audio_path))
-
-            total_tts = len(page_texts)
-
-            # 执行 TTS
-            if page_texts:
-                def tts_callback(current: int, total: int, info: str):
-                    progress.update('tts', current, total, info)
-
-                # 运行异步 TTS
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                try:
-                    errors = loop.run_until_complete(
-                        tts_engine.batch_convert(
-                            page_texts,
-                            voice=pipeline._api_voice(),
-                            rate=config.tts_rate,
-                            progress_callback=tts_callback,
-                        )
-                    )
-
-                    # 处理失败的页面
-                    for page_num, _ in errors:
-                        for page in content.pages:
-                            if page.page_number == page_num:
-                                page.audio = None
-                finally:
-                    loop.close()
-
-            progress.update('tts', total_tts, total_tts, '语音转换完成')
-
-        # 6. 视频合成
-        progress.set_stage('video', '合成视频...')
-
-        if config.enable_video:
-            from vidppt.utils.video_composer import VideoComposer
-
-            video_path = output_dir / f"{Path(file_path).stem}.mp4"
-            VideoComposer.compose(content, config, video_path)
-
-            progress.update('video', 1, 1, f'视频生成完成')
-
-            # 完成
-            progress.complete(str(video_path))
-        else:
-            progress.complete(None)
+        preview_path = _write_preview(
+            task_id,
+            source_type='presentation',
+            pages=[
+                {
+                    'page_number': page.page_number,
+                    'title': _page_title(page.text, page.page_number),
+                    'image_path': str(page.slide_image),
+                    'script': page.text,
+                    'original_script': page.text,
+                }
+                for page in content.pages
+            ],
+        )
+        progress.preview_ready(str(preview_path))
 
     except Exception as e:
         import traceback
@@ -533,21 +503,208 @@ def run_course_generation(
             tts_voice=tts_voice,
             tts_options=tts_options,
             render_engine=render_engine,
-            enable_tts=True,
-            enable_video=True,
+            enable_tts=False,
+            enable_video=False,
         )
 
         progress.set_stage('render', '生成可编辑 PPT 与课程资源...')
         from vidppt.course_pipeline import CoursePipeline
         result = CoursePipeline(llm_provider).run(
-            Path(file_path), output_dir, media_config=config
+            Path(file_path), output_dir
         )
 
-        progress.complete(
-            str(result.video) if result.video else None,
+        from vidppt.processors.ppt_processor import PPTProcessor
+        preview_content = PPTProcessor().process(ProcessConfig(
+            **{
+                **config.__dict__,
+                'input_path': result.presentation,
+                'save_intermediate': True,
+                'skip_existing': False,
+            }
+        ))
+        if len(preview_content.pages) != len(result.course.sections):
+            raise RuntimeError("生成 PPT 页数与课程讲稿数量不一致")
+
+        preview_path = _write_preview(
+            task_id,
+            source_type='lesson_plan',
+            pages=[
+                {
+                    'page_number': page.page_number,
+                    'title': section.title,
+                    'image_path': str(page.slide_image),
+                    'script': section.script or section.title,
+                    'original_script': section.script or section.title,
+                }
+                for page, section in zip(preview_content.pages, result.course.sections)
+            ],
             course_json_path=str(result.course_json),
             presentation_path=str(result.presentation),
-            subtitles_path=str(result.subtitles) if result.subtitles else None,
+        )
+        progress.preview_ready(
+            str(preview_path),
+            course_json_path=str(result.course_json),
+            presentation_path=str(result.presentation),
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        progress.error(str(e))
+
+
+def _page_title(text: str, page_number: int) -> str:
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), '')
+    if first_line in {'[幻灯片正文]', '[演讲者备注]'}:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        first_line = lines[1] if len(lines) > 1 else ''
+    return first_line[:80] or f'第 {page_number} 页'
+
+
+def _preview_file(task_id: str) -> Path:
+    task = tasks.get(task_id)
+    if not task:
+        raise KeyError("任务不存在")
+    return Path(task['output_dir']) / 'preview.json'
+
+
+def _write_preview(task_id: str, source_type: str, pages: list[dict], **artifacts) -> Path:
+    preview_path = _preview_file(task_id)
+    payload = {
+        'task_id': task_id,
+        'source_type': source_type,
+        'pages': pages,
+        **artifacts,
+    }
+    preview_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    return preview_path
+
+
+def _read_preview(task_id: str) -> dict:
+    preview_path = _preview_file(task_id)
+    if not preview_path.exists():
+        raise FileNotFoundError("预览数据不存在")
+    return json.loads(preview_path.read_text(encoding='utf-8'))
+
+
+def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
+    preview = _read_preview(task_id)
+    by_page = {
+        int(item['page_number']): str(item.get('script', '')).strip()
+        for item in updates
+        if 'page_number' in item
+    }
+    for page in preview.get('pages', []):
+        page_number = int(page['page_number'])
+        if page_number in by_page:
+            page['script'] = by_page[page_number]
+    if not any(page.get('script', '').strip() for page in preview.get('pages', [])):
+        raise ValueError("至少需要保留一页非空讲稿")
+    _preview_file(task_id).write_text(
+        json.dumps(preview, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+    course_json_path = preview.get('course_json_path')
+    if course_json_path:
+        course_path = Path(course_json_path)
+        course = Course.from_dict(json.loads(course_path.read_text(encoding='utf-8')))
+        scripts = {
+            int(page['page_number']): page.get('script', '')
+            for page in preview.get('pages', [])
+        }
+        for page_number, section in enumerate(course.sections, 1):
+            if page_number in scripts:
+                section.script = scripts[page_number]
+        course_path.write_text(
+            json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
+            encoding='utf-8',
+        )
+    return preview
+
+
+def run_media_generation(task_id: str):
+    """读取用户确认后的逐页讲稿，生成配音、字幕和最终视频。"""
+    queue = progress_queues.get(task_id)
+    if not queue:
+        return
+    progress = WebProgressTracker(task_id, queue)
+    try:
+        from moviepy import AudioFileClip
+        from vidppt.core.models import DocumentContent, PageContent
+        from vidppt.renderers.subtitles import SubtitleRenderer
+        from vidppt.utils.progress import ProgressTracker
+        from vidppt.utils.video_composer import VideoComposer
+        from vidppt.course_pipeline import CoursePipeline
+
+        task = tasks[task_id]
+        preview = _read_preview(task_id)
+        options = task.get('media_options', {})
+        config = ProcessConfig(
+            input_path=Path(task['file_path']),
+            output_dir=Path(task['output_dir']),
+            save_intermediate=True,
+            skip_existing=False,
+            tts_engine=options.get('tts_engine', 'edge-tts'),
+            tts_voice=options.get('tts_voice'),
+            tts_options=options.get('tts_options', {}),
+            render_engine=options.get('render_engine', 'spire'),
+            enable_tts=True,
+            enable_video=True,
+        )
+        content = DocumentContent(pages=[
+            PageContent(
+                page_number=int(page['page_number']),
+                text=page.get('script', ''),
+                slide_image=Path(page['image_path']),
+            )
+            for page in preview.get('pages', [])
+        ])
+
+        progress.set_stage('tts', '根据确认后的讲稿生成配音...')
+        Pipeline(config)._generate_audio(
+            content, ProgressTracker(total_pages=len(content.pages))
+        )
+        progress.update('tts', len(content.pages), len(content.pages), '语音转换完成')
+
+        timed_pages = []
+        for page in content.pages:
+            if page.text.strip() and (not page.audio or not page.audio.exists()):
+                raise RuntimeError(f"第 {page.page_number} 页配音生成失败")
+            duration = 3.0
+            if page.audio and page.audio.exists():
+                audio = AudioFileClip(str(page.audio))
+                duration = audio.duration
+                audio.close()
+            timed_pages.append((
+                CourseSection(
+                    id=f"slide-{page.page_number}",
+                    title=_page_title(page.text, page.page_number),
+                    script=page.text,
+                ),
+                duration,
+            ))
+
+        stem = Path(task['file_path']).stem
+        subtitles = SubtitleRenderer().render_course(
+            timed_pages, config.output_dir / f'{stem}.srt'
+        )
+        progress.set_stage('video', '合成视频并烧录字幕...')
+        base_video = config.output_dir / f'{stem}.base.mp4'
+        VideoComposer.compose(content, config, base_video)
+        if not base_video.exists():
+            raise RuntimeError("视频合成未产生输出文件")
+        video_path = config.output_dir / f'{stem}.mp4'
+        CoursePipeline._burn_subtitles(base_video, subtitles, video_path)
+        base_video.unlink(missing_ok=True)
+        progress.update('video', 1, 1, '视频生成完成')
+        progress.complete(
+            str(video_path),
+            course_json_path=preview.get('course_json_path'),
+            presentation_path=preview.get('presentation_path'),
+            subtitles_path=str(subtitles),
         )
     except Exception as e:
         import traceback
@@ -649,6 +806,16 @@ def convert_ppt():
         'file_path': file_path,
         'output_dir': str(output_dir),
         'original_name': original_name,
+        'media_options': {
+            'tts_engine': tts_engine,
+            'tts_voice': None if tts_engine in {'volcengine', 'minimax'} else voice,
+            'tts_options': (
+                {'voice_type': voice} if tts_engine == 'volcengine'
+                else {'voice_id': voice} if tts_engine == 'minimax'
+                else {}
+            ),
+            'render_engine': render_engine,
+        },
     }
 
     suffix = Path(file_path).suffix.lower()
@@ -668,6 +835,84 @@ def convert_ppt():
         'task_id': task_id,
         'message': '转换已启动'
     })
+
+
+@app.route('/api/course-preview/<task_id>')
+def get_course_preview(task_id):
+    """返回逐页 PPT 图片和可编辑讲稿。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '任务尚未进入讲稿确认阶段'}), 409
+    try:
+        preview = _read_preview(task_id)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 404
+    preview['pages'] = [
+        {
+            **page,
+            'image_url': f"/api/slide-image?path={page['image_path']}",
+        }
+        for page in preview.get('pages', [])
+    ]
+    return jsonify(preview)
+
+
+@app.route('/api/course-preview/<task_id>', methods=['PATCH'])
+def save_course_preview(task_id):
+    """持久化用户修改的逐页讲稿，但不启动媒体生成。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '当前任务不能修改讲稿'}), 409
+    data = request.get_json(silent=True) or {}
+    pages = data.get('pages')
+    if not isinstance(pages, list):
+        return jsonify({'error': 'pages 必须是数组'}), 400
+    try:
+        _update_preview_scripts(task_id, pages)
+    except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    tasks[task_id]['message'] = '讲稿已保存，等待继续'
+    save_state(task_id)
+    return jsonify({'success': True, 'message': '讲稿已保存'})
+
+
+@app.route('/api/course-continue/<task_id>', methods=['POST'])
+def continue_course(task_id):
+    """确认最终讲稿，并将 TTS/字幕/视频阶段重新加入转换队列。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    data = request.get_json(silent=True) or {}
+    pages = data.get('pages')
+
+    with _continue_lock:
+        if task.get('status') != 'awaiting_confirmation':
+            return jsonify({'error': '任务已继续或当前状态不可继续'}), 409
+        try:
+            if pages is not None:
+                if not isinstance(pages, list):
+                    raise ValueError("pages 必须是数组")
+                _update_preview_scripts(task_id, pages)
+            else:
+                _read_preview(task_id)
+        except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        progress_queues[task_id] = Queue()
+        task.update(
+            status='pending',
+            stage='tts',
+            percentage=50,
+            message='已确认讲稿，等待生成配音',
+        )
+        save_state(task_id)
+        conversion_queue.enqueue(run_media_generation, task_id)
+
+    return jsonify({'success': True, 'message': '已继续生成视频'})
 
 
 @app.route('/api/render-slides', methods=['POST'])
@@ -763,7 +1008,7 @@ def get_progress(task_id):
 
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-                if data.get('type') in ('complete', 'error'):
+                if data.get('type') in ('preview_ready', 'complete', 'error'):
                     if task_id in progress_queues:
                         del progress_queues[task_id]
                     break
@@ -804,6 +1049,7 @@ def get_status(task_id):
         'course_json_path': task.get('course_json_path'),
         'presentation_path': task.get('presentation_path'),
         'subtitles_path': task.get('subtitles_path'),
+        'preview_path': task.get('preview_path'),
         'error': task.get('error')
     })
 
@@ -824,6 +1070,7 @@ def get_tasks():
             'course_json_path': task.get('course_json_path'),
             'presentation_path': task.get('presentation_path'),
             'subtitles_path': task.get('subtitles_path'),
+            'preview_path': task.get('preview_path'),
             'error': task.get('error'),
         })
     # 按最近排序，限制 50 条

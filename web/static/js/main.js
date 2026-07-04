@@ -16,6 +16,7 @@ class AICourseStudioApp {
             'extract': '提取内容',
             'render': '渲染幻灯片',
             'llm': 'AI 课程设计',
+            'preview': '确认讲稿',
             'tts': '文字转语音',
             'video': '合成视频',
             'complete': '完成'
@@ -67,7 +68,17 @@ class AICourseStudioApp {
                 slidesToggle: document.getElementById('slides-toggle'),
                 slidesToggleIcon: document.getElementById('slides-toggle-icon'),
                 slidesBody: document.getElementById('slides-body'),
-                slidesGrid: document.getElementById('slides-grid')
+                slidesGrid: document.getElementById('slides-grid'),
+
+                coursePreviewModule: document.getElementById('course-preview-module'),
+                coursePreviewPages: document.getElementById('course-preview-pages'),
+                coursePreviewSaveState: document.getElementById('course-preview-save-state'),
+                saveScriptsBtn: document.getElementById('save-scripts-btn'),
+                continueCourseBtn: document.getElementById('continue-course-btn'),
+                metricTotal: document.getElementById('metric-total'),
+                metricProcessing: document.getElementById('metric-processing'),
+                metricReview: document.getElementById('metric-review'),
+                metricCompleted: document.getElementById('metric-completed')
             };
         } catch(e) {
             console.error('AICourseStudio element init failed:', e);
@@ -131,6 +142,8 @@ class AICourseStudioApp {
 
         const { slidesToggle } = this.elements;
         slidesToggle.addEventListener('click', () => this.toggleSlides());
+        this.elements.saveScriptsBtn.addEventListener('click', () => this.savePreviewScripts());
+        this.elements.continueCourseBtn.addEventListener('click', () => this.continueCourse());
     }
 
     toggleSlides() {
@@ -273,6 +286,20 @@ class AICourseStudioApp {
         ).length;
         this.elements.convertBtn.disabled = pendingCount === 0 || this.state.isConverting;
         this.elements.renderBtn.disabled = previewableCount === 0 || this.state.isConverting;
+        this.updateWorkspaceMetrics();
+    }
+
+    updateWorkspaceMetrics() {
+        const files = this.state.files;
+        const processing = files.filter(item =>
+            ['uploading', 'queued', 'processing'].includes(item.status)
+        ).length;
+        const review = files.filter(item => item.status === 'awaiting_confirmation').length;
+        const completed = files.filter(item => item.status === 'completed').length;
+        if (this.elements.metricTotal) this.elements.metricTotal.textContent = files.length;
+        if (this.elements.metricProcessing) this.elements.metricProcessing.textContent = processing;
+        if (this.elements.metricReview) this.elements.metricReview.textContent = review;
+        if (this.elements.metricCompleted) this.elements.metricCompleted.textContent = completed;
     }
 
     _fileStatusText(item) {
@@ -280,6 +307,7 @@ class AICourseStudioApp {
             case 'uploading': return item.message || '上传中...';
             case 'pending': return '待转换';
             case 'queued': return '排队中';
+            case 'awaiting_confirmation': return '等待确认讲稿';
             case 'processing': {
                 const stageName = this.stageNames[item.stage] || item.stage || '';
                 return `${stageName} ${Math.round(item.percentage)}%`;
@@ -385,7 +413,7 @@ class AICourseStudioApp {
         return new Promise((resolve) => {
             const check = () => {
                 const found = this.getItemByTaskId(taskId);
-                if (!found || ['completed', 'error'].includes(found.item.status)) {
+                if (!found || ['awaiting_confirmation', 'completed', 'error'].includes(found.item.status)) {
                     resolve();
                 } else {
                     setTimeout(check, 500);
@@ -491,6 +519,24 @@ class AICourseStudioApp {
                         this.loadSlides(taskId);
                         break;
 
+                    case 'preview_ready':
+                        eventSource.close();
+                        this.state.activeEventSources.delete(taskId);
+                        this.updateItem(index, {
+                            status: 'awaiting_confirmation',
+                            percentage: 50,
+                            stage: 'preview',
+                            message: '请确认逐页讲稿',
+                            courseJsonPath: data.course_json_path || null,
+                            presentationPath: data.presentation_path || null
+                        });
+                        this.renderFileList();
+                        this.renderResultsGrid();
+                        this.updateBatchSummary();
+                        this.showStatus('success', '预览已生成，请确认讲稿');
+                        this.loadCoursePreview(taskId);
+                        break;
+
                     case 'complete':
                         eventSource.close();
                         this.state.activeEventSources.delete(taskId);
@@ -560,7 +606,16 @@ class AICourseStudioApp {
             fetch(`/api/status/${taskId}`)
                 .then(r => r.json())
                 .then(d => {
-                    if (d.status === 'completed') {
+                    if (d.status === 'awaiting_confirmation') {
+                        this.updateItem(found.index, {
+                            status: 'awaiting_confirmation',
+                            percentage: 50,
+                            message: '请确认逐页讲稿'
+                        });
+                        this.renderFileList();
+                        this.renderResultsGrid();
+                        this.loadCoursePreview(taskId);
+                    } else if (d.status === 'completed') {
                         const idx = found.index;
                         this.updateItem(idx, { status: 'completed', percentage: 100, message: '转换完成', videoPath: d.video_path });
                         this.renderFileList();
@@ -589,14 +644,25 @@ class AICourseStudioApp {
         let hasVisible = false;
 
         this.state.files.forEach((item, index) => {
-            if (!['completed', 'processing', 'queued', 'error'].includes(item.status)) return;
+            if (!['awaiting_confirmation', 'completed', 'processing', 'queued', 'error'].includes(item.status)) return;
             hasVisible = true;
 
             const card = document.createElement('div');
             card.className = 'result-card';
             if (item.status === 'error') card.classList.add('error-card');
 
-            if (item.status === 'completed' && item.videoPath) {
+            if (item.status === 'awaiting_confirmation') {
+                card.innerHTML = `
+                    <div class="result-video-wrap">
+                        <div class="result-placeholder"><p>等待确认逐页讲稿</p></div>
+                    </div>
+                    <div class="result-card-footer">
+                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                    </div>
+                    <button class="result-card-download preview-open-btn" data-index="${index}">编辑讲稿</button>
+                `;
+                card.querySelector('.preview-open-btn').addEventListener('click', () => this.loadCoursePreview(item.taskId));
+            } else if (item.status === 'completed' && item.videoPath) {
                 const artifacts = this._artifactLinks(item);
                 card.innerHTML = `
                     <div class="result-video-wrap">
@@ -689,7 +755,7 @@ class AICourseStudioApp {
 
     // ── Batch summary ──────────────────────────────────
     updateBatchSummary() {
-        const total = this.state.files.filter(f => ['completed', 'processing', 'queued', 'error'].includes(f.status)).length;
+        const total = this.state.files.filter(f => ['awaiting_confirmation', 'completed', 'processing', 'queued', 'error'].includes(f.status)).length;
         const completed = this.state.files.filter(f => f.status === 'completed').length;
         const failed = this.state.files.filter(f => f.status === 'error').length;
 
@@ -765,6 +831,7 @@ class AICourseStudioApp {
                     courseJsonPath: t.course_json_path || null,
                     presentationPath: t.presentation_path || null,
                     subtitlesPath: t.subtitles_path || null,
+                    previewPath: t.preview_path || null,
                     error: t.error || null
                 }));
 
@@ -778,9 +845,105 @@ class AICourseStudioApp {
                         this.startProgressStream(item.taskId);
                     }
                 }
+                const awaiting = this.state.files.find(item => item.status === 'awaiting_confirmation');
+                if (awaiting) this.loadCoursePreview(awaiting.taskId);
             }
         } catch {
             // No tasks to restore
+        }
+    }
+
+    // ── Editable course preview ─────────────────────────
+    async loadCoursePreview(taskId) {
+        try {
+            const response = await fetch(`/api/course-preview/${taskId}`);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '加载预览失败');
+            this.renderCoursePreview(taskId, data.pages || []);
+        } catch (error) {
+            this.showStatus('error', error.message);
+        }
+    }
+
+    renderCoursePreview(taskId, pages) {
+        const { coursePreviewModule, coursePreviewPages, coursePreviewSaveState } = this.elements;
+        this.elements.continueCourseBtn.disabled = false;
+        coursePreviewModule.dataset.taskId = taskId;
+        coursePreviewPages.innerHTML = '';
+        pages.forEach(page => {
+            const card = document.createElement('article');
+            card.className = 'course-preview-page';
+            card.dataset.pageNumber = page.page_number;
+            card.innerHTML = `
+                <img class="course-preview-image" src="${page.image_url}" alt="第 ${page.page_number} 页">
+                <div class="course-preview-editor">
+                    <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}</div>
+                    <textarea class="course-preview-script" aria-label="第 ${page.page_number} 页讲稿">${this._esc(page.script || '')}</textarea>
+                </div>
+            `;
+            card.querySelector('textarea').addEventListener('input', () => {
+                coursePreviewSaveState.textContent = '有未保存修改';
+                coursePreviewSaveState.classList.remove('saved');
+            });
+            coursePreviewPages.appendChild(card);
+        });
+        coursePreviewSaveState.textContent = '';
+        coursePreviewModule.hidden = false;
+        coursePreviewModule.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    collectPreviewScripts() {
+        return Array.from(this.elements.coursePreviewPages.querySelectorAll('.course-preview-page')).map(card => ({
+            page_number: Number(card.dataset.pageNumber),
+            script: card.querySelector('.course-preview-script').value
+        }));
+    }
+
+    async savePreviewScripts() {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        if (!taskId) return false;
+        const response = await fetch(`/api/course-preview/${taskId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pages: this.collectPreviewScripts() })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            this.showStatus('error', data.error || '保存讲稿失败');
+            return false;
+        }
+        this.elements.coursePreviewSaveState.textContent = '已保存';
+        this.elements.coursePreviewSaveState.classList.add('saved');
+        return true;
+    }
+
+    async continueCourse() {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        const found = this.getItemByTaskId(taskId);
+        if (!taskId || !found) return;
+        const button = this.elements.continueCourseBtn;
+        button.disabled = true;
+        try {
+            const response = await fetch(`/api/course-continue/${taskId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pages: this.collectPreviewScripts() })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '继续生成失败');
+            this.updateItem(found.index, {
+                status: 'processing',
+                stage: 'tts',
+                percentage: 50,
+                message: '正在生成配音'
+            });
+            this.elements.coursePreviewModule.hidden = true;
+            this.renderFileList();
+            this.renderResultsGrid();
+            this.startProgressStream(taskId);
+        } catch (error) {
+            button.disabled = false;
+            this.showStatus('error', error.message);
         }
     }
 

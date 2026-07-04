@@ -8,17 +8,87 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
-    <div class="page">
-        <!-- Hero -->
-        <header class="hero">
-            <h1 class="hero-title">AI Course Studio</h1>
-            <p class="hero-subtitle">上传 Word / PDF 教案，用 AI 生成可编辑课件、讲稿、配音字幕与课程视频。</p>
-        </header>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand">
+                <div class="brand-mark">AI</div>
+                <div>
+                    <strong>Course Studio</strong>
+                    <span>课程生产管理平台</span>
+                </div>
+            </div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item active" href="#workspace">
+                    <span class="nav-icon">▦</span><span>生产工作台</span>
+                </a>
+                <a class="nav-item" href="#upload-module">
+                    <span class="nav-icon">⇧</span><span>素材与任务</span>
+                </a>
+                <a class="nav-item" href="#course-preview-module">
+                    <span class="nav-icon">✎</span><span>内容审核</span>
+                </a>
+                <a class="nav-item" href="#results-module">
+                    <span class="nav-icon">□</span><span>课程资产</span>
+                </a>
+            </nav>
+            <div class="sidebar-meta">
+                <span class="status-dot"></span>
+                <div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div>
+            </div>
+        </aside>
 
-        <main class="content">
+        <div class="admin-main" id="workspace">
+            <header class="admin-topbar">
+                <div>
+                    <p class="breadcrumb">AI 课程生产 / 工作台</p>
+                    <h1>课程生产工作台</h1>
+                </div>
+                <div class="topbar-actions">
+                    <span class="environment-badge"><span></span>生产环境</span>
+                    <div class="admin-avatar">管</div>
+                </div>
+            </header>
+
+            <main class="content">
+            <section class="workspace-intro">
+                <div>
+                    <h2>上午好，开始创建一门新课程</h2>
+                    <p>统一管理教案解析、AI 课程设计、讲稿审核与视频产出。</p>
+                </div>
+                <a class="btn-primary-link" href="#upload-module">＋ 新建生产任务</a>
+            </section>
+
+            <section class="metrics-grid" aria-label="任务概览">
+                <article class="metric-card">
+                    <span class="metric-icon blue">▤</span>
+                    <div><span>全部任务</span><strong id="metric-total">0</strong></div>
+                    <small>当前工作区</small>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-icon amber">◷</span>
+                    <div><span>生产中</span><strong id="metric-processing">0</strong></div>
+                    <small>含排队任务</small>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-icon violet">✓</span>
+                    <div><span>待审核</span><strong id="metric-review">0</strong></div>
+                    <small>需要确认讲稿</small>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-icon green">◆</span>
+                    <div><span>已完成</span><strong id="metric-completed">0</strong></div>
+                    <small>可下载课程资产</small>
+                </article>
+            </section>
+
+            <div class="workspace-grid">
             <div class="content-main">
                 <!-- 上传 -->
                 <section class="card" id="upload-module">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">01 / 添加素材</span><h3>创建生产任务</h3></div>
+                        <span class="section-state">支持批量上传</span>
+                    </div>
                     <div class="upload-area" id="upload-area">
                         <input type="file" id="file-input" accept=".docx,.pdf,.ppt,.pptx" multiple hidden>
                         <div class="upload-placeholder" id="upload-placeholder">
@@ -58,6 +128,10 @@
 
                 <!-- 选项 -->
                 <section class="card" id="options-module">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">02 / 生产配置</span><h3>生成策略</h3></div>
+                        <span class="section-state">配置应用于待处理任务</span>
+                    </div>
                     <div class="workflow-note">
                         <span class="workflow-badge">教案模式</span>
                         <span>Word/PDF 将依次生成 Course JSON、可编辑 PPT、逐页讲稿、配音、字幕和视频。</span>
@@ -114,6 +188,9 @@
 
                 <!-- 转换 -->
                 <section class="card" id="convert-module">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">03 / 提交生产</span><h3>执行与进度</h3></div>
+                    </div>
                     <div class="convert-area">
                         <button class="btn-convert" id="convert-btn" disabled>
                             <span class="btn-text">生成课程</span>
@@ -186,6 +263,24 @@
                     </div>
                 </section>
 
+                <!-- 逐页讲稿确认 -->
+                <section class="card course-preview-card" id="course-preview-module" hidden>
+                    <div class="course-preview-header">
+                        <div>
+                            <h3 class="results-title">确认逐页讲稿</h3>
+                            <p class="course-preview-hint">逐页核对 PPT 与讲稿。保存修改后，点击继续生成配音、字幕和视频。</p>
+                        </div>
+                        <span class="course-preview-save-state" id="course-preview-save-state"></span>
+                    </div>
+                    <div class="course-preview-pages" id="course-preview-pages"></div>
+                    <div class="course-preview-actions">
+                        <button class="btn-preview" id="save-scripts-btn">保存讲稿</button>
+                        <button class="btn-convert" id="continue-course-btn">
+                            <span class="btn-text">继续生成视频</span>
+                        </button>
+                    </div>
+                </section>
+
                 <!-- 幻灯片预览 -->
                 <section class="card slides-card" id="slides-module" hidden>
                     <div class="slides-header" id="slides-toggle">
@@ -199,21 +294,32 @@
 
                 <!-- 转换结果 -->
                 <section class="card" id="results-module" hidden>
-                    <h3 class="results-title">课程产物</h3>
+                    <div class="section-heading">
+                        <div><span class="section-kicker">04 / 资产交付</span><h3>课程产物</h3></div>
+                    </div>
                     <div class="results-grid" id="results-grid"></div>
                 </section>
             </div>
 
             <aside class="content-aside" id="dashboard-column">
+                <section class="card guide-card">
+                    <span class="section-kicker">生产流程</span>
+                    <h3>标准任务路径</h3>
+                    <ol class="process-list">
+                        <li class="active"><span>1</span><div><strong>上传课程素材</strong><small>Word、PDF 或 PPT</small></div></li>
+                        <li><span>2</span><div><strong>AI 课程设计</strong><small>提炼结构并生成讲稿</small></div></li>
+                        <li><span>3</span><div><strong>人工审核</strong><small>逐页确认与修订</small></div></li>
+                        <li><span>4</span><div><strong>多媒体合成</strong><small>配音、字幕与视频</small></div></li>
+                    </ol>
+                </section>
             </aside>
-        </main>
-
-        <footer class="footer">
-            <p>AI Course Studio &copy; 2026</p>
-        </footer>
+            </div>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=7"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=9"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>
