@@ -300,6 +300,63 @@ body {
     letter-spacing: 0.02em;
 }
 
+.option-hint {
+    color: var(--color-text-3);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.logo-upload-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+}
+
+.logo-upload-button {
+    border: 1px dashed var(--color-border);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--color-accent);
+    cursor: pointer;
+    padding: 9px 14px;
+}
+
+.logo-upload-button:disabled {
+    cursor: wait;
+    opacity: .6;
+}
+
+.logo-preview {
+    position: relative;
+    width: 92px;
+    height: 50px;
+    padding: 5px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: #fff;
+}
+
+.logo-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.logo-preview button {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    width: 20px;
+    height: 20px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--color-error);
+    color: #fff;
+    cursor: pointer;
+    line-height: 18px;
+}
+
 .select-input {
     appearance: none;
     padding: 10px 36px 10px 14px;
@@ -317,6 +374,65 @@ body {
     outline: none;
     border-color: var(--color-accent);
     box-shadow: 0 0 0 3px rgba(41, 151, 255, 0.15);
+}
+
+.voice-native-select { display: none; }
+
+.voice-preview-list {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-2);
+}
+
+.voice-preview-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-bottom: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text);
+    text-align: left;
+    cursor: pointer;
+}
+
+.voice-preview-item:last-child { border-bottom: 0; }
+.voice-preview-item:hover,
+.voice-preview-item.selected { background: rgba(41, 151, 255, 0.1); }
+
+.voice-play-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 50%;
+    background: var(--color-surface);
+    color: var(--color-accent);
+    cursor: pointer;
+}
+
+.voice-play-btn:hover { border-color: var(--color-accent); }
+.voice-play-btn.loading { animation: pulse 1s ease-in-out infinite; }
+.voice-preview-name { display: block; font-size: 13px; font-weight: 500; }
+.voice-preview-id {
+    display: block;
+    margin-top: 2px;
+    color: var(--color-text-3);
+    font-size: 11px;
+    word-break: break-all;
+}
+.voice-list-message {
+    padding: 12px;
+    color: var(--color-text-3);
+    font-size: 13px;
 }
 
 /* Toggle switch */
@@ -481,108 +597,6 @@ body {
 
 @keyframes spin {
     to { transform: rotate(360deg); }
-}
-
-/* ── Conversion Progress ──────────────── */
-.conversion-progress {
-    margin-top: 24px;
-    padding: 20px;
-    background: var(--color-surface-2);
-    border-radius: var(--radius-sm);
-    animation: fadeUp 0.3s ease both;
-}
-
-.progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 14px;
-}
-
-.progress-stage {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--color-text);
-}
-
-.progress-percentage {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--color-accent);
-    font-variant-numeric: tabular-nums;
-}
-
-.conversion-progress .progress-bar {
-    height: 6px;
-    margin-bottom: 20px;
-}
-
-.conversion-progress .progress-fill {
-    background: linear-gradient(90deg, var(--color-accent), #64d2ff);
-    transition: width 0.4s ease;
-}
-
-/* Steps */
-.progress-steps {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-}
-
-.step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    transition: all var(--transition);
-}
-
-.step-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--color-surface-3);
-    transition: all var(--transition);
-}
-
-.step-label {
-    font-size: 11px;
-    color: var(--color-text-3);
-    white-space: nowrap;
-    transition: color var(--transition);
-}
-
-.step.active .step-dot {
-    background: var(--color-accent);
-    box-shadow: 0 0 12px rgba(41, 151, 255, 0.5);
-    animation: pulse-dot 1.5s ease-in-out infinite;
-}
-
-.step.active .step-label {
-    color: var(--color-accent);
-}
-
-.step.completed .step-dot {
-    background: var(--color-success);
-}
-
-.step.completed .step-label {
-    color: var(--color-success);
-}
-
-.step-line {
-    flex: 1;
-    height: 1px;
-    background: var(--color-surface-3);
-    min-width: 24px;
-    max-width: 60px;
-    margin-bottom: 24px;
-}
-
-.step-line.completed {
-    background: var(--color-success);
 }
 
 @keyframes pulse-dot {
@@ -1019,6 +1033,40 @@ body {
     object-fit: contain;
 }
 
+.result-card-delete {
+    position: absolute;
+    z-index: 3;
+    top: 12px;
+    right: 12px;
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, .25);
+    border-radius: 50%;
+    background: rgba(15, 23, 42, .78);
+    color: #f8fafc;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: background .2s ease, border-color .2s ease, transform .2s ease;
+}
+
+.result-card-delete:hover {
+    border-color: #f87171;
+    background: rgba(220, 38, 38, .9);
+    transform: translateY(-1px);
+}
+
+.result-card-delete:disabled {
+    cursor: wait;
+    opacity: .5;
+}
+
+.result-card-delete svg {
+    width: 17px;
+    height: 17px;
+}
+
 .result-placeholder {
     position: absolute;
     inset: 0;
@@ -1041,6 +1089,97 @@ body {
 
 .result-placeholder p {
     font-size: 13px;
+}
+
+.card-progress {
+    width: min(88%, 520px);
+    margin-top: 8px;
+}
+
+.card-progress-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+    color: #cbd5e1;
+    font-size: 12px;
+}
+
+.card-progress-heading span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-progress-heading strong {
+    flex: none;
+    color: #60a5fa;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.card-progress-track {
+    height: 5px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, .2);
+}
+
+.card-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #3b82f6, #22c55e);
+    transition: width .4s ease;
+}
+
+.card-progress-steps {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 12px;
+}
+
+.card-progress-step {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    color: #64748b;
+    font-size: 9px;
+    white-space: nowrap;
+}
+
+.card-progress-step span:last-child {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.card-progress-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #334155;
+}
+
+.card-progress-step.active {
+    color: #60a5fa;
+}
+
+.card-progress-step.active .card-progress-dot {
+    background: #3b82f6;
+    box-shadow: 0 0 8px rgba(59, 130, 246, .8);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.card-progress-step.completed {
+    color: #4ade80;
+}
+
+.card-progress-step.completed .card-progress-dot {
+    background: #22c55e;
 }
 
 .result-card.error-card .result-placeholder {
@@ -1091,6 +1230,31 @@ body {
 .result-card-download svg {
     width: 14px;
     height: 14px;
+}
+
+.progress-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.result-card-stop {
+    border: 1px solid #ef4444;
+    background: #fff;
+    color: #dc2626;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.result-card-stop:hover {
+    background: #fef2f2;
+}
+
+.result-card-stop:disabled {
+    cursor: wait;
+    opacity: .55;
 }
 
 /* ── Course Script Preview ─────────────── */
@@ -1337,4 +1501,80 @@ body { background: var(--color-bg); font-size: 14px; }
 }
 @media (max-width: 440px) {
     .nav-icon { display:none; }.metrics-grid { grid-template-columns:1fr; }.workspace-intro { display:block; }.btn-primary-link { display:inline-block; margin-top:14px; }
+}
+/* 登录用户操作 */
+.admin-user-name {
+    color: var(--color-text-2);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.topbar-actions form {
+    margin: 0;
+}
+
+.logout-button {
+    padding: 7px 11px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    color: var(--color-text-2);
+    background: var(--color-surface);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.logout-button:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+}
+.batch-selection-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border);
+}
+
+.batch-select-all,
+.file-list-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--color-text-2);
+    font-size: 13px;
+}
+
+.btn-secondary,
+.file-strategy-button {
+    border: 1px solid var(--color-border);
+    background: var(--color-surface, #fff);
+    color: var(--color-text-2);
+    border-radius: 7px;
+    padding: 7px 11px;
+    cursor: pointer;
+}
+
+.btn-secondary:hover,
+.file-strategy-button:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+.file-strategy-badge {
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.08);
+    color: var(--color-accent);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .batch-selection-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
 }

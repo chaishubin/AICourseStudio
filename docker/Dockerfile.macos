@@ -16,7 +16,7 @@ ENV PYTHONUTF8=1
 # 安装系统依赖（可通过 BUILD ARG 控制是否安装 LibreOffice 来减小镜像）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
-    fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
+    fonts-noto-cjk fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
     poppler-utils \
     ffmpeg \
     libglib2.0-0 libsm6 libxrender1 libxext6 \
@@ -27,10 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 生成中文 locale
 RUN locale-gen zh_CN.UTF-8 && update-locale LANG=zh_CN.UTF-8
 
-# 优先使用 Droid Sans 作为中文字体
+# 字体配置（Noto Sans CJK SC 优先，回退 Droid Sans）
 RUN rm -f /etc/fonts/conf.d/40-wqy-microhei.conf /etc/fonts/conf.d/90-non-tt-wqy-microhei.conf || true
-# 使用预先添加的配置文件替代 heredoc（避免 Dockerfile 解析问题）
 COPY docker/99-vidppt-fonts.conf /etc/fonts/conf.d/99-vidppt-fonts.conf
+
+# 安装自定义字体（放入 docker/fonts/）
+COPY docker/fonts/ /usr/local/share/fonts/custom/
 RUN fc-cache -fv || true
 
 WORKDIR /app

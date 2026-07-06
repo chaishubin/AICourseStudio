@@ -3,6 +3,7 @@
 """
 
 from pathlib import Path
+from typing import Callable, Optional
 
 from loguru import logger
 from moviepy import (
@@ -13,6 +14,28 @@ from moviepy import (
 )
 
 from ..core.models import DocumentContent, ProcessConfig
+
+
+class _MoviePyProgressLogger:
+    """延迟导入 proglog，并把 MoviePy 帧进度转换为 0..1。"""
+
+    @staticmethod
+    def create(
+        progress_callback: Optional[Callable[[float], None]],
+        cancel_check: Optional[Callable[[], bool]],
+    ):
+        from proglog import ProgressBarLogger
+
+        class CallbackLogger(ProgressBarLogger):
+            def bars_callback(self, bar, attr, value, old_value=None):
+                if cancel_check and cancel_check():
+                    raise InterruptedError("用户停止了视频生成")
+                state = self.bars.get(bar, {})
+                total = state.get("total")
+                if progress_callback and total and attr == "index":
+                    progress_callback(min(1.0, max(0.0, value / total)))
+
+        return CallbackLogger()
 
 
 class VideoComposer:
@@ -85,6 +108,8 @@ class VideoComposer:
         content: DocumentContent,
         config: ProcessConfig,
         output_path: Path,
+        progress_callback: Optional[Callable[[float], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> None:
         """
         将页面内容合成为视频
@@ -98,6 +123,8 @@ class VideoComposer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         for page in content.pages:
+            if cancel_check and cancel_check():
+                raise InterruptedError("用户停止了视频生成")
             if not page.slide_image or not page.slide_image.exists():
                 logger.warning(f"跳过第 {page.page_number} 页：缺少页面图像")
                 continue
@@ -143,25 +170,26 @@ class VideoComposer:
 
         logger.info(f"合并 {len(clips)} 个片段，输出 -> {output_path}")
         final = concatenate_videoclips(clips, method="compose")
-
-        # 输出视频
-        final.write_videofile(
-            str(output_path),
-            fps=config.video_fps,
-            codec=config.video_codec,
-            audio_codec=config.audio_codec,
-            audio_fps=config.audio_sample_rate,
-            audio_bitrate=config.audio_bitrate,
-            preset=config.video_preset,
-            pixel_format=config.video_pixel_format,
-            ffmpeg_params=VideoComposer.ffmpeg_params(config),
-            logger="bar",
+        moviepy_logger = _MoviePyProgressLogger.create(
+            progress_callback, cancel_check
         )
-
-        # 清理资源
-        final.close()
-        for clip in clips:
-            clip.close()
+        try:
+            final.write_videofile(
+                str(output_path),
+                fps=config.video_fps,
+                codec=config.video_codec,
+                audio_codec=config.audio_codec,
+                audio_fps=config.audio_sample_rate,
+                audio_bitrate=config.audio_bitrate,
+                preset=config.video_preset,
+                pixel_format=config.video_pixel_format,
+                ffmpeg_params=VideoComposer.ffmpeg_params(config),
+                logger=moviepy_logger,
+            )
+        finally:
+            final.close()
+            for clip in clips:
+                clip.close()
 
         size_mb = output_path.stat().st_size / 1024 / 1024
         logger.info(f"视频生成完成：{output_path}  ({size_mb:.1f} MB)")

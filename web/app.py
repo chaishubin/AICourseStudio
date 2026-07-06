@@ -7,14 +7,33 @@ AI Course Studio - Web 服务
 import os
 import uuid
 import json
+import hashlib
+import asyncio
 import threading
 import sys
 import time
+import shutil
+import secrets
 from pathlib import Path
 from queue import Queue, Empty
-from flask import Flask, render_template, request, jsonify, send_file, make_response, Response
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_file,
+    make_response,
+    Response,
+    redirect,
+    url_for,
+    session,
+)
 from werkzeug.utils import secure_filename
 from loguru import logger
+try:
+    from task_store import TaskStore
+except ImportError:
+    from web.task_store import TaskStore
 
 # 导入 vidppt
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -28,6 +47,15 @@ import vidppt.processors  # noqa: F401
 app = Flask(__name__,
             template_folder=Path(__file__).parent / 'templates',
             static_folder=Path(__file__).parent / 'static')
+app.secret_key = os.environ.get('VIDPPT_SECRET_KEY') or secrets.token_hex(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('VIDPPT_COOKIE_SECURE', 'false').lower() == 'true',
+)
+
+AUTH_USERNAME = os.environ.get('VIDPPT_AUTH_USERNAME', 'admin')
+AUTH_PASSWORD = os.environ.get('VIDPPT_AUTH_PASSWORD', 'vidppt123')
 
 DASHBOARD_ENABLED = os.environ.get('VIDPPT_DASHBOARD', 'true').lower() == 'true'
 if DASHBOARD_ENABLED:
@@ -39,14 +67,27 @@ if DASHBOARD_ENABLED:
 UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'ppt', 'pptx'}
-STATE_FILE = OUTPUT_FOLDER / 'state.json'
+ALLOWED_LOGO_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+DEFAULT_STATE_FILE = OUTPUT_FOLDER / 'state.json'
+STATE_FILE = DEFAULT_STATE_FILE
+TASK_DB_FILE = Path(os.environ.get(
+    'VIDPPT_TASK_DB',
+    str(OUTPUT_FOLDER / 'tasks.db'),
+))
+VOICE_PREVIEW_FOLDER = OUTPUT_FOLDER / 'voice_previews'
+VOICE_PREVIEW_TEXT = "你好，欢迎使用 AI 课程工作室，这是当前音色的试听效果。"
 _state_lock = threading.Lock()
 _continue_lock = threading.Lock()
 MAX_STATE_ENTRIES = 50
+RESOURCE_CPU_LIMIT = float(os.environ.get('VIDPPT_CPU_LIMIT', '85'))
+RESOURCE_MEMORY_LIMIT = float(os.environ.get('VIDPPT_MEMORY_LIMIT', '80'))
+RESOURCE_MIN_DISK_GB = float(os.environ.get('VIDPPT_MIN_DISK_GB', '5'))
+RESOURCE_CHECK_INTERVAL = float(os.environ.get('VIDPPT_RESOURCE_CHECK_INTERVAL', '5'))
 
 # 确保目录存在
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+VOICE_PREVIEW_FOLDER.mkdir(parents=True, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['OUTPUT_FOLDER'] = str(OUTPUT_FOLDER)
@@ -54,6 +95,8 @@ app.config['OUTPUT_FOLDER'] = str(OUTPUT_FOLDER)
 # 存储任务状态和进度队列
 tasks = {}  # task_id -> {status, file_path, output_dir, stage, percentage, message, video_path, error}
 progress_queues = {}  # task_id -> Queue
+cancellation_events = {}  # task_id -> threading.Event
+task_store = TaskStore(TASK_DB_FILE)
 
 
 class ConversionQueue:
@@ -67,16 +110,73 @@ class ConversionQueue:
     def enqueue(self, func, *args, **kwargs):
         self._queue.put((func, args, kwargs))
 
+    def _wait_for_capacity(self, task_id):
+        while True:
+            try:
+                import psutil
+                cpu = psutil.cpu_percent(interval=0.3)
+                memory = psutil.virtual_memory().percent
+                disk_free_gb = psutil.disk_usage(OUTPUT_FOLDER).free / (1024 ** 3)
+            except ImportError:
+                return
+            if (
+                cpu < RESOURCE_CPU_LIMIT
+                and memory < RESOURCE_MEMORY_LIMIT
+                and disk_free_gb >= RESOURCE_MIN_DISK_GB
+            ):
+                return
+            task = tasks.get(task_id)
+            if task:
+                task.update(
+                    status='queued',
+                    stage='queue',
+                    message=(
+                        f'机器资源繁忙，等待执行（CPU {cpu:.0f}% / '
+                        f'内存 {memory:.0f}% / 磁盘剩余 {disk_free_gb:.1f}GB）'
+                    ),
+                )
+                save_state(task_id)
+            time.sleep(RESOURCE_CHECK_INTERVAL)
+
     def _run(self):
         while True:
             func, args, kwargs = self._queue.get()
             try:
+                task_id = args[0] if args else None
+                if task_id:
+                    self._wait_for_capacity(task_id)
                 func(*args, **kwargs)
             except Exception as e:
                 logger.error(f"ConversionQueue worker error: {e}")
+            finally:
+                self._queue.task_done()
+
+    def size(self):
+        return self._queue.qsize()
 
 
 conversion_queue = ConversionQueue()
+
+
+def _synthesize_voice_preview(engine_name: str, voice: str, output_path: Path):
+    """使用现有 TTS 引擎生成短试听音频。"""
+    if engine_name == 'edge-tts':
+        from vidppt.engines.tts.edge_tts_engine import EdgeTTSEngine
+        engine = EdgeTTSEngine()
+    elif engine_name == 'volcengine':
+        from vidppt.engines.tts.volcengine_tts_engine import VolcengineTTSEngine
+        engine = VolcengineTTSEngine()
+    elif engine_name == 'minimax':
+        from vidppt.engines.tts.api_tts_engine import MiniMaxTTSEngine
+        engine = MiniMaxTTSEngine()
+    else:
+        raise ValueError(f'不支持的语音引擎: {engine_name}')
+    asyncio.run(engine.convert_async(
+        VOICE_PREVIEW_TEXT,
+        output_path,
+        voice,
+        '+0%',
+    ))
 
 
 def save_state(task_id: str):
@@ -109,6 +209,12 @@ def save_state(task_id: str):
             STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
         except Exception:
             pass
+        if STATE_FILE == DEFAULT_STATE_FILE:
+            try:
+                queue_order = task_store.upsert(task_id, entry)
+                task['queue_order'] = queue_order
+            except Exception as exc:
+                logger.warning(f'Unable to persist task {task_id} to SQLite: {exc}')
 
 
 def _read_state_file() -> list:
@@ -127,13 +233,44 @@ def _read_state_file() -> list:
 
 def load_state():
     """服务启动时从 state.json 恢复所有已完成/出错的任务状态"""
-    data = _read_state_file()
+    data = []
+    if STATE_FILE == DEFAULT_STATE_FILE:
+        try:
+            data = task_store.load_recent(MAX_STATE_ENTRIES)
+        except Exception:
+            data = []
+    if not data:
+        data = _read_state_file()
     for entry in data:
         task_id = entry.get('task_id')
         if not task_id:
             continue
         status = entry.get('status', '')
-        if status in ('awaiting_confirmation', 'completed', 'error'):
+        preview_path = entry.get('preview_path')
+        if (
+            status == 'error'
+            and entry.get('stage') in {'tts', 'video'}
+            and preview_path
+            and Path(preview_path).exists()
+        ):
+            entry.update(
+                status='awaiting_confirmation',
+                stage='preview',
+                percentage=50,
+                message='上次媒体生成失败，已恢复到讲稿确认，可调整后重试',
+                failed_stage=entry.get('stage'),
+                retryable=True,
+            )
+            status = 'awaiting_confirmation'
+        if status in ('pending', 'processing'):
+            entry.update(
+                status='interrupted',
+                stage='queue',
+                message='服务曾重启，请重新提交该任务',
+                error='任务执行被服务重启中断',
+            )
+            status = 'interrupted'
+        if status in ('queued', 'awaiting_confirmation', 'completed', 'error', 'interrupted'):
             tasks[task_id] = entry
 
 
@@ -146,10 +283,54 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+@app.before_request
+def require_login():
+    """保护工作台与业务 API，仅放行登录页和静态资源。"""
+    if app.config.get('LOGIN_DISABLED'):
+        return None
+    if request.endpoint in {'login', 'static'} or session.get('authenticated'):
+        return None
+    if request.path.startswith('/api/'):
+        return jsonify({'error': '请先登录', 'code': 'authentication_required'}), 401
+    return redirect(url_for('login', next=request.full_path if request.query_string else request.path))
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """登录页面与凭据校验。"""
+    if session.get('authenticated'):
+        return redirect(url_for('index'))
+
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        username_ok = secrets.compare_digest(username, AUTH_USERNAME)
+        password_ok = secrets.compare_digest(password, AUTH_PASSWORD)
+        if username_ok and password_ok:
+            session.clear()
+            session['authenticated'] = True
+            session['username'] = username
+            next_url = request.form.get('next', '')
+            if next_url.startswith('/') and not next_url.startswith('//'):
+                return redirect(next_url)
+            return redirect(url_for('index'))
+        error = '用户名或密码错误，请重新输入'
+
+    return render_template('login.html', error=error, next_url=request.args.get('next', ''))
+
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    """退出当前登录会话。"""
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route('/')
 def index():
     """渲染主页面"""
-    return render_template('index.html')
+    return render_template('index.html', current_user=session.get('username', AUTH_USERNAME))
 
 
 @app.route('/api/upload', methods=['POST'])
@@ -190,6 +371,36 @@ def upload_ppt():
         'file_path': str(file_path),
         'original_name': original_filename
     })
+
+
+@app.route('/api/logo-upload', methods=['POST'])
+def upload_logo():
+    """上传并校验学校 Logo，返回仅供后续课程生成使用的服务端路径。"""
+    from PIL import Image, UnidentifiedImageError
+
+    file = request.files.get('logo')
+    if not file or not file.filename:
+        return jsonify({'error': '未选择 Logo 文件'}), 400
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in ALLOWED_LOGO_EXTENSIONS:
+        return jsonify({'error': 'Logo 仅支持 PNG、JPG 或 WebP'}), 400
+    file.seek(0, 2)
+    size = file.tell()
+    file.seek(0)
+    if size == 0:
+        return jsonify({'error': 'Logo 文件为空'}), 400
+    if size > 5 * 1024 * 1024:
+        return jsonify({'error': 'Logo 文件不能超过 5MB'}), 400
+
+    logo_path = UPLOAD_FOLDER / f"logo_{uuid.uuid4().hex}.{ext}"
+    file.save(logo_path)
+    try:
+        with Image.open(logo_path) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError):
+        logo_path.unlink(missing_ok=True)
+        return jsonify({'error': 'Logo 图片无法识别或已损坏'}), 400
+    return jsonify({'success': True, 'logo_path': str(logo_path)})
 
 
 class WebProgressTracker:
@@ -269,10 +480,14 @@ class WebProgressTracker:
         self._complete_current_stage()
         self.current_stage = stage
         self._stage_started_at = time.time()
+        task = tasks.get(self.task_id, {})
+        stage_base = self._overall_percentage(stage, 0)
+        overall = max(int(task.get('percentage', 0) or 0), stage_base)
 
         self._update_task(
             status='processing',
             stage=stage,
+            percentage=overall,
             message=message,
             stage_started_at=self._stage_started_at,
         )
@@ -280,6 +495,7 @@ class WebProgressTracker:
         self.queue.put({
             'type': 'stage',
             'stage': stage,
+            'percentage': overall,
             'message': message
         })
 
@@ -336,12 +552,35 @@ class WebProgressTracker:
             'message': error_msg
         })
 
+    def rollback(self, error_msg: str, failed_stage: str):
+        """媒体阶段失败时回到讲稿确认，不丢弃已完成的中间产物。"""
+        self._complete_current_stage()
+        task = tasks.get(self.task_id, {})
+        self._update_task(
+            status='awaiting_confirmation',
+            stage='preview',
+            percentage=50,
+            message=f'{failed_stage}失败，已退回讲稿确认，可直接重试',
+            error=error_msg,
+            failed_stage=failed_stage,
+            retryable=True,
+        )
+        self.queue.put({
+            'type': 'rollback',
+            'message': error_msg,
+            'failed_stage': failed_stage,
+            'preview_path': task.get('preview_path'),
+            'course_json_path': task.get('course_json_path'),
+            'presentation_path': task.get('presentation_path'),
+        })
+
 
 def run_conversion(task_id: str, file_path: str, output_dir: Path,
                    tts_engine: str = 'edge-tts', voice: str = 'zh-CN-XiaoxiaoNeural',
                    render_engine: str = 'spire',
                    llm_enabled: bool = False, llm_mode: str = 'per-page',
-                   llm_engine: str = 'qwen'):
+                   llm_engine: str = 'qwen',
+                   refinement_level: str = 'standard'):
     """在后台线程中运行转换"""
     queue = progress_queues.get(task_id)
     if not queue:
@@ -419,11 +658,40 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             total_pages = content.total_pages
 
             if llm_mode == "per-page":
+                refinement_prompts = {
+                    'light': '尽量保留当前页原文和篇幅，只修正重复、病句与生硬表达。',
+                    'standard': '保留关键知识，合并重复内容，生成详略适中的自然讲稿。',
+                    'strong': '只保留核心结论、关键依据与必要过渡，讲稿简洁有力。',
+                }
+                refinement_prompt = refinement_prompts.get(
+                    refinement_level, refinement_prompts['standard']
+                )
+                original_texts = [page.text for page in content.pages]
+                previous_script = ""
                 for i, page in enumerate(content.pages, 1):
                     if not page.text or not page.text.strip():
                         progress.update('llm', i, total_pages, f'第 {i} 页无文本，跳过')
                         continue
-                    page.text = llm_provider.summarize(page.text)
+                    previous_text = original_texts[i - 2] if i > 1 else "（无，当前为第一页）"
+                    next_text = (
+                        original_texts[i] if i < total_pages
+                        else "（无，当前为最后一页）"
+                    )
+                    page.text = llm_provider.summarize(
+                        (
+                            f"上一页原文：\n{previous_text}\n\n"
+                            f"上一页已生成讲稿：\n{previous_script or '（无）'}\n\n"
+                            f"当前页原文：\n{original_texts[i - 1]}\n\n"
+                            f"下一页原文：\n{next_text}"
+                        ),
+                        system_prompt=(
+                            "你是课程讲稿编辑。结合前后页理解当前页在整套课程中的位置，"
+                            "让开头承接上一页、结尾自然引向下一页；避免重复上一页已经讲过的内容，"
+                            "也不要提前展开下一页。只输出当前页可直接配音的讲稿，不要标题、说明或标记。"
+                            + refinement_prompt
+                        ),
+                    )
+                    previous_script = page.text
                     progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
             elif llm_mode == "whole-document":
                 pages_text = [page.text for page in content.pages]
@@ -466,6 +734,11 @@ def run_course_generation(
     render_engine: str,
     llm_enabled: bool,
     llm_engine: str,
+    refinement_level: str,
+    illustrations_enabled: bool,
+    max_illustrations: int,
+    ppt_footer_text: str,
+    school_logo_path: str | None,
 ):
     """Word/PDF 教案生成 Course、PPTX、字幕和视频。"""
     queue = progress_queues.get(task_id)
@@ -509,7 +782,19 @@ def run_course_generation(
 
         progress.set_stage('render', '生成可编辑 PPT 与课程资源...')
         from vidppt.course_pipeline import CoursePipeline
-        result = CoursePipeline(llm_provider).run(
+        illustration_generator = None
+        if illustrations_enabled:
+            from vidppt.generation import DashScopeIllustrationGenerator
+            illustration_generator = DashScopeIllustrationGenerator()
+
+        result = CoursePipeline(
+            llm_provider,
+            refinement_level,
+            illustration_generator=illustration_generator,
+            max_illustrations=max_illustrations,
+            footer_text=ppt_footer_text,
+            logo_path=Path(school_logo_path) if school_logo_path else None,
+        ).run(
             Path(file_path), output_dir
         )
 
@@ -591,6 +876,7 @@ def _read_preview(task_id: str) -> dict:
 
 def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
     preview = _read_preview(task_id)
+    changed_pages = set()
     by_page = {
         int(item['page_number']): str(item.get('script', '')).strip()
         for item in updates
@@ -599,6 +885,8 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
     for page in preview.get('pages', []):
         page_number = int(page['page_number'])
         if page_number in by_page:
+            if page.get('script', '').strip() != by_page[page_number]:
+                changed_pages.add(page_number)
             page['script'] = by_page[page_number]
     if not any(page.get('script', '').strip() for page in preview.get('pages', [])):
         raise ValueError("至少需要保留一页非空讲稿")
@@ -622,6 +910,9 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
+    output_dir = Path(tasks[task_id]['output_dir'])
+    for page_number in changed_pages:
+        (output_dir / str(page_number) / 'audio.mp3').unlink(missing_ok=True)
     return preview
 
 
@@ -631,6 +922,7 @@ def run_media_generation(task_id: str):
     if not queue:
         return
     progress = WebProgressTracker(task_id, queue)
+    cancel_event = cancellation_events.setdefault(task_id, threading.Event())
     try:
         from moviepy import AudioFileClip
         from vidppt.core.models import DocumentContent, PageContent
@@ -646,7 +938,7 @@ def run_media_generation(task_id: str):
             input_path=Path(task['file_path']),
             output_dir=Path(task['output_dir']),
             save_intermediate=True,
-            skip_existing=False,
+            skip_existing=True,
             tts_engine=options.get('tts_engine', 'edge-tts'),
             tts_voice=options.get('tts_voice'),
             tts_options=options.get('tts_options', {}),
@@ -664,9 +956,13 @@ def run_media_generation(task_id: str):
         ])
 
         progress.set_stage('tts', '根据确认后的讲稿生成配音...')
+        if cancel_event.is_set():
+            raise InterruptedError("用户停止了生成")
         Pipeline(config)._generate_audio(
             content, ProgressTracker(total_pages=len(content.pages))
         )
+        if cancel_event.is_set():
+            raise InterruptedError("用户停止了生成")
         progress.update('tts', len(content.pages), len(content.pages), '语音转换完成')
 
         timed_pages = []
@@ -693,23 +989,60 @@ def run_media_generation(task_id: str):
         )
         progress.set_stage('video', '合成视频并烧录字幕...')
         base_video = config.output_dir / f'{stem}.base.mp4'
-        VideoComposer.compose(content, config, base_video)
+        last_reported = -1
+
+        def report_video(stage_percentage: int, message: str):
+            nonlocal last_reported
+            stage_percentage = max(0, min(100, stage_percentage))
+            if stage_percentage > last_reported:
+                last_reported = stage_percentage
+                progress.update('video', stage_percentage, 100, message)
+
+        VideoComposer.compose(
+            content,
+            config,
+            base_video,
+            progress_callback=lambda fraction: report_video(
+                round(fraction * 78),
+                f'正在编码视频 {round(fraction * 100)}%',
+            ),
+            cancel_check=cancel_event.is_set,
+        )
         if not base_video.exists():
             raise RuntimeError("视频合成未产生输出文件")
         video_path = config.output_dir / f'{stem}.mp4'
-        CoursePipeline._burn_subtitles(base_video, subtitles, video_path)
+        CoursePipeline._burn_subtitles(
+            base_video,
+            subtitles,
+            video_path,
+            config,
+            progress_callback=lambda fraction: report_video(
+                78 + round(fraction * 20),
+                f'正在烧录字幕 {round(fraction * 100)}%',
+            ),
+            cancel_check=cancel_event.is_set,
+        )
         base_video.unlink(missing_ok=True)
-        progress.update('video', 1, 1, '视频生成完成')
+        progress.update('video', 100, 100, '视频生成完成')
         progress.complete(
             str(video_path),
             course_json_path=preview.get('course_json_path'),
             presentation_path=preview.get('presentation_path'),
             subtitles_path=str(subtitles),
         )
+    except InterruptedError as e:
+        import traceback
+        traceback.print_exc()
+        progress.rollback(str(e), '生成已停止')
     except Exception as e:
         import traceback
         traceback.print_exc()
-        progress.error(str(e))
+        failed_stage = (
+            '视频合成' if progress.current_stage == 'video' else '配音生成'
+        )
+        progress.rollback(str(e), failed_stage)
+    finally:
+        cancellation_events.pop(task_id, None)
 
 
 def run_render_only(task_id: str, file_path: str, output_dir: Path,
@@ -784,6 +1117,27 @@ def convert_ppt():
     llm_enabled = data.get('llm_enabled', False)
     llm_mode = data.get('llm_mode', 'per-page')
     llm_engine = data.get('llm_engine', 'qwen')
+    refinement_level = data.get('refinement_level', 'standard')
+    illustrations_enabled = bool(data.get('illustrations_enabled', False))
+    max_illustrations = int(data.get('max_illustrations', 3))
+    ppt_footer_text = str(
+        data.get('ppt_footer_text', 'AI COURSE STUDIO')
+    ).strip()[:40]
+    school_logo_path = data.get('school_logo_path')
+    batch_id = str(data.get('batch_id') or uuid.uuid4().hex)
+    strategy_source = data.get('strategy_source', 'batch')
+    if refinement_level not in {'light', 'standard', 'strong'}:
+        return jsonify({'error': '不支持的精炼程度'}), 400
+    if max_illustrations not in {1, 2, 3, 4}:
+        return jsonify({'error': '插图数量必须为 1 到 4'}), 400
+    if school_logo_path:
+        logo_path = Path(school_logo_path)
+        if (
+            not logo_path.is_file()
+            or logo_path.parent.resolve() != UPLOAD_FOLDER.resolve()
+            or logo_path.suffix.lower().lstrip('.') not in ALLOWED_LOGO_EXTENSIONS
+        ):
+            return jsonify({'error': '学校 Logo 路径无效，请重新上传'}), 400
 
     if not file_path:
         return jsonify({'error': '未提供文件路径'}), 400
@@ -801,11 +1155,30 @@ def convert_ppt():
 
     # 创建进度队列
     progress_queues[task_id] = Queue()
+    strategy = {
+        'tts_engine': tts_engine,
+        'voice': voice,
+        'render_engine': render_engine,
+        'llm_enabled': llm_enabled,
+        'llm_engine': llm_engine,
+        'llm_mode': llm_mode,
+        'refinement_level': refinement_level,
+        'illustrations_enabled': illustrations_enabled,
+        'max_illustrations': max_illustrations,
+        'ppt_footer_text': ppt_footer_text,
+        'school_logo_path': school_logo_path,
+    }
     tasks[task_id] = {
-        'status': 'pending',
+        'status': 'queued',
+        'stage': 'queue',
+        'percentage': 0,
+        'message': '已进入生产队列',
         'file_path': file_path,
         'output_dir': str(output_dir),
         'original_name': original_name,
+        'batch_id': batch_id,
+        'strategy_source': strategy_source,
+        'strategy': strategy,
         'media_options': {
             'tts_engine': tts_engine,
             'tts_voice': None if tts_engine in {'volcengine', 'minimax'} else voice,
@@ -817,23 +1190,28 @@ def convert_ppt():
             'render_engine': render_engine,
         },
     }
+    save_state(task_id)
 
     suffix = Path(file_path).suffix.lower()
     if suffix in {'.docx', '.pdf'}:
         conversion_queue.enqueue(
             run_course_generation, task_id, file_path, output_dir,
-            tts_engine, voice, render_engine, llm_enabled, llm_engine
+            tts_engine, voice, render_engine, llm_enabled, llm_engine,
+            refinement_level, illustrations_enabled, max_illustrations,
+            ppt_footer_text, school_logo_path
         )
     else:
         conversion_queue.enqueue(
             run_conversion, task_id, file_path, output_dir, tts_engine, voice,
-            render_engine, llm_enabled, llm_mode, llm_engine
+            render_engine, llm_enabled, llm_mode, llm_engine, refinement_level
         )
 
     return jsonify({
         'success': True,
         'task_id': task_id,
-        'message': '转换已启动'
+        'batch_id': batch_id,
+        'queue_size': conversion_queue.size(),
+        'message': '任务已进入生产队列'
     })
 
 
@@ -888,6 +1266,8 @@ def continue_course(task_id):
         return jsonify({'error': '任务不存在'}), 404
     data = request.get_json(silent=True) or {}
     pages = data.get('pages')
+    tts_engine = data.get('tts_engine')
+    voice = data.get('voice')
 
     with _continue_lock:
         if task.get('status') != 'awaiting_confirmation':
@@ -902,7 +1282,20 @@ def continue_course(task_id):
         except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
             return jsonify({'error': str(exc)}), 400
 
+        if tts_engine and voice:
+            task['media_options'] = {
+                **task.get('media_options', {}),
+                'tts_engine': tts_engine,
+                'tts_voice': None if tts_engine in {'volcengine', 'minimax'} else voice,
+                'tts_options': (
+                    {'voice_type': voice} if tts_engine == 'volcengine'
+                    else {'voice_id': voice} if tts_engine == 'minimax'
+                    else {}
+                ),
+            }
+
         progress_queues[task_id] = Queue()
+        cancellation_events[task_id] = threading.Event()
         task.update(
             status='pending',
             stage='tts',
@@ -913,6 +1306,121 @@ def continue_course(task_id):
         conversion_queue.enqueue(run_media_generation, task_id)
 
     return jsonify({'success': True, 'message': '已继续生成视频'})
+
+
+@app.route('/api/stop/<task_id>', methods=['POST'])
+def stop_task(task_id):
+    """请求停止当前媒体生成；工作线程会清理并回退到讲稿确认。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') not in {'pending', 'processing'}:
+        return jsonify({'error': '当前任务不在运行中'}), 409
+    cancel_event = cancellation_events.setdefault(task_id, threading.Event())
+    cancel_event.set()
+    task.update(message='正在停止生成，请稍候…', stop_requested=True)
+    save_state(task_id)
+    queue = progress_queues.get(task_id)
+    if queue:
+        queue.put({
+            'type': 'progress',
+            'stage': task.get('stage', 'video'),
+            'current': task.get('percentage', 0),
+            'total': 100,
+            'percentage': task.get('percentage', 0),
+            'message': '正在停止生成，请稍候…',
+        })
+    return jsonify({'success': True, 'message': '已请求停止，正在回退上一步'})
+
+
+@app.route('/api/tasks/<task_id>', methods=['DELETE'])
+def delete_task(task_id):
+    """物理删除未运行任务的输出目录及持久化状态。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    deletable_statuses = {
+        'completed',
+        'error',
+        'interrupted',
+        'awaiting_confirmation',
+    }
+    if task.get('status') not in deletable_statuses:
+        return jsonify({'error': '任务仍在运行或排队，请先停止任务再删除'}), 409
+
+    output_root = OUTPUT_FOLDER.resolve()
+    output_dir = Path(task.get('output_dir') or (OUTPUT_FOLDER / task_id))
+    try:
+        resolved_output = output_dir.resolve()
+    except OSError:
+        return jsonify({'error': '任务输出路径无效'}), 400
+    if (
+        resolved_output.parent != output_root
+        or resolved_output.name != task_id
+    ):
+        logger.warning(
+            f'Refused to delete task {task_id}: unsafe output path {resolved_output}'
+        )
+        return jsonify({'error': '任务输出路径不安全，已拒绝删除'}), 400
+    try:
+        if resolved_output.exists():
+            shutil.rmtree(resolved_output)
+        with _state_lock:
+            data = [
+                entry for entry in _read_state_file()
+                if entry.get('task_id') != task_id
+            ]
+            STATE_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+    except OSError as exc:
+        logger.exception(f'Failed to delete task {task_id}: {exc}')
+        return jsonify({'error': f'物理删除失败：{exc}'}), 500
+
+    try:
+        task_store.delete(task_id)
+    except Exception as exc:
+        logger.exception(f'Unable to delete task {task_id} from SQLite: {exc}')
+        return jsonify({
+            'error': '课程文件已删除，但数据库记录清理失败，请重试删除',
+        }), 500
+    tasks.pop(task_id, None)
+    progress_queues.pop(task_id, None)
+    cancellation_events.pop(task_id, None)
+    return jsonify({'success': True, 'message': '课程产物已物理删除'})
+
+
+@app.route('/api/course-cancel/<task_id>', methods=['POST'])
+def cancel_course(task_id):
+    """放弃待确认任务，让前端使用原上传文件重新选择生成策略。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '当前任务不能取消'}), 409
+
+    with _state_lock:
+        data = [
+            entry for entry in _read_state_file()
+            if entry.get('task_id') != task_id
+        ]
+        try:
+            STATE_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+        except Exception:
+            pass
+
+    tasks.pop(task_id, None)
+    progress_queues.pop(task_id, None)
+    cancellation_events.pop(task_id, None)
+    try:
+        task_store.delete(task_id)
+    except Exception as exc:
+        logger.warning(f'Unable to delete cancelled task {task_id} from SQLite: {exc}')
+    return jsonify({'success': True, 'message': '已取消本次生成'})
 
 
 @app.route('/api/render-slides', methods=['POST'])
@@ -1050,6 +1558,22 @@ def get_status(task_id):
         'presentation_path': task.get('presentation_path'),
         'subtitles_path': task.get('subtitles_path'),
         'preview_path': task.get('preview_path'),
+        'stage': task.get('stage'),
+        'percentage': task.get('percentage', 0),
+        'message': task.get('message', ''),
+        'batch_id': task.get('batch_id'),
+        'strategy_source': task.get('strategy_source', 'batch'),
+        'queue_position': (
+            sum(
+                1
+                for other in tasks.values()
+                if other.get('status') == 'queued'
+                and other.get('queue_order', float('inf'))
+                <= task.get('queue_order', float('inf'))
+            )
+            if task.get('status') == 'queued'
+            else None
+        ),
         'error': task.get('error')
     })
 
@@ -1058,11 +1582,23 @@ def get_status(task_id):
 def get_tasks():
     """返回所有任务的列表（最近 50 条）"""
     all_tasks = []
+    queued_ids = [
+        task_id
+        for task_id, task in sorted(
+            tasks.items(),
+            key=lambda item: item[1].get('queue_order', float('inf')),
+        )
+        if task.get('status') == 'queued'
+    ]
+    queue_positions = {
+        task_id: index + 1 for index, task_id in enumerate(queued_ids)
+    }
     for task_id, task in tasks.items():
         all_tasks.append({
             'task_id': task_id,
             'status': task.get('status', 'unknown'),
             'original_name': task.get('original_name', ''),
+            'file_path': task.get('file_path', ''),
             'stage': task.get('stage'),
             'percentage': task.get('percentage', 0),
             'message': task.get('message', ''),
@@ -1072,6 +1608,10 @@ def get_tasks():
             'subtitles_path': task.get('subtitles_path'),
             'preview_path': task.get('preview_path'),
             'error': task.get('error'),
+            'batch_id': task.get('batch_id'),
+            'strategy_source': task.get('strategy_source', 'batch'),
+            'strategy': task.get('strategy', {}),
+            'queue_position': queue_positions.get(task_id),
         })
     # 按最近排序，限制 50 条
     all_tasks = all_tasks[-MAX_STATE_ENTRIES:]
@@ -1213,35 +1753,214 @@ def download_file():
 
 @app.route('/api/voices')
 def list_voices():
-    """列出可用的语音"""
+    """列出各 TTS 引擎可用音色；Edge 优先从 SDK 动态读取完整目录。"""
+    engine = request.args.get('engine')
+    edge_voices = [
+        {'id': 'zh-CN-XiaoxiaoNeural', 'name': '晓晓（女声）', 'gender': 'female'},
+        {'id': 'zh-CN-YunxiNeural', 'name': '云希（男声）', 'gender': 'male'},
+        {'id': 'zh-CN-YunyangNeural', 'name': '云扬（男声）', 'gender': 'male'},
+        {'id': 'zh-CN-XiaoyiNeural', 'name': '晓伊（女声）', 'gender': 'female'},
+        {'id': 'zh-CN-YunjianNeural', 'name': '云健（男声）', 'gender': 'male'},
+    ]
+    if engine in {None, 'edge-tts'}:
+        try:
+            import asyncio
+            import edge_tts
+            available = asyncio.run(edge_tts.list_voices())
+            edge_voices = [
+                {
+                    'id': voice['ShortName'],
+                    'name': (
+                        f"{voice.get('FriendlyName', voice['ShortName'])} · "
+                        f"{voice.get('Locale', '')}"
+                    ),
+                    'gender': str(voice.get('Gender', '')).lower(),
+                }
+                for voice in available
+            ]
+            preferred = {
+                'zh-CN-XiaoxiaoNeural': 0,
+                'zh-CN-YunxiNeural': 1,
+                'zh-CN-YunyangNeural': 2,
+            }
+            edge_voices.sort(
+                key=lambda voice: (
+                    0 if voice['id'] in preferred else
+                    1 if voice['id'].startswith('zh-CN-') else
+                    2 if voice['id'].startswith('zh-') else 3,
+                    preferred.get(voice['id'], 99),
+                    voice['id'],
+                )
+            )
+        except Exception as exc:
+            logger.warning(f"动态读取 Edge 音色失败，使用内置目录: {exc}")
+
+    minimax_zh = [
+        ('male-qn-qingse', '青涩青年'), ('male-qn-jingying', '精英青年'),
+        ('male-qn-badao', '霸道青年'), ('male-qn-daxuesheng', '青年大学生'),
+        ('female-shaonv', '少女'), ('female-yujie', '御姐'),
+        ('female-chengshu', '成熟女性'), ('female-tianmei', '甜美女性'),
+        ('male-qn-qingse-jingpin', '青涩青年 beta'),
+        ('male-qn-jingying-jingpin', '精英青年 beta'),
+        ('male-qn-badao-jingpin', '霸道青年 beta'),
+        ('male-qn-daxuesheng-jingpin', '青年大学生 beta'),
+        ('female-shaonv-jingpin', '少女 beta'),
+        ('female-yujie-jingpin', '御姐 beta'),
+        ('female-chengshu-jingpin', '成熟女性 beta'),
+        ('female-tianmei-jingpin', '甜美女性 beta'),
+        ('clever_boy', '聪明男童'), ('cute_boy', '可爱男童'),
+        ('lovely_girl', '萌萌女童'), ('cartoon_pig', '卡通猪小琪'),
+        ('bingjiao_didi', '病娇弟弟'), ('junlang_nanyou', '俊朗男友'),
+        ('chunzhen_xuedi', '纯真学弟'), ('lengdan_xiongzhang', '冷淡学长'),
+        ('badao_shaoye', '霸道少爷'), ('tianxin_xiaoling', '甜心小玲'),
+        ('qiaopi_mengmei', '俏皮萌妹'), ('wumei_yujie', '妩媚御姐'),
+        ('diadia_xuemei', '嗲嗲学妹'), ('danya_xuejie', '淡雅学姐'),
+        ('Chinese (Mandarin)_Reliable_Executive', '沉稳高管'),
+        ('Chinese (Mandarin)_News_Anchor', '新闻女声'),
+        ('Chinese (Mandarin)_Mature_Woman', '傲娇御姐'),
+        ('Chinese (Mandarin)_Unrestrained_Young_Man', '不羁青年'),
+        ('Chinese (Mandarin)_Gentleman', '温润男声'),
+        ('Chinese (Mandarin)_Warm_Bestie', '温暖闺蜜'),
+        ('Chinese (Mandarin)_Male_Announcer', '播报男声'),
+        ('Chinese (Mandarin)_Sweet_Lady', '甜美女声'),
+        ('Chinese (Mandarin)_Wise_Women', '阅历姐姐'),
+        ('Chinese (Mandarin)_Gentle_Youth', '温润青年'),
+        ('Chinese (Mandarin)_Warm_Girl', '温暖少女'),
+        ('Chinese (Mandarin)_Radio_Host', '电台男主播'),
+        ('Chinese (Mandarin)_Lyrical_Voice', '抒情男声'),
+        ('Chinese (Mandarin)_Sincere_Adult', '真诚青年'),
+        ('Chinese (Mandarin)_Gentle_Senior', '温柔学姐'),
+        ('Chinese (Mandarin)_Crisp_Girl', '清脆少女'),
+        ('Chinese (Mandarin)_Soft_Girl', '柔和少女'),
+        ('Cantonese_ProfessionalHost（F)', '粤语专业女主持'),
+        ('Cantonese_GentleLady', '粤语温柔女声'),
+        ('Cantonese_ProfessionalHost（M)', '粤语专业男主持'),
+        ('Cantonese_PlayfulMan', '粤语活泼男声'),
+        ('Cantonese_CuteGirl', '粤语可爱女孩'),
+        ('Cantonese_KindWoman', '粤语善良女声'),
+    ]
     voices = {
-        'edge-tts': [
-            {'id': 'zh-CN-XiaoxiaoNeural', 'name': '晓晓（女声）', 'gender': 'female'},
-            {'id': 'zh-CN-YunxiNeural', 'name': '云希（男声）', 'gender': 'male'},
-            {'id': 'zh-CN-YunyangNeural', 'name': '云扬（男声，新闻风格）', 'gender': 'male'},
-            {'id': 'zh-CN-XiaoyiNeural', 'name': '晓伊（女声）', 'gender': 'female'},
-            {'id': 'zh-CN-YunjianNeural', 'name': '云健（男声）', 'gender': 'male'},
-        ],
+        'edge-tts': edge_voices,
         'minimax': [
-            {'id': 'male-qn-qingse', 'name': '青涩男声', 'gender': 'male'},
-            {'id': 'female-qn-nana', 'name': '娜娜女声', 'gender': 'female'},
-            {'id': 'male-qn-jingying', 'name': '精英男声', 'gender': 'male'},
-            {'id': 'female-shaonv', 'name': '少女女声', 'gender': 'female'},
+            {'id': voice_id, 'name': name, 'gender': ''}
+            for voice_id, name in minimax_zh
         ],
         'volcengine': [
-            {
-                'id': 'zh_female_cancan_mars_bigtts',
-                'name': '灿灿（女声）',
-                'gender': 'female'
-            },
-            {
-                'id': 'zh_male_M392_conversation_wvae_bigtts',
-                'name': '通用男声',
-                'gender': 'male'
-            },
+            {'id': 'zh_female_cancan_mars_bigtts', 'name': '灿灿', 'gender': 'female'},
+            {'id': 'zh_female_vv_mars_bigtts', 'name': 'Vivi', 'gender': 'female'},
+            {'id': 'zh_female_vv_uranus_bigtts', 'name': 'Vivi 2.0', 'gender': 'female'},
+            {'id': 'zh_female_wanwanxiaohe_moon_bigtts', 'name': '湾湾小何', 'gender': 'female'},
+            {'id': 'zh_male_shaonianzixin_moon_bigtts', 'name': '少年梓辛', 'gender': 'male'},
+            {'id': 'zh_male_M392_conversation_wvae_bigtts', 'name': '通用男声', 'gender': 'male'},
+            {'id': 'zh_female_yingyujiaoyu_mars_bigtts', 'name': 'Tina老师', 'gender': 'female'},
+            {'id': 'zh_female_tianmeitaozi_mars_bigtts', 'name': '甜美桃子', 'gender': 'female'},
+            {'id': 'zh_female_kefunvsheng_mars_bigtts', 'name': '暖阳女声', 'gender': 'female'},
+            {'id': 'zh_female_qinqienvsheng_moon_bigtts', 'name': '亲切女声', 'gender': 'female'},
+            {'id': 'zh_female_yueyunv_mars_bigtts', 'name': '粤语小溏', 'gender': 'female'},
+            {'id': 'zh_male_dayi_saturn_bigtts', 'name': '大壹', 'gender': 'male'},
+            {'id': 'zh_female_mizai_saturn_bigtts', 'name': '黑猫侦探社咪仔', 'gender': 'female'},
+            {'id': 'zh_female_jitangnv_saturn_bigtts', 'name': '鸡汤女', 'gender': 'female'},
+            {'id': 'zh_female_meilinvyou_saturn_bigtts', 'name': '魅力女友', 'gender': 'female'},
+            {'id': 'zh_female_santongyongns_saturn_bigtts', 'name': '流畅女声', 'gender': 'female'},
+            {'id': 'zh_male_ruyayichen_saturn_bigtts', 'name': '儒雅逸辰', 'gender': 'male'},
+            {'id': 'zh_female_xueayi_saturn_bigtts', 'name': '儿童绘本', 'gender': 'female'},
+            {'id': 'ICL_zh_female_keainvsheng_tob', 'name': '可爱女生', 'gender': 'female'},
+            {'id': 'ICL_zh_female_tiaopigongzhu_tob', 'name': '调皮公主', 'gender': 'female'},
+            {'id': 'ICL_zh_male_shuanglangshaonian_tob', 'name': '爽朗少年', 'gender': 'male'},
+            {'id': 'ICL_zh_male_tiancaitongzhuo_tob', 'name': '天才同桌', 'gender': 'male'},
+            {'id': 'zh_male_beijingxiaoye_emo_v2_mars_bigtts', 'name': '北京小爷（多情感）', 'gender': 'male'},
+            {'id': 'zh_female_roumeinvyou_emo_v2_mars_bigtts', 'name': '柔美女友（多情感）', 'gender': 'female'},
+            {'id': 'zh_male_yangguangqingnian_emo_v2_mars_bigtts', 'name': '阳光青年（多情感）', 'gender': 'male'},
+            {'id': 'zh_female_meilinvyou_emo_v2_mars_bigtts', 'name': '魅力女友（多情感）', 'gender': 'female'},
+            {'id': 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts', 'name': '爽快思思（多情感）', 'gender': 'female'},
+            {'id': 'zh_female_tianxinxiaomei_emo_v2_mars_bigtts', 'name': '甜心小美（多情感）', 'gender': 'female'},
+            {'id': 'zh_male_lengkugege_emo_v2_mars_bigtts', 'name': '冷酷哥哥（多情感）', 'gender': 'male'},
         ],
     }
+    if engine:
+        if engine not in voices:
+            return jsonify({'error': f'不支持的语音引擎: {engine}'}), 400
+        return jsonify({
+            'engine': engine,
+            'voices': voices[engine],
+            'count': len(voices[engine]),
+            'supports_custom_voice': engine in {'volcengine', 'minimax'},
+        })
     return jsonify(voices)
+
+
+@app.route('/api/voice-preview', methods=['POST'])
+def preview_voice():
+    """生成并返回指定引擎、音色的短试听音频。"""
+    data = request.get_json(silent=True) or {}
+    engine = str(data.get('engine', '')).strip()
+    voice = str(data.get('voice', '')).strip()
+    if engine not in {'edge-tts', 'volcengine', 'minimax'}:
+        return jsonify({'error': '不支持的语音引擎'}), 400
+    if not voice or len(voice) > 200:
+        return jsonify({'error': '无效的音色 ID'}), 400
+
+    cache_key = hashlib.sha256(f'{engine}:{voice}'.encode()).hexdigest()
+    preview_path = VOICE_PREVIEW_FOLDER / f'{cache_key}.mp3'
+    try:
+        if not preview_path.exists() or preview_path.stat().st_size == 0:
+            _synthesize_voice_preview(engine, voice, preview_path)
+        return send_file(preview_path, mimetype='audio/mpeg')
+    except Exception as exc:
+        logger.exception(f'生成音色试听失败: engine={engine}, voice={voice}')
+        preview_path.unlink(missing_ok=True)
+        return jsonify({'error': f'试听生成失败: {exc}'}), 502
+
+
+def resume_queued_tasks():
+    """Rebuild executable queue entries that were persisted before a restart."""
+    resumed = 0
+    for task_id, task in list(tasks.items()):
+        if task.get('status') != 'queued':
+            continue
+        file_path = task.get('file_path')
+        output_dir = Path(task.get('output_dir') or (OUTPUT_FOLDER / task_id))
+        if not file_path or not Path(file_path).exists():
+            task.update(status='error', error='源文件不存在，无法恢复排队任务')
+            save_state(task_id)
+            continue
+        strategy = task.get('strategy') or {}
+        progress_queues[task_id] = Queue()
+        suffix = Path(file_path).suffix.lower()
+        if suffix in {'.docx', '.pdf'}:
+            conversion_queue.enqueue(
+                run_course_generation,
+                task_id,
+                file_path,
+                output_dir,
+                strategy.get('tts_engine', 'edge-tts'),
+                strategy.get('voice', 'zh-CN-XiaoxiaoNeural'),
+                strategy.get('render_engine', 'spire'),
+                strategy.get('llm_enabled', False),
+                strategy.get('llm_engine', 'qwen'),
+                strategy.get('refinement_level', 'standard'),
+                strategy.get('illustrations_enabled', False),
+                int(strategy.get('max_illustrations', 3)),
+                strategy.get('ppt_footer_text', 'AI COURSE STUDIO'),
+                strategy.get('school_logo_path'),
+            )
+        else:
+            conversion_queue.enqueue(
+                run_conversion,
+                task_id,
+                file_path,
+                output_dir,
+                strategy.get('tts_engine', 'edge-tts'),
+                strategy.get('voice', 'zh-CN-XiaoxiaoNeural'),
+                strategy.get('render_engine', 'spire'),
+                strategy.get('llm_enabled', False),
+                strategy.get('llm_mode', 'per-page'),
+                strategy.get('llm_engine', 'qwen'),
+                strategy.get('refinement_level', 'standard'),
+            )
+        resumed += 1
+    if resumed:
+        logger.info(f'Restored {resumed} queued production task(s)')
 
 
 if __name__ == '__main__':
@@ -1250,4 +1969,12 @@ if __name__ == '__main__':
     parser.description = 'AI Course Studio - Web Server'
     parser.add_argument('port', nargs='?', type=int, default=5000, help='端口号 (默认: 5000)')
     args = parser.parse_args()
-    app.run(debug=True, host='0.0.0.0', port=args.port)
+    resume_queued_tasks()
+    debug_enabled = os.environ.get('VIDPPT_DEBUG', 'false').lower() == 'true'
+    app.run(
+        debug=debug_enabled,
+        use_reloader=False,
+        threaded=True,
+        host='0.0.0.0',
+        port=args.port,
+    )

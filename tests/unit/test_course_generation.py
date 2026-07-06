@@ -176,16 +176,106 @@ def test_docx_pipeline_outputs_course_json_and_editable_pptx(temp_dir):
     document.add_paragraph("理解变量定义；掌握变量引用")
     document.save(source)
 
-    result = CoursePipeline().run(source, temp_dir / "out")
+    result = CoursePipeline(footer_text="匠心课堂").run(source, temp_dir / "out")
 
     assert result.course_json.exists()
     assert result.presentation.exists()
     payload = json.loads(result.course_json.read_text(encoding="utf-8"))
     assert payload["title"] == "Shell 脚本入门"
+    assert payload["metadata"]["footer_text"] == "匠心课堂"
     assert payload["sections"][1]["bullets"] == ["理解变量定义", "掌握变量引用"]
 
     presentation = Presentation(result.presentation)
     assert len(presentation.slides) == 2
-    assert presentation.slides[1].shapes.title.text == "变量"
-    assert "理解变量定义" in presentation.slides[1].placeholders[1].text
+    slide_text = "\n".join(
+        shape.text for shape in presentation.slides[1].shapes if hasattr(shape, "text")
+    )
+    assert "变量" in slide_text
+    assert "理解变量定义" in slide_text
+    assert "匠心课堂" in slide_text
     assert "理解变量定义" in presentation.slides[1].notes_slide.notes_text_frame.text
+
+
+def test_course_pipeline_places_logo_without_cropping(temp_dir):
+    from docx import Document
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from vidppt.course_pipeline import CoursePipeline
+
+    source = temp_dir / "lesson.docx"
+    document = Document()
+    document.add_heading("学校课程", 0)
+    document.add_heading("课程内容", 1)
+    document.add_paragraph("知识点一；知识点二")
+    document.save(source)
+    logo = temp_dir / "school.png"
+    Image.new("RGBA", (400, 100), (20, 80, 160, 255)).save(logo)
+
+    result = CoursePipeline(logo_path=logo).run(source, temp_dir / "out-logo")
+    payload = json.loads(result.course_json.read_text(encoding="utf-8"))
+    assert payload["metadata"]["logo_path"] == str(logo)
+
+    presentation = Presentation(result.presentation)
+    for slide in presentation.slides:
+        pictures = [
+            shape for shape in slide.shapes
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE
+        ]
+        assert pictures
+        logo_shape = pictures[-1]
+        assert abs((logo_shape.width / logo_shape.height) - 4.0) < 0.05
+        assert logo_shape.width <= 1.35 * 914400
+        assert logo_shape.height <= 0.72 * 914400
+
+
+def test_course_pipeline_generates_illustrations_before_pptx(temp_dir):
+    from docx import Document
+    from vidppt.course_pipeline import CoursePipeline
+
+    source = temp_dir / "lesson.docx"
+    document = Document()
+    document.add_heading("智能制造", 0)
+    document.add_heading("精密加工", 1)
+    document.add_paragraph("理解加工精度；掌握质量控制")
+    document.save(source)
+
+    class FakeIllustrations:
+        def generate_for_course(self, course, output_dir, max_images):
+            assert max_images == 2
+            course.sections[0].metadata["illustration_path"] = "cover.png"
+            return []
+
+    result = CoursePipeline(
+        illustration_generator=FakeIllustrations(),
+        max_illustrations=2,
+    ).run(source, temp_dir / "out")
+    payload = json.loads(result.course_json.read_text(encoding="utf-8"))
+
+    assert payload["metadata"]["visual_theme"] == "industry"
+    assert payload["metadata"]["visual_style"] == "technical"
+    assert payload["sections"][0]["metadata"]["illustration_path"] == "cover.png"
+
+
+def test_pptx_theme_selects_distinct_visual_systems():
+    from vidppt.core.course import Course, CourseSection
+    from vidppt.renderers.pptx_renderer import PPTXRenderer
+
+    samples = {
+        "technology": ("人工智能与数据系统", "digital"),
+        "culture": ("中国传统文学艺术", "editorial"),
+        "nature": ("生态环境与自然保护", "organic"),
+        "business": ("企业营销与运营管理", "executive"),
+        "health": ("医疗护理与健康管理", "organic"),
+        "public": ("公共政策与社会治理", "executive"),
+        "finance": ("财务审计与证券投资", "executive"),
+    }
+    for expected_theme, (title, expected_style) in samples.items():
+        course = Course(
+            title=title,
+            sections=[CourseSection(id="slide-1", title=title, layout="cover")],
+        )
+        renderer = PPTXRenderer()
+        renderer._apply_course_theme(course)
+        assert course.metadata["visual_theme"] == expected_theme
+        assert course.metadata["visual_style"] == expected_style

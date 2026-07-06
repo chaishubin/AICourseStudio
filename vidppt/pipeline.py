@@ -258,12 +258,19 @@ class Pipeline:
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # 检查音频文件是否已存在（跳过已有文件）
-                if self.config.save_intermediate and self.config.skip_existing and audio_path.exists():
+                if (
+                    self.config.save_intermediate
+                    and self.config.skip_existing
+                    and audio_path.exists()
+                    and audio_path.stat().st_size > 0
+                ):
                     page.audio = audio_path
                     skipped_pages.append(page.page_number)
                     logger.debug(f"第 {page.page_number} 页 音频已存在，跳过TTS")
                     progress.update_stage(ProcessStage.TTS, page.page_number)
                     continue
+                if audio_path.exists() and audio_path.stat().st_size == 0:
+                    audio_path.unlink()
 
                 # 尝试从缓存获取
                 if self.config.tts_engine == "edge-tts":

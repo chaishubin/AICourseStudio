@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=12">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -45,7 +45,11 @@
                 </div>
                 <div class="topbar-actions">
                     <span class="environment-badge"><span></span>生产环境</span>
-                    <div class="admin-avatar">管</div>
+                    <span class="admin-user-name">{{ current_user }}</span>
+                    <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
+                    <form method="post" action="{{ url_for('logout') }}">
+                        <button class="logout-button" type="submit">退出登录</button>
+                    </form>
                 </div>
             </header>
 
@@ -124,13 +128,22 @@
                         </div>
                     </div>
                     <div class="file-list" id="file-list"></div>
+                    <div class="batch-selection-actions" id="batch-selection-actions">
+                        <label class="batch-select-all">
+                            <input type="checkbox" id="select-all-files" checked>
+                            <span>全选待处理文件</span>
+                        </label>
+                        <button type="button" class="btn-secondary" id="apply-strategy-btn">
+                            将当前策略应用到已选文件
+                        </button>
+                    </div>
                 </section>
 
                 <!-- 选项 -->
                 <section class="card" id="options-module">
                     <div class="section-heading">
                         <div><span class="section-kicker">02 / 生产配置</span><h3>生成策略</h3></div>
-                        <span class="section-state">配置应用于待处理任务</span>
+                        <span class="section-state">支持批量统一与单项覆盖</span>
                     </div>
                     <div class="workflow-note">
                         <span class="workflow-badge">教案模式</span>
@@ -140,8 +153,8 @@
                         <div class="option-group">
                             <label for="render-engine">渲染引擎</label>
                             <select id="render-engine" class="select-input">
-                                <option value="spire">Spire (默认)</option>
                                 <option value="libreoffice">LibreOffice (中文更友好)</option>
+                                <option value="spire">Spire (默认)</option>
                             </select>
                         </div>
                         <div class="option-group">
@@ -154,11 +167,15 @@
                         </div>
                         <div class="option-group">
                             <label for="voice-select">语音</label>
-                            <select id="voice-select" class="select-input">
-                                <option value="zh-CN-XiaoxiaoNeural">晓晓（女声）</option>
-                                <option value="zh-CN-YunxiNeural">云希（男声）</option>
-                                <option value="zh-CN-YunyangNeural">云扬（新闻风格）</option>
+                            <select id="voice-select" class="select-input voice-native-select" aria-hidden="true">
+                                <option value="">正在加载音色...</option>
                             </select>
+                            <div class="voice-preview-list" id="voice-preview-list"
+                                 role="listbox" aria-label="可试听音色列表">
+                                <div class="voice-list-message">正在加载音色...</div>
+                            </div>
+                            <input id="custom-voice" class="select-input"
+                                   placeholder="可选：输入账户专属/复刻音色 ID">
                         </div>
                         <div class="option-group toggle-group">
                             <label>AI 内容生成</label>
@@ -182,6 +199,43 @@
                                 <option value="per-page">逐页讲稿</option>
                                 <option value="whole-document">整篇理解</option>
                             </select>
+                            <label for="refinement-level">提炼程度</label>
+                            <select id="refinement-level" class="select-input">
+                                <option value="light">轻度：尽量保留原文</option>
+                                <option value="standard" selected>标准：精炼且完整</option>
+                                <option value="strong">高度：只保留核心内容</option>
+                            </select>
+                            <label class="toggle-row" for="illustrations-enabled">
+                                <input type="checkbox" id="illustrations-enabled" checked>
+                                <span>生成内容匹配插图（通义万相）</span>
+                            </label>
+                            <label for="max-illustrations">最多插图数量</label>
+                            <select id="max-illustrations" class="select-input">
+                                <option value="1">1 张</option>
+                                <option value="2">2 张</option>
+                                <option value="3" selected>3 张</option>
+                                <option value="4">4 张</option>
+                            </select>
+                            <label for="ppt-footer-text">PPT 页脚文字</label>
+                            <input id="ppt-footer-text" class="select-input"
+                                   type="text" maxlength="40"
+                                   value="AI COURSE STUDIO"
+                                   placeholder="显示在 PPT 左下角">
+                            <label for="school-logo-input">学校 Logo</label>
+                            <div class="logo-upload-control">
+                                <input id="school-logo-input" type="file"
+                                       accept=".png,.jpg,.jpeg,.webp" hidden>
+                                <button class="logo-upload-button" id="school-logo-button"
+                                        type="button">上传 Logo</button>
+                                <div class="logo-preview" id="school-logo-preview" hidden>
+                                    <img id="school-logo-image" alt="学校 Logo 预览">
+                                    <button id="school-logo-remove" type="button"
+                                            aria-label="移除学校 Logo">&times;</button>
+                                </div>
+                            </div>
+                            <small class="option-hint" id="school-logo-hint">
+                                支持 PNG/JPG/WebP，生成时按每页版式自动调整位置与大小
+                            </small>
                         </div>
                     </div>
                 </section>
@@ -189,7 +243,7 @@
                 <!-- 转换 -->
                 <section class="card" id="convert-module">
                     <div class="section-heading">
-                        <div><span class="section-kicker">03 / 提交生产</span><h3>执行与进度</h3></div>
+                        <div><span class="section-kicker">03 / 提交生产</span><h3>生成课程</h3></div>
                     </div>
                     <div class="convert-area">
                         <button class="btn-convert" id="convert-btn" disabled>
@@ -216,47 +270,6 @@
                         </div>
                     </div>
 
-                    <div class="conversion-progress" id="conversion-progress" hidden>
-                        <div class="progress-header">
-                            <span class="progress-stage" id="progress-stage">准备中...</span>
-                            <span class="progress-percentage" id="progress-percentage">0%</span>
-                        </div>
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="conversion-progress-fill"></div>
-                        </div>
-                        <div class="progress-steps" id="progress-details">
-                            <div class="step" id="step-init">
-                                <span class="step-dot"></span>
-                                <span class="step-label">初始化</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-extract">
-                                <span class="step-dot"></span>
-                                <span class="step-label">提取内容</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-render">
-                                <span class="step-dot"></span>
-                                <span class="step-label">渲染幻灯片</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-llm">
-                                <span class="step-dot"></span>
-                                <span class="step-label">AI 课程设计</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-tts">
-                                <span class="step-dot"></span>
-                                <span class="step-label">文字转语音</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-video">
-                                <span class="step-dot"></span>
-                                <span class="step-label">合成视频</span>
-                            </div>
-                        </div>
-                    </div>
-
                     <div class="convert-status" id="convert-status" hidden>
                         <div class="status-icon" id="status-icon"></div>
                         <p class="status-text" id="status-text"></p>
@@ -274,6 +287,7 @@
                     </div>
                     <div class="course-preview-pages" id="course-preview-pages"></div>
                     <div class="course-preview-actions">
+                        <button class="btn-preview" id="cancel-course-btn">取消并返回生成策略</button>
                         <button class="btn-preview" id="save-scripts-btn">保存讲稿</button>
                         <button class="btn-convert" id="continue-course-btn">
                             <span class="btn-text">继续生成视频</span>
@@ -319,7 +333,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=9"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=12"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>
