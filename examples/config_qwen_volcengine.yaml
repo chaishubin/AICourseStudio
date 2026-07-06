@@ -1,0 +1,26 @@
+# Word/PDF 教案 -> 千问课程设计 -> 火山配音 -> 字幕视频
+input: "lesson.docx"
+output: "outputs/course"
+
+llm_enabled: true
+llm_engine: "qwen"
+llm_options:
+  model: "qwen-plus"
+  temperature: 0.3
+  max_tokens: 8192
+  # api_key 默认读取 DASHSCOPE_API_KEY
+  # api_url 默认使用中国内地百炼 OpenAI 兼容地址
+
+enable_tts: true
+tts_engine: "volcengine"
+tts_rate: "+0%"
+tts_options:
+  voice_type: "zh_female_cancan_mars_bigtts"
+  cluster: "volcano_tts"
+  sample_rate: 24000
+  audio_format: "mp3"
+  # appid 默认读取 VOLCENGINE_TTS_APPID
+  # access_token 默认读取 VOLCENGINE_TTS_ACCESS_TOKEN
+
+enable_video: true
+render_engine: "libreoffice"

@@ -105,18 +105,43 @@ class TestDirectoryCreation:
 
         # Mock concatenate_videoclips
         with patch("vidppt.utils.video_composer.concatenate_videoclips") as mock_concat:
-            with patch("vidppt.utils.video_composer.ImageClip"):
-                mock_final = MagicMock()
-                mock_concat.return_value = mock_final
+            mock_final = MagicMock()
+            mock_final.write_videofile.side_effect = (
+                lambda filename, **kwargs: Path(filename).touch()
+            )
+            mock_concat.return_value = mock_final
 
-                # 调用方法（会因为 mock 而不完整，但足以测试目录创建）
-                try:
-                    VideoComposer.compose(content, config, video_path)
-                except Exception:
-                    pass  # 忽略执行错误，我们只测试目录创建
+            VideoComposer.compose(content, config, video_path)
 
-                # 验证目录被创建了
-                assert config.output_dir.exists(), "输出目录应该被自动创建"
+            # 验证目录和高校网课输出参数
+            assert config.output_dir.exists(), "输出目录应该被自动创建"
+            kwargs = mock_final.write_videofile.call_args.kwargs
+            assert kwargs["fps"] == 24
+            assert kwargs["codec"] == "libx264"
+            assert kwargs["preset"] == "veryfast"
+            assert kwargs["pixel_format"] == "yuv420p"
+            assert kwargs["audio_fps"] == 48000
+            assert kwargs["audio_bitrate"] == "128k"
+            assert kwargs["ffmpeg_params"] == [
+                "-profile:v",
+                "high",
+                "-crf",
+                "21",
+                "-g",
+                "48",
+                "-movflags",
+                "+faststart",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+                "-af",
+                "loudnorm=I=-16.0:TP=-1.5:LRA=11",
+            ]
 
     def test_ppt_processor_creates_page_directory(self, temp_dir):
         """测试 PPT 处理器在提取内容时创建页面目录"""

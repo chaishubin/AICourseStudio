@@ -6,6 +6,25 @@ import tempfile
 import shutil
 
 
+@pytest.fixture(autouse=True)
+def authenticated_web_tests(monkeypatch, tmp_path):
+    """隔离 Web 测试的登录与持久化状态，避免污染本地生产任务。"""
+    try:
+        import web.app as app_module
+        from web.task_store import TaskStore
+    except ImportError:
+        return
+    monkeypatch.setitem(app_module.app.config, "LOGIN_DISABLED", True)
+    state_file = tmp_path / "outputs" / "state.json"
+    monkeypatch.setattr(app_module, "STATE_FILE", state_file)
+    monkeypatch.setattr(app_module, "DEFAULT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        app_module,
+        "task_store",
+        TaskStore(tmp_path / "outputs" / "tasks.db"),
+    )
+
+
 @pytest.fixture
 def temp_dir():
     """创建临时目录"""

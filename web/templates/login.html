@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}?v=1">
+</head>
+<body>
+    <main class="login-page">
+        <section class="login-brand">
+            <div class="brand-badge">AI</div>
+            <p class="eyebrow">AI COURSE STUDIO</p>
+            <h1>让课程生产，<br>从素材到成片一气呵成。</h1>
+            <p class="brand-copy">统一完成课程设计、讲稿审核、智能配音和视频交付。</p>
+            <div class="feature-list">
+                <span>智能课程设计</span>
+                <span>可视化审核流程</span>
+                <span>多媒体自动合成</span>
+            </div>
+        </section>
+
+        <section class="login-panel">
+            <form class="login-card" method="post" action="{{ url_for('login') }}">
+                <input type="hidden" name="next" value="{{ next_url }}">
+                <div class="mobile-brand"><span>AI</span> Course Studio</div>
+                <div class="login-heading">
+                    <p>欢迎回来</p>
+                    <h2>登录课程生产工作台</h2>
+                    <span>请输入管理员账号继续</span>
+                </div>
+
+                {% if error %}
+                <div class="login-error" role="alert">{{ error }}</div>
+                {% endif %}
+
+                <label for="username">用户名</label>
+                <div class="input-wrap">
+                    <span aria-hidden="true">●</span>
+                    <input id="username" name="username" type="text" autocomplete="username"
+                           placeholder="请输入用户名" required autofocus>
+                </div>
+
+                <label for="password">密码</label>
+                <div class="input-wrap">
+                    <span aria-hidden="true">◆</span>
+                    <input id="password" name="password" type="password" autocomplete="current-password"
+                           placeholder="请输入密码" required>
+                </div>
+
+                <button type="submit">登录工作台 <span>→</span></button>
+                <p class="security-note">账号信息仅用于当前工作台身份验证</p>
+            </form>
+        </section>
+    </main>
+</body>
+</html>

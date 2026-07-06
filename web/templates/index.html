@@ -4,23 +4,97 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=12">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
-    <div class="page">
-        <!-- Hero -->
-        <header class="hero">
-            <h1 class="hero-title">AI Course Studio</h1>
-            <p class="hero-subtitle">从教案与演示文稿，生成课程视频、幻灯片与互动网页。</p>
-        </header>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand">
+                <div class="brand-mark">AI</div>
+                <div>
+                    <strong>Course Studio</strong>
+                    <span>课程生产管理平台</span>
+                </div>
+            </div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item active" href="#workspace">
+                    <span class="nav-icon">▦</span><span>生产工作台</span>
+                </a>
+                <a class="nav-item" href="#upload-module">
+                    <span class="nav-icon">⇧</span><span>素材与任务</span>
+                </a>
+                <a class="nav-item" href="#course-preview-module">
+                    <span class="nav-icon">✎</span><span>内容审核</span>
+                </a>
+                <a class="nav-item" href="#results-module">
+                    <span class="nav-icon">□</span><span>课程资产</span>
+                </a>
+            </nav>
+            <div class="sidebar-meta">
+                <span class="status-dot"></span>
+                <div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div>
+            </div>
+        </aside>
 
-        <main class="content">
+        <div class="admin-main" id="workspace">
+            <header class="admin-topbar">
+                <div>
+                    <p class="breadcrumb">AI 课程生产 / 工作台</p>
+                    <h1>课程生产工作台</h1>
+                </div>
+                <div class="topbar-actions">
+                    <span class="environment-badge"><span></span>生产环境</span>
+                    <span class="admin-user-name">{{ current_user }}</span>
+                    <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
+                    <form method="post" action="{{ url_for('logout') }}">
+                        <button class="logout-button" type="submit">退出登录</button>
+                    </form>
+                </div>
+            </header>
+
+            <main class="content">
+            <section class="workspace-intro">
+                <div>
+                    <h2>上午好，开始创建一门新课程</h2>
+                    <p>统一管理教案解析、AI 课程设计、讲稿审核与视频产出。</p>
+                </div>
+                <a class="btn-primary-link" href="#upload-module">＋ 新建生产任务</a>
+            </section>
+
+            <section class="metrics-grid" aria-label="任务概览">
+                <article class="metric-card">
+                    <span class="metric-icon blue">▤</span>
+                    <div><span>全部任务</span><strong id="metric-total">0</strong></div>
+                    <small>当前工作区</small>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-icon amber">◷</span>
+                    <div><span>生产中</span><strong id="metric-processing">0</strong></div>
+                    <small>含排队任务</small>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-icon violet">✓</span>
+                    <div><span>待审核</span><strong id="metric-review">0</strong></div>
+                    <small>需要确认讲稿</small>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-icon green">◆</span>
+                    <div><span>已完成</span><strong id="metric-completed">0</strong></div>
+                    <small>可下载课程资产</small>
+                </article>
+            </section>
+
+            <div class="workspace-grid">
             <div class="content-main">
                 <!-- 上传 -->
                 <section class="card" id="upload-module">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">01 / 添加素材</span><h3>创建生产任务</h3></div>
+                        <span class="section-state">支持批量上传</span>
+                    </div>
                     <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" accept=".ppt,.pptx" multiple hidden>
+                        <input type="file" id="file-input" accept=".docx,.pdf,.ppt,.pptx" multiple hidden>
                         <div class="upload-placeholder" id="upload-placeholder">
                             <div class="upload-icon-wrap">
                                 <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -30,7 +104,7 @@
                                 </svg>
                             </div>
                             <p class="upload-text">拖拽文件至此处，或点击上传</p>
-                            <p class="upload-hint">支持 .ppt / .pptx，可多选</p>
+                            <p class="upload-hint">支持 .docx / .pdf / .ppt / .pptx，可多选</p>
                         </div>
                         <div class="upload-progress" id="upload-progress" hidden>
                             <div class="progress-bar">
@@ -54,59 +128,126 @@
                         </div>
                     </div>
                     <div class="file-list" id="file-list"></div>
+                    <div class="batch-selection-actions" id="batch-selection-actions">
+                        <label class="batch-select-all">
+                            <input type="checkbox" id="select-all-files" checked>
+                            <span>全选待处理文件</span>
+                        </label>
+                        <button type="button" class="btn-secondary" id="apply-strategy-btn">
+                            将当前策略应用到已选文件
+                        </button>
+                    </div>
                 </section>
 
                 <!-- 选项 -->
                 <section class="card" id="options-module">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">02 / 生产配置</span><h3>生成策略</h3></div>
+                        <span class="section-state">支持批量统一与单项覆盖</span>
+                    </div>
+                    <div class="workflow-note">
+                        <span class="workflow-badge">教案模式</span>
+                        <span>Word/PDF 将依次生成 Course JSON、可编辑 PPT、逐页讲稿、配音、字幕和视频。</span>
+                    </div>
                     <div class="options-grid">
                         <div class="option-group">
                             <label for="render-engine">渲染引擎</label>
                             <select id="render-engine" class="select-input">
-                                <option value="spire">Spire (默认)</option>
                                 <option value="libreoffice">LibreOffice (中文更友好)</option>
+                                <option value="spire">Spire (默认)</option>
                             </select>
                         </div>
                         <div class="option-group">
                             <label for="tts-engine">语音引擎</label>
                             <select id="tts-engine" class="select-input">
                                 <option value="edge-tts">Edge TTS (免费)</option>
+                                <option value="volcengine">火山引擎 TTS</option>
                                 <option value="minimax">MiniMax (需API)</option>
                             </select>
                         </div>
                         <div class="option-group">
                             <label for="voice-select">语音</label>
-                            <select id="voice-select" class="select-input">
-                                <option value="zh-CN-XiaoxiaoNeural">晓晓（女声）</option>
-                                <option value="zh-CN-YunxiNeural">云希（男声）</option>
-                                <option value="zh-CN-YunyangNeural">云扬（新闻风格）</option>
+                            <select id="voice-select" class="select-input voice-native-select" aria-hidden="true">
+                                <option value="">正在加载音色...</option>
                             </select>
+                            <div class="voice-preview-list" id="voice-preview-list"
+                                 role="listbox" aria-label="可试听音色列表">
+                                <div class="voice-list-message">正在加载音色...</div>
+                            </div>
+                            <input id="custom-voice" class="select-input"
+                                   placeholder="可选：输入账户专属/复刻音色 ID">
                         </div>
                         <div class="option-group toggle-group">
-                            <label>LLM 文本摘要</label>
+                            <label>AI 内容生成</label>
                             <div class="toggle-row">
                                 <span style="font-size:13px;color:var(--color-text-3)">关闭</span>
                                 <label class="toggle-switch">
-                                    <input type="checkbox" id="llm-enabled">
+                                    <input type="checkbox" id="llm-enabled" checked>
                                     <span class="toggle-slider"></span>
                                 </label>
                                 <span style="font-size:13px;color:var(--color-text-3)">开启</span>
                             </div>
                         </div>
-                        <div class="option-group llm-mode-group" id="llm-mode-group">
+                        <div class="option-group llm-mode-group visible" id="llm-mode-group">
+                            <label for="llm-engine">文本模型</label>
+                            <select id="llm-engine" class="select-input">
+                                <option value="qwen">通义千问（百炼）</option>
+                                <option value="minimax">MiniMax</option>
+                            </select>
                             <label for="llm-mode">摘要模式</label>
                             <select id="llm-mode" class="select-input">
-                                <option value="per-page">逐页摘要</option>
-                                <option value="whole-document">整文档摘要</option>
+                                <option value="per-page">逐页讲稿</option>
+                                <option value="whole-document">整篇理解</option>
                             </select>
+                            <label for="refinement-level">提炼程度</label>
+                            <select id="refinement-level" class="select-input">
+                                <option value="light">轻度：尽量保留原文</option>
+                                <option value="standard" selected>标准：精炼且完整</option>
+                                <option value="strong">高度：只保留核心内容</option>
+                            </select>
+                            <label class="toggle-row" for="illustrations-enabled">
+                                <input type="checkbox" id="illustrations-enabled" checked>
+                                <span>生成内容匹配插图（通义万相）</span>
+                            </label>
+                            <label for="max-illustrations">最多插图数量</label>
+                            <select id="max-illustrations" class="select-input">
+                                <option value="1">1 张</option>
+                                <option value="2">2 张</option>
+                                <option value="3" selected>3 张</option>
+                                <option value="4">4 张</option>
+                            </select>
+                            <label for="ppt-footer-text">PPT 页脚文字</label>
+                            <input id="ppt-footer-text" class="select-input"
+                                   type="text" maxlength="40"
+                                   value="AI COURSE STUDIO"
+                                   placeholder="显示在 PPT 左下角">
+                            <label for="school-logo-input">学校 Logo</label>
+                            <div class="logo-upload-control">
+                                <input id="school-logo-input" type="file"
+                                       accept=".png,.jpg,.jpeg,.webp" hidden>
+                                <button class="logo-upload-button" id="school-logo-button"
+                                        type="button">上传 Logo</button>
+                                <div class="logo-preview" id="school-logo-preview" hidden>
+                                    <img id="school-logo-image" alt="学校 Logo 预览">
+                                    <button id="school-logo-remove" type="button"
+                                            aria-label="移除学校 Logo">&times;</button>
+                                </div>
+                            </div>
+                            <small class="option-hint" id="school-logo-hint">
+                                支持 PNG/JPG/WebP，生成时按每页版式自动调整位置与大小
+                            </small>
                         </div>
                     </div>
                 </section>
 
                 <!-- 转换 -->
                 <section class="card" id="convert-module">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">03 / 提交生产</span><h3>生成课程</h3></div>
+                    </div>
                     <div class="convert-area">
                         <button class="btn-convert" id="convert-btn" disabled>
-                            <span class="btn-text">开始转换</span>
+                            <span class="btn-text">生成课程</span>
                             <span class="btn-loading" hidden>
                                 <span class="spinner"></span>
                                 转换中...
@@ -129,50 +270,28 @@
                         </div>
                     </div>
 
-                    <div class="conversion-progress" id="conversion-progress" hidden>
-                        <div class="progress-header">
-                            <span class="progress-stage" id="progress-stage">准备中...</span>
-                            <span class="progress-percentage" id="progress-percentage">0%</span>
-                        </div>
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="conversion-progress-fill"></div>
-                        </div>
-                        <div class="progress-steps" id="progress-details">
-                            <div class="step" id="step-init">
-                                <span class="step-dot"></span>
-                                <span class="step-label">初始化</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-extract">
-                                <span class="step-dot"></span>
-                                <span class="step-label">提取内容</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-render">
-                                <span class="step-dot"></span>
-                                <span class="step-label">渲染幻灯片</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-llm">
-                                <span class="step-dot"></span>
-                                <span class="step-label">文本摘要</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-tts">
-                                <span class="step-dot"></span>
-                                <span class="step-label">文字转语音</span>
-                            </div>
-                            <div class="step-line"></div>
-                            <div class="step" id="step-video">
-                                <span class="step-dot"></span>
-                                <span class="step-label">合成视频</span>
-                            </div>
-                        </div>
-                    </div>
-
                     <div class="convert-status" id="convert-status" hidden>
                         <div class="status-icon" id="status-icon"></div>
                         <p class="status-text" id="status-text"></p>
+                    </div>
+                </section>
+
+                <!-- 逐页讲稿确认 -->
+                <section class="card course-preview-card" id="course-preview-module" hidden>
+                    <div class="course-preview-header">
+                        <div>
+                            <h3 class="results-title">确认逐页讲稿</h3>
+                            <p class="course-preview-hint">逐页核对 PPT 与讲稿。保存修改后，点击继续生成配音、字幕和视频。</p>
+                        </div>
+                        <span class="course-preview-save-state" id="course-preview-save-state"></span>
+                    </div>
+                    <div class="course-preview-pages" id="course-preview-pages"></div>
+                    <div class="course-preview-actions">
+                        <button class="btn-preview" id="cancel-course-btn">取消并返回生成策略</button>
+                        <button class="btn-preview" id="save-scripts-btn">保存讲稿</button>
+                        <button class="btn-convert" id="continue-course-btn">
+                            <span class="btn-text">继续生成视频</span>
+                        </button>
                     </div>
                 </section>
 
@@ -189,21 +308,32 @@
 
                 <!-- 转换结果 -->
                 <section class="card" id="results-module" hidden>
-                    <h3 class="results-title">转换结果</h3>
+                    <div class="section-heading">
+                        <div><span class="section-kicker">04 / 资产交付</span><h3>课程产物</h3></div>
+                    </div>
                     <div class="results-grid" id="results-grid"></div>
                 </section>
             </div>
 
             <aside class="content-aside" id="dashboard-column">
+                <section class="card guide-card">
+                    <span class="section-kicker">生产流程</span>
+                    <h3>标准任务路径</h3>
+                    <ol class="process-list">
+                        <li class="active"><span>1</span><div><strong>上传课程素材</strong><small>Word、PDF 或 PPT</small></div></li>
+                        <li><span>2</span><div><strong>AI 课程设计</strong><small>提炼结构并生成讲稿</small></div></li>
+                        <li><span>3</span><div><strong>人工审核</strong><small>逐页确认与修订</small></div></li>
+                        <li><span>4</span><div><strong>多媒体合成</strong><small>配音、字幕与视频</small></div></li>
+                    </ol>
+                </section>
             </aside>
-        </main>
-
-        <footer class="footer">
-            <p>AI Course Studio &copy; 2026</p>
-        </footer>
+            </div>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=6"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=12"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>

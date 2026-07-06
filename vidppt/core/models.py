@@ -68,7 +68,7 @@ class ProcessConfig:
 
     # LLM 配置
     llm_enabled: bool = False
-    llm_engine: str = "minimax"
+    llm_engine: str = "qwen"
     llm_mode: str = "per-page"  # "per-page" 或 "whole-document"
     llm_options: dict = field(default_factory=dict)
 
@@ -76,9 +76,20 @@ class ProcessConfig:
     image_converter: str = "builtin"  # builtin, api
 
     # 视频配置
+    video_width: int = 1920
+    video_height: int = 1080
     video_fps: int = 24
     video_codec: str = "libx264"
+    video_preset: str = "veryfast"
+    video_crf: int = 21
+    video_pixel_format: str = "yuv420p"
+    video_gop_seconds: int = 2
+    video_profile: str = "high"
     audio_codec: str = "aac"
+    audio_bitrate: str = "128k"
+    audio_sample_rate: int = 48000
+    audio_channels: int = 1
+    audio_loudness_lufs: float = -16.0
 
     # 数字人配置（可选）
     enable_avatar: bool = False  # 是否启用数字人叠加
