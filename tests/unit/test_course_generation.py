@@ -124,7 +124,7 @@ def test_subtitle_renderer_builds_course_timeline(temp_dir):
     assert "第三句。" in text
 
 
-def test_subtitle_renderer_splits_long_script_into_single_line_cues(temp_dir):
+def test_subtitle_renderer_splits_long_script_into_readable_cues(temp_dir):
     course = Course.from_dict(
         {
             "title": "课程",
@@ -148,10 +148,41 @@ def test_subtitle_renderer_splits_long_script_into_single_line_cues(temp_dir):
     blocks = output.read_text(encoding="utf-8").strip().split("\n\n")
 
     assert len(blocks) >= 3
-    assert all(len(block.splitlines()[2:]) == 1 for block in blocks)
+    assert all(len(block.splitlines()[2:]) <= 2 for block in blocks)
     assert all(
-        len(line) <= 20
+        len(line) <= 14
         for block in blocks
+        for line in block.splitlines()[2:]
+    )
+
+
+def test_subtitle_renderer_prefers_semantic_breaks(temp_dir):
+    course = Course.from_dict(
+        {
+            "title": "课程",
+            "sections": [
+                {
+                    "id": "1",
+                    "title": "一",
+                    "script": (
+                        "我们先识别业务场景，然后评估数据基础，同时明确责任边界，"
+                        "最后形成可执行的智能体建设路线。"
+                    ),
+                },
+            ],
+        }
+    )
+
+    output = SubtitleRenderer().render_course(
+        [(course.sections[0], 8.0)], temp_dir / "course.srt"
+    )
+    text = output.read_text(encoding="utf-8")
+
+    assert "然后" in text
+    assert "同时" in text
+    assert all(
+        len(line) <= 14
+        for block in text.strip().split("\n\n")
         for line in block.splitlines()[2:]
     )
 
@@ -195,9 +226,9 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     assert "-vf" in command
     assert "subtitles=filename='course.srt'" in command[command.index("-vf") + 1]
     subtitle_filter = command[command.index("-vf") + 1]
-    assert "drawbox=x=0:y=976:w=1920:h=50" in subtitle_filter
-    assert "color=0x333333@0.45" in subtitle_filter
-    assert "FontSize=50" in subtitle_filter
+    assert "drawbox=x=96:y=900:w=1728:h=110" in subtitle_filter
+    assert "color=0x111111@0.55" in subtitle_filter
+    assert "FontSize=46" in subtitle_filter
     assert "PrimaryColour=&H00FFFFFF" in subtitle_filter
     assert "Outline=0" in subtitle_filter
     assert "Alignment=2" in subtitle_filter

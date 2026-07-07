@@ -15,6 +15,7 @@ import sys
 import time
 import shutil
 import secrets
+import subprocess
 from pathlib import Path
 from queue import Queue, Empty
 from urllib.parse import quote
@@ -78,8 +79,42 @@ TASK_DB_FILE = Path(os.environ.get(
 ))
 VOICE_PREVIEW_FOLDER = OUTPUT_FOLDER / 'voice_previews'
 VOICE_PREVIEW_TEXT = "你好，欢迎使用 AI 课程工作室，这是当前音色的试听效果。"
+SUBTITLE_FONT_FALLBACKS = [
+    'Noto Sans CJK SC',
+    'Noto Serif CJK SC',
+    'Source Han Sans SC',
+    'Source Han Serif SC',
+    'Source Han Sans CN',
+    'Source Han Serif CN',
+    'WenQuanYi Zen Hei',
+    'WenQuanYi Micro Hei',
+    'Droid Sans Fallback',
+    'AR PL UMing CN',
+    'AR PL UKai CN',
+    'AR PL SungtiL GB',
+    'AR PL KaitiM GB',
+    'LXGW WenKai',
+    'LXGW WenKai Screen',
+]
+PROPRIETARY_SUBTITLE_FONTS = {
+    'PingFang SC',
+    'PingFang TC',
+    'Heiti SC',
+    'Heiti TC',
+    'STHeiti',
+    'STSong',
+    'Songti SC',
+    'Microsoft YaHei',
+    'Microsoft JhengHei',
+    'SimHei',
+    'SimSun',
+    'NSimSun',
+    'KaiTi',
+    'FangSong',
+}
 _state_lock = threading.Lock()
 _continue_lock = threading.Lock()
+_preview_audio_locks: dict[str, threading.Lock] = {}
 MAX_STATE_ENTRIES = 50
 RESOURCE_CPU_LIMIT = float(os.environ.get('VIDPPT_CPU_LIMIT', '85'))
 RESOURCE_MEMORY_LIMIT = float(os.environ.get('VIDPPT_MEMORY_LIMIT', '80'))
@@ -241,17 +276,17 @@ def _subtitle_options(data: dict) -> dict:
             raise ValueError(f'{name} 必须在 {min_value} 到 {max_value} 之间')
         return value
 
-    x = number('subtitle_x', 0, 0, 1919)
-    y = number('subtitle_y', 976, 0, 1079)
-    width = number('subtitle_width', 1920, 1, 1920)
-    height = number('subtitle_height', 50, 1, 360)
+    x = number('subtitle_x', 96, 0, 1919)
+    y = number('subtitle_y', 900, 0, 1079)
+    width = number('subtitle_width', 1728, 1, 1920)
+    height = number('subtitle_height', 110, 1, 360)
     if x + width > 1920:
         raise ValueError('字幕区域宽度超出视频画布')
     if y + height > 1080:
         raise ValueError('字幕区域高度超出视频画布')
-    font_size = number('subtitle_font_size', 50, 12, 120)
+    font_size = number('subtitle_font_size', 46, 12, 120)
     opacity = number(
-        'subtitle_background_opacity', 0.45, 0.0, 1.0, float
+        'subtitle_background_opacity', 0.55, 0.0, 1.0, float
     )
     outline_width = number('subtitle_outline_width', 0.0, 0.0, 12.0, float)
 
@@ -271,12 +306,47 @@ def _subtitle_options(data: dict) -> dict:
         'subtitle_font_name': font_name[:60] or 'Noto Sans CJK SC',
         'subtitle_color': color('subtitle_color', '#FFFFFF'),
         'subtitle_background_color': color(
-            'subtitle_background_color', '#333333'
+            'subtitle_background_color', '#111111'
         ),
         'subtitle_background_opacity': opacity,
         'subtitle_outline_width': outline_width,
         'subtitle_outline_color': color('subtitle_outline_color', '#000000'),
     }
+
+
+def _subtitle_font_catalog() -> list[str]:
+    """读取当前运行环境可用于字幕烧录的字体族，失败时返回内置兜底。"""
+    fonts = set(SUBTITLE_FONT_FALLBACKS)
+    fc_list = shutil.which('fc-list')
+    if not fc_list:
+        return SUBTITLE_FONT_FALLBACKS.copy()
+    try:
+        result = subprocess.run(
+            [fc_list, ':lang=zh', 'family'],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception as exc:
+        logger.warning(f"读取字幕字体目录失败，使用内置目录: {exc}")
+        return SUBTITLE_FONT_FALLBACKS.copy()
+
+    for line in result.stdout.splitlines():
+        for family in line.split(','):
+            name = family.strip()
+            if name and name not in PROPRIETARY_SUBTITLE_FONTS:
+                fonts.add(name[:80])
+
+    priority = {name: index for index, name in enumerate(SUBTITLE_FONT_FALLBACKS)}
+    return sorted(
+        fonts,
+        key=lambda name: (
+            priority.get(name, len(priority)),
+            0 if any(token in name for token in ('CJK', 'Han', 'WenQuanYi')) else 1,
+            name.lower(),
+        ),
+    )
 
 
 def save_state(task_id: str):
@@ -1027,6 +1097,78 @@ def _slide_image_url(image_path: str) -> str:
     return f"/api/slide-image?path={quote(str(path), safe='')}&v={version}"
 
 
+def _page_audio_url(task_id: str, page_number: int, audio_path: Path) -> str:
+    """返回带文件版本的逐页音频 URL，避免重配音后浏览器复用旧音频。"""
+    version = (
+        audio_path.stat().st_mtime_ns
+        if audio_path.exists() else int(time.time_ns())
+    )
+    return f"/api/course-preview/{task_id}/audio/{page_number}?v={version}"
+
+
+def _preview_page(preview: dict, page_number: int) -> dict | None:
+    return next(
+        (
+            page for page in preview.get('pages', [])
+            if int(page.get('page_number', 0)) == page_number
+        ),
+        None,
+    )
+
+
+def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
+    """为课程准视频预览生成或复用单页完整配音。"""
+    task = tasks.get(task_id)
+    if not task:
+        raise FileNotFoundError("任务不存在")
+    output_dir = Path(task['output_dir'])
+    audio_path = output_dir / str(page_number) / 'audio.mp3'
+    if audio_path.exists() and audio_path.stat().st_size > 0:
+        return audio_path
+
+    lock = _preview_audio_locks.setdefault(task_id, threading.Lock())
+    with lock:
+        if audio_path.exists() and audio_path.stat().st_size > 0:
+            return audio_path
+
+        from vidppt.core.models import DocumentContent, PageContent
+        from vidppt.utils.progress import ProgressTracker
+
+        preview = _read_preview(task_id)
+        page = _preview_page(preview, page_number)
+        if not page:
+            raise FileNotFoundError("页面不存在")
+        script = str(page.get('script', '')).strip()
+        if not script:
+            raise ValueError("当前页讲稿为空")
+
+        options = task.get('media_options', {})
+        config = ProcessConfig(
+            input_path=Path(task['file_path']),
+            output_dir=output_dir,
+            save_intermediate=True,
+            skip_existing=True,
+            tts_engine=options.get('tts_engine', 'edge-tts'),
+            tts_voice=options.get('tts_voice'),
+            tts_rate=options.get('tts_rate', '+0%'),
+            tts_options=options.get('tts_options', {}),
+            render_engine=options.get('render_engine', 'spire'),
+            enable_tts=True,
+            enable_video=False,
+        )
+        content = DocumentContent(pages=[
+            PageContent(
+                page_number=page_number,
+                text=script,
+                slide_image=Path(page['image_path']),
+            )
+        ])
+        Pipeline(config)._generate_audio(content, ProgressTracker(total_pages=1))
+        if not audio_path.exists() or audio_path.stat().st_size == 0:
+            raise RuntimeError(f"第 {page_number} 页配音生成失败")
+        return audio_path
+
+
 def _estimate_page_duration(page: dict) -> float:
     """用已知 duration 或讲稿字数估算页时长，单位秒。"""
     try:
@@ -1683,6 +1825,66 @@ def get_course_preview(task_id):
         for page in preview.get('pages', [])
     ]
     return jsonify(preview)
+
+
+@app.route('/api/course-preview/<task_id>/page-audio', methods=['POST'])
+def ensure_course_preview_audio(task_id):
+    """按需生成或复用单页完整配音，供浏览器端准视频预览播放。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') not in {
+        'awaiting_confirmation',
+        'processing',
+        'completed',
+    }:
+        return jsonify({'error': '当前任务阶段暂不支持预览音频'}), 409
+    data = request.get_json(silent=True) or {}
+    try:
+        page_number = int(data.get('page_number', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'page_number 必须为正整数'}), 400
+    if page_number < 1:
+        return jsonify({'error': 'page_number 必须为正整数'}), 400
+
+    script = str(data.get('script', '')).strip()
+    try:
+        if script and task.get('status') == 'awaiting_confirmation':
+            _update_preview_scripts(task_id, [{
+                'page_number': page_number,
+                'script': script,
+            }])
+        audio_path = Path(task['output_dir']) / str(page_number) / 'audio.mp3'
+        if task.get('status') == 'processing':
+            if not audio_path.exists() or audio_path.stat().st_size == 0:
+                return jsonify({'error': '当前页配音尚未生成，请稍后再预览'}), 409
+        else:
+            audio_path = _ensure_course_preview_audio(task_id, page_number)
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.exception(f'生成课程预览音频失败: task={task_id}, page={page_number}')
+        return jsonify({'error': f'预览音频生成失败: {exc}'}), 502
+
+    return jsonify({
+        'success': True,
+        'page_number': page_number,
+        'audio_url': _page_audio_url(task_id, page_number, audio_path),
+    })
+
+
+@app.route('/api/course-preview/<task_id>/audio/<int:page_number>')
+def get_course_preview_audio(task_id, page_number):
+    """播放课程准视频预览用的单页音频。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    audio_path = Path(task['output_dir']) / str(page_number) / 'audio.mp3'
+    if not audio_path.exists() or audio_path.stat().st_size == 0:
+        return jsonify({'error': '音频不存在'}), 404
+    return send_file(audio_path, mimetype='audio/mpeg')
 
 
 @app.route('/api/course-segments/<task_id>/recommend', methods=['POST'])
@@ -2485,6 +2687,17 @@ def download_file():
         )
     except FileNotFoundError:
         return jsonify({'error': '文件不存在'}), 404
+
+
+@app.route('/api/subtitle-fonts')
+def list_subtitle_fonts():
+    """列出字幕烧录可用字体；优先返回当前容器 fontconfig 可见的中文字体。"""
+    fonts = _subtitle_font_catalog()
+    return jsonify({
+        'fonts': fonts,
+        'count': len(fonts),
+        'default': SUBTITLE_FONT_FALLBACKS[0],
+    })
 
 
 @app.route('/api/voices')

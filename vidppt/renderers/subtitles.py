@@ -1,12 +1,13 @@
 """根据逐页讲稿与音频时长生成基础 SRT 字幕。"""
 
-import re
 from pathlib import Path
 
 from ..core.course import CourseSection
-
-# 高校课程常见验收口径：每屏一行，控制在 20 个汉字以内。
-MAX_SUBTITLE_CHARS = 20
+from ..utils.subtitle_rules import (
+    MAX_SUBTITLE_CHARS,
+    subtitle_chunks,
+    wrap_subtitle,
+)
 
 
 class SubtitleRenderer:
@@ -71,37 +72,13 @@ class SubtitleRenderer:
 
 
 def _subtitle_chunks(text: str) -> list[str]:
-    """按语义标点切成适合画面展示的短字幕，避免长讲稿覆盖幻灯片。"""
-    text = re.sub(r"\s+", " ", text).strip()
-    if not text:
-        return []
-
-    phrases = [
-        item.strip()
-        for item in re.split(r"(?<=[。！？!?；;，,：:])", text)
-        if item.strip()
-    ]
-    chunks: list[str] = []
-    current = ""
-    for phrase in phrases:
-        if len(current) + len(phrase) <= MAX_SUBTITLE_CHARS:
-            current += phrase
-            continue
-        if current:
-            chunks.append(current)
-            current = ""
-        while len(phrase) > MAX_SUBTITLE_CHARS:
-            chunks.append(phrase[:MAX_SUBTITLE_CHARS])
-            phrase = phrase[MAX_SUBTITLE_CHARS:]
-        current = phrase
-    if current:
-        chunks.append(current)
-    return chunks
+    """按语义停顿与每屏行数限制切成适合画面展示的字幕。"""
+    return subtitle_chunks(text)
 
 
 def _wrap_subtitle(text: str) -> str:
-    """保持单行字幕；超长文本已由 _subtitle_chunks 拆分。"""
-    return re.sub(r"\s+", " ", text).strip()[:MAX_SUBTITLE_CHARS]
+    """把单条字幕整理为最多两行。"""
+    return wrap_subtitle(text)
 
 
 def _srt_time(seconds: float) -> str:

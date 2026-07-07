@@ -355,7 +355,7 @@
                     <div class="course-preview-header">
                         <div>
                             <h3 class="results-title">确认课程草稿</h3>
-                            <p class="course-preview-hint">逐页核对 PPT、讲稿和字幕效果。保存修改后，点击继续生成配音、字幕和视频。</p>
+                            <p class="course-preview-hint">逐页核对 PPT、讲稿和字幕效果。需要分段课程时先应用智能切课，也可跳过切课直接继续生成完整视频。</p>
                         </div>
                         <div class="course-preview-status">
                             <span class="course-preview-position" id="course-preview-position"></span>
@@ -370,6 +370,11 @@
                             <input type="checkbox" id="unreviewed-only">
                             只看未审核
                         </label>
+                    </div>
+                    <div class="course-preview-player">
+                        <button type="button" class="btn-preview" id="course-preview-play-btn">播放课程预览</button>
+                        <button type="button" class="btn-secondary" id="course-preview-stop-btn" disabled>停止</button>
+                        <span id="course-preview-player-status">从当前页开始，按页图、讲稿、字幕和配音预览课程效果</span>
                     </div>
                     <div class="smart-cut-panel">
                         <div class="smart-cut-tabs" role="tablist" aria-label="课程拆分设置">
@@ -395,7 +400,7 @@
                         </div>
                         <div class="smart-cut-section">
                             <h4>推荐范围</h4>
-                            <div class="smart-cut-summary" id="smart-cut-summary">尚未生成切课建议</div>
+                            <div class="smart-cut-summary" id="smart-cut-summary">尚未生成切课建议，可跳过切课直接继续生成完整视频</div>
                             <div class="smart-cut-list" id="smart-cut-list"></div>
                             <button type="button" class="btn-convert smart-cut-apply" id="smart-cut-apply-btn" disabled>应用</button>
                         </div>
@@ -403,57 +408,84 @@
                     <div class="course-subtitle-panel">
                         <div class="course-subtitle-panel-header">
                             <h4>字幕调试</h4>
-                            <span>拖动 PPT 画面中的字幕框，确认位置和样式后继续生成视频。</span>
+                            <span>在每页 PPT 上检查真实字幕样例、可读性和遮挡风险。</span>
                         </div>
                         <div class="course-subtitle-grid">
                             <div class="course-subtitle-controls">
+                                <label>推荐预设
+                                    <select id="subtitle-preset" class="select-input">
+                                        <option value="course">标准底部双行</option>
+                                        <option value="compact">紧凑单行</option>
+                                        <option value="safe">避让课件底部</option>
+                                        <option value="top">顶部字幕</option>
+                                        <option value="lowerMiddle">中部偏下</option>
+                                        <option value="custom">自定义</option>
+                                    </select>
+                                </label>
                                 <label>x坐标
                                     <input id="subtitle-x" class="number-input" type="number"
-                                           min="0" max="1919" value="0">
+                                           min="0" max="1919" value="96">
                                 </label>
                                 <label>y坐标
                                     <input id="subtitle-y" class="number-input" type="number"
-                                           min="0" max="1079" value="976">
+                                           min="0" max="1079" value="900">
                                 </label>
                                 <label>宽度
                                     <input id="subtitle-width" class="number-input" type="number"
-                                           min="1" max="1920" value="1920">
+                                           min="1" max="1920" value="1728">
                                 </label>
                                 <label>高度
                                     <input id="subtitle-height" class="number-input" type="number"
-                                           min="1" max="360" value="50">
+                                           min="1" max="360" value="110">
                                 </label>
                                 <label>字号
                                     <input id="subtitle-font-size" class="number-input" type="number"
-                                           min="12" max="120" value="50">
+                                           min="12" max="120" value="46">
                                 </label>
-                                <label>字体
-                                    <select id="subtitle-font-name" class="select-input">
-                                        <option value="Noto Sans CJK SC">Noto Sans CJK SC</option>
-                                        <option value="WenQuanYi Zen Hei">文泉驿正黑</option>
-                                        <option value="Droid Sans Fallback">Droid Sans Fallback</option>
-                                    </select>
-                                </label>
-                                <label>颜色
-                                    <input id="subtitle-color" class="color-input" type="color"
-                                           value="#ffffff">
-                                </label>
-                                <label>背景
-                                    <input id="subtitle-background-color" class="color-input" type="color"
-                                           value="#333333">
-                                </label>
-                                <label>背景透明
-                                    <input id="subtitle-background-opacity" class="number-input"
-                                           type="number" min="0" max="1" step="0.05" value="0.45">
-                                </label>
-                                <label>描边宽
-                                    <input id="subtitle-outline-width" class="number-input"
-                                           type="number" min="0" max="12" step="0.5" value="0">
-                                </label>
-                                <label>描边颜色
-                                    <input id="subtitle-outline-color" class="color-input" type="color"
-                                           value="#000000">
-                                </label>
+                                <details class="subtitle-advanced-settings">
+                                    <summary>高级样式</summary>
+                                    <div class="subtitle-advanced-grid">
+                                        <label>字体
+                                            <select id="subtitle-font-name" class="select-input">
+                                                <option value="Noto Sans CJK SC">Noto Sans CJK SC</option>
+                                                <option value="Noto Serif CJK SC">Noto Serif CJK SC</option>
+                                                <option value="Source Han Sans SC">思源黑体</option>
+                                                <option value="Source Han Serif SC">思源宋体</option>
+                                                <option value="Source Han Sans CN">思源黑体 CN</option>
+                                                <option value="Source Han Serif CN">思源宋体 CN</option>
+                                                <option value="WenQuanYi Zen Hei">文泉驿正黑</option>
+                                                <option value="WenQuanYi Micro Hei">文泉驿微米黑</option>
+                                                <option value="Droid Sans Fallback">Droid Sans Fallback</option>
+                                                <option value="AR PL UMing CN">AR PL UMing CN</option>
+                                                <option value="AR PL UKai CN">AR PL UKai CN</option>
+                                                <option value="AR PL SungtiL GB">AR PL SungtiL GB</option>
+                                                <option value="AR PL KaitiM GB">AR PL KaitiM GB</option>
+                                                <option value="LXGW WenKai">霞鹜文楷</option>
+                                                <option value="LXGW WenKai Screen">霞鹜文楷屏幕版</option>
+                                            </select>
+                                        </label>
+                                        <label>颜色
+                                            <input id="subtitle-color" class="color-input" type="color"
+                                                   value="#ffffff">
+                                        </label>
+                                        <label>背景
+                                            <input id="subtitle-background-color" class="color-input" type="color"
+                                                   value="#111111">
+                                        </label>
+                                        <label>背景透明
+                                            <input id="subtitle-background-opacity" class="number-input"
+                                                   type="number" min="0" max="1" step="0.05" value="0.55">
+                                        </label>
+                                        <label>描边宽
+                                            <input id="subtitle-outline-width" class="number-input"
+                                                   type="number" min="0" max="12" step="0.5" value="0">
+                                        </label>
+                                        <label>描边颜色
+                                            <input id="subtitle-outline-color" class="color-input" type="color"
+                                                   value="#000000">
+                                        </label>
+                                    </div>
+                                </details>
                             </div>
                             <div class="subtitle-position-preview" id="subtitle-position-preview">
                                 <div class="subtitle-preview-frame">

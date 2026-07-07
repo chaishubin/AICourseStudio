@@ -1,40 +1,61 @@
-╔══════════════════════════════════════════════════════════════╗
-║  AI Course Studio - 自定义字体目录                          ║
-║                                                             ║
-║  将字体文件 (.ttf / .ttc / .otf) 放入此目录，               ║
-║  Docker 构建时会自动安装到容器中，                           ║
-║  解决幻灯片渲染时字体不匹配的问题。                         ║
-╚══════════════════════════════════════════════════════════════╝
+AI Course Studio - optional custom fonts
+========================================
 
-使用方法
-────────
+This directory is scanned during Docker builds and copied to:
 
-1. 把需要的字体文件复制到这里：
-     cp /path/to/PingFang.ttc docker/fonts/
+  /usr/local/share/fonts/custom/
 
-2. 确认文件扩展名为 .ttf、.ttc 或 .otf
+Put only fonts that you are allowed to redistribute or use in generated
+commercial course videos. The project does not bundle proprietary system fonts.
 
-3. 重新构建镜像：
-     docker compose -f docker/docker-compose.yml build
+Recommended Simplified Chinese open-source fonts
+------------------------------------------------
 
-4. 重新启动服务：
-     docker compose -f docker/docker-compose.yml up -d
+The Docker image already installs these Debian/Ubuntu font packages:
 
-常见 PPT 字体
-──────────────
+  - fonts-noto-cjk
+    Families: Noto Sans CJK SC, Noto Serif CJK SC
+    License: SIL Open Font License 1.1
 
-macOS 制作的 PPT 常用：
-  - PingFang SC (苹方)  →  PingFang.ttc
-  - Heiti SC (黑体)      →  STHeiti Light.ttc / STHeiti Medium.ttc
-  - STSong (宋体)        →  Songti.ttc
+  - fonts-droid-fallback
+    Family: Droid Sans Fallback
+    License: Apache 2.0
 
-Windows/Office 制作的 PPT 常用：
-  - Microsoft YaHei (微软雅黑)
-  - SimSun (宋体)
-  - SimHei (黑体)
+  - fonts-wqy-zenhei
+    Family: WenQuanYi Zen Hei
+    License: GPL-2 with font embedding exception
 
-提示
-────
-容器默认已安装 Noto Sans CJK SC 和 Noto Serif CJK SC，
-这是一款高质量的开源中文字体，外观接近 PingFang / 微软雅黑。
-如果 PPT 使用了专有字体，放入此目录后重建即可。
+  - fonts-wqy-microhei
+    Family: WenQuanYi Micro Hei
+    License: Apache 2.0 or GPL-3+ with font exception
+
+Additional open-source families that are suitable if you install them yourself:
+
+  - Source Han Sans SC / CN
+  - Source Han Serif SC / CN
+  - LXGW WenKai
+  - LXGW WenKai Screen
+  - AR PL UMing CN
+  - AR PL UKai CN
+  - AR PL SungtiL GB
+  - AR PL KaitiM GB
+
+Usage
+-----
+
+1. Copy licensed .ttf, .ttc, or .otf files into this directory.
+2. Rebuild the image:
+
+     docker compose --env-file .env -f docker/docker-compose.yml build
+
+3. Restart the service:
+
+     docker compose --env-file .env -f docker/docker-compose.yml up -d
+
+Proprietary font warning
+------------------------
+
+Do not copy macOS or Windows system fonts such as PingFang SC, Microsoft YaHei,
+SimSun, SimHei, Songti, or Heiti into this directory unless you have confirmed
+that your license permits server-side use, redistribution in Docker images, and
+embedding/burning the font into generated videos.

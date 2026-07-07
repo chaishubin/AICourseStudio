@@ -162,6 +162,20 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert image_response.status_code == 200
     assert image_response.headers["Cache-Control"] == "no-store, max-age=0"
 
+    audio_path = output_dir / "1" / "audio.mp3"
+    audio_path.write_bytes(b"page-audio")
+    audio_response = client.post(
+        f"/api/course-preview/{task_id}/page-audio",
+        json={"page_number": 1},
+    )
+    assert audio_response.status_code == 200
+    audio_url = audio_response.get_json()["audio_url"]
+    assert audio_url.startswith(f"/api/course-preview/{task_id}/audio/1")
+    assert "&v=" in audio_url or "?v=" in audio_url
+    playback_response = client.get(audio_url)
+    assert playback_response.status_code == 200
+    assert playback_response.data == b"page-audio"
+
     save_response = client.patch(
         f"/api/course-preview/{task_id}",
         json={"pages": [{"page_number": 1, "script": "修改后的讲稿"}]},
@@ -831,6 +845,56 @@ def test_index_contains_editable_course_preview():
     assert 'id="visual-theme"' in html
     assert 'id="smart-cut-recommend-btn"' in html
     assert 'id="smart-cut-apply-btn"' in html
+    assert '可跳过切课直接继续生成完整视频' in html
+    assert 'id="subtitle-preset"' in html
+    assert '标准底部双行' in html
+    assert '顶部字幕' in html
+    assert 'Noto Serif CJK SC' in html
+    assert '文泉驿微米黑' in html
+    assert '霞鹜文楷' in html
+    assert '微软雅黑' not in html
+    assert '苹方' not in html
+    assert 'SimHei' not in html
+    assert 'id="course-preview-play-btn"' in html
+    assert '从当前页开始，按页图、讲稿、字幕和配音预览课程效果' in html
+    assert '在每页 PPT 上检查真实字幕样例、可读性和遮挡风险' in html
+
+
+def test_subtitle_font_catalog_endpoint(monkeypatch):
+    import web.app as web_app
+
+    monkeypatch.setattr(
+        web_app,
+        "_subtitle_font_catalog",
+        lambda: ["Noto Sans CJK SC", "WenQuanYi Micro Hei", "LXGW WenKai"],
+    )
+
+    response = web_app.app.test_client().get("/api/subtitle-fonts")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["default"] == "Noto Sans CJK SC"
+    assert payload["count"] == 3
+    assert "WenQuanYi Micro Hei" in payload["fonts"]
+    assert "LXGW WenKai" in payload["fonts"]
+
+
+def test_subtitle_font_catalog_filters_proprietary_fonts(monkeypatch):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app.shutil, "which", lambda _: "/usr/bin/fc-list")
+
+    class Result:
+        stdout = "Noto Sans CJK SC,Microsoft YaHei\nPingFang SC,LXGW WenKai\n"
+
+    monkeypatch.setattr(web_app.subprocess, "run", lambda *args, **kwargs: Result())
+
+    fonts = web_app._subtitle_font_catalog()
+
+    assert "Noto Sans CJK SC" in fonts
+    assert "LXGW WenKai" in fonts
+    assert "Microsoft YaHei" not in fonts
+    assert "PingFang SC" not in fonts
 
 
 def test_voice_catalog_is_filtered_by_engine():
