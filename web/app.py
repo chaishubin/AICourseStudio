@@ -5,6 +5,7 @@ AI Course Studio - Web 服务
 """
 
 import os
+import re
 import uuid
 import json
 import hashlib
@@ -16,6 +17,7 @@ import shutil
 import secrets
 from pathlib import Path
 from queue import Queue, Empty
+from urllib.parse import quote
 from flask import (
     Flask,
     render_template,
@@ -179,6 +181,104 @@ def _synthesize_voice_preview(engine_name: str, voice: str, output_path: Path):
     ))
 
 
+def _synthesize_script_preview(
+    engine_name: str,
+    voice: str,
+    text: str,
+    output_path: Path,
+    rate: str = '+0%',
+    tts_options: dict | None = None,
+):
+    """使用当前 TTS 配置生成真实讲稿片段试听。"""
+    if engine_name == 'edge-tts':
+        from vidppt.engines.tts.edge_tts_engine import EdgeTTSEngine
+        engine = EdgeTTSEngine()
+    elif engine_name == 'volcengine':
+        from vidppt.engines.tts.volcengine_tts_engine import VolcengineTTSEngine
+        engine = VolcengineTTSEngine()
+    elif engine_name == 'minimax':
+        from vidppt.engines.tts.api_tts_engine import MiniMaxTTSEngine
+        engine = MiniMaxTTSEngine()
+    else:
+        raise ValueError(f'不支持的语音引擎: {engine_name}')
+    asyncio.run(engine.convert_async(
+        text, output_path, voice, rate, **(tts_options or {})
+    ))
+
+
+def _volcengine_tts_options(data: dict, voice: str) -> tuple[str, dict]:
+    """校验并生成火山 TTS 的表现力参数。"""
+    rate = str(data.get('tts_rate', '-8%')).strip()
+    if rate not in {'-15%', '-8%', '+0%', '+10%'}:
+        raise ValueError('不支持的火山 TTS 语速')
+    emotion = str(data.get('tts_emotion', '')).strip().lower()
+    if emotion not in {'', 'happy', 'sad', 'angry', 'surprised'}:
+        raise ValueError('不支持的火山 TTS 情感')
+    emotion_scale = float(data.get('tts_emotion_scale', 3))
+    sentence_pause = int(data.get('tts_sentence_pause', 260))
+    if not 1 <= emotion_scale <= 5:
+        raise ValueError('火山 TTS 情感强度必须在 1 到 5 之间')
+    if not 0 <= sentence_pause <= 3000:
+        raise ValueError('火山 TTS 句间停顿必须在 0 到 3000 毫秒之间')
+    options = {
+        'voice_type': voice,
+        'emotion_scale': emotion_scale,
+        'silence_duration': sentence_pause,
+        'volume_ratio': 1.0,
+        'pitch_ratio': 1.0,
+    }
+    if emotion:
+        options['emotion'] = emotion
+    return rate, options
+
+
+def _subtitle_options(data: dict) -> dict:
+    """校验字幕坐标与样式设置，坐标基于 1920x1080 输出画布。"""
+    def number(name, default, min_value, max_value, cast=int):
+        raw = data.get(name, default)
+        value = cast(raw)
+        if value < min_value or value > max_value:
+            raise ValueError(f'{name} 必须在 {min_value} 到 {max_value} 之间')
+        return value
+
+    x = number('subtitle_x', 0, 0, 1919)
+    y = number('subtitle_y', 976, 0, 1079)
+    width = number('subtitle_width', 1920, 1, 1920)
+    height = number('subtitle_height', 50, 1, 360)
+    if x + width > 1920:
+        raise ValueError('字幕区域宽度超出视频画布')
+    if y + height > 1080:
+        raise ValueError('字幕区域高度超出视频画布')
+    font_size = number('subtitle_font_size', 50, 12, 120)
+    opacity = number(
+        'subtitle_background_opacity', 0.45, 0.0, 1.0, float
+    )
+    outline_width = number('subtitle_outline_width', 0.0, 0.0, 12.0, float)
+
+    def color(name, default):
+        value = str(data.get(name, default)).strip()
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value):
+            raise ValueError(f'{name} 必须是 #RRGGBB 颜色值')
+        return value
+
+    font_name = str(data.get('subtitle_font_name', 'Noto Sans CJK SC')).strip()
+    return {
+        'subtitle_x': x,
+        'subtitle_y': y,
+        'subtitle_width': width,
+        'subtitle_height': height,
+        'subtitle_font_size': font_size,
+        'subtitle_font_name': font_name[:60] or 'Noto Sans CJK SC',
+        'subtitle_color': color('subtitle_color', '#FFFFFF'),
+        'subtitle_background_color': color(
+            'subtitle_background_color', '#333333'
+        ),
+        'subtitle_background_opacity': opacity,
+        'subtitle_outline_width': outline_width,
+        'subtitle_outline_color': color('subtitle_outline_color', '#000000'),
+    }
+
+
 def save_state(task_id: str):
     """将指定任务的状态持久化到 state.json（JSON 数组格式）"""
     task = tasks.get(task_id)
@@ -263,13 +363,25 @@ def load_state():
             )
             status = 'awaiting_confirmation'
         if status in ('pending', 'processing'):
-            entry.update(
-                status='interrupted',
-                stage='queue',
-                message='服务曾重启，请重新提交该任务',
-                error='任务执行被服务重启中断',
-            )
-            status = 'interrupted'
+            if preview_path and Path(preview_path).exists():
+                entry.update(
+                    status='awaiting_confirmation',
+                    stage='preview',
+                    percentage=50,
+                    message='服务重启，已从讲稿检查点恢复，可继续生成',
+                    error=None,
+                    failed_stage=entry.get('stage'),
+                    retryable=True,
+                )
+                status = 'awaiting_confirmation'
+            else:
+                entry.update(
+                    status='interrupted',
+                    stage='queue',
+                    message='服务曾重启，请重新提交该任务',
+                    error='任务执行被服务重启中断',
+                )
+                status = 'interrupted'
         if status in ('queued', 'awaiting_confirmation', 'completed', 'error', 'interrupted'):
             tasks[task_id] = entry
 
@@ -431,6 +543,7 @@ class WebProgressTracker:
             existing = task.get('stage_timings', {})
             existing.update(kwargs.pop('stage_timings'))
             task['stage_timings'] = existing
+        kwargs.setdefault('updated_at', time.time())
         task.update(kwargs)
         tasks[self.task_id] = task
         # 持久化到 state.json（已完成/出错时写入，处理中也可写入以保留进度）
@@ -462,6 +575,9 @@ class WebProgressTracker:
             status='processing',
             stage=stage,
             percentage=overall,
+            stage_percentage=self.current_progress,
+            stage_current=current,
+            stage_total=total,
             message=message,
         )
 
@@ -472,6 +588,7 @@ class WebProgressTracker:
             'current': current,
             'total': total,
             'percentage': overall,
+            'stage_percentage': self.current_progress,
             'message': message
         })
 
@@ -488,6 +605,7 @@ class WebProgressTracker:
             status='processing',
             stage=stage,
             percentage=overall,
+            stage_percentage=0,
             message=message,
             stage_started_at=self._stage_started_at,
         )
@@ -496,6 +614,7 @@ class WebProgressTracker:
             'type': 'stage',
             'stage': stage,
             'percentage': overall,
+            'stage_percentage': 0,
             'message': message
         })
 
@@ -595,9 +714,12 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         # 2. 创建配置（LLM 由内联逻辑处理，不通过 Pipeline）
         logger.info(f"render_engine = {render_engine}")
         tts_options = {}
+        media_options = tasks.get(task_id, {}).get('media_options', {})
         tts_voice = voice
         if tts_engine == 'volcengine':
-            tts_options['voice_type'] = voice
+            tts_options.update(
+                media_options.get('tts_options') or {'voice_type': voice}
+            )
             tts_voice = None
         elif tts_engine == 'minimax':
             tts_options['voice_id'] = voice
@@ -610,8 +732,14 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             skip_existing=True,
             tts_engine=tts_engine,
             tts_voice=tts_voice,
+            tts_rate=media_options.get('tts_rate', '+0%'),
             tts_options=tts_options,
             render_engine=render_engine,
+            burn_subtitles=media_options.get('burn_subtitles', True),
+            **{
+                key: value for key, value in media_options.items()
+                if key.startswith('subtitle_')
+            },
             llm_enabled=llm_enabled,
             llm_engine=llm_engine,
         )
@@ -739,6 +867,7 @@ def run_course_generation(
     max_illustrations: int,
     ppt_footer_text: str,
     school_logo_path: str | None,
+    visual_theme: str,
 ):
     """Word/PDF 教案生成 Course、PPTX、字幕和视频。"""
     queue = progress_queues.get(task_id)
@@ -749,9 +878,12 @@ def run_course_generation(
     try:
         progress.set_stage('extract', '读取教案结构...')
         tts_options = {}
+        media_options = tasks.get(task_id, {}).get('media_options', {})
         tts_voice = voice
         if tts_engine == 'volcengine':
-            tts_options['voice_type'] = voice
+            tts_options.update(
+                media_options.get('tts_options') or {'voice_type': voice}
+            )
             tts_voice = None
         elif tts_engine == 'minimax':
             tts_options['voice_id'] = voice
@@ -774,8 +906,14 @@ def run_course_generation(
             output_dir=output_dir,
             tts_engine=tts_engine,
             tts_voice=tts_voice,
+            tts_rate=media_options.get('tts_rate', '+0%'),
             tts_options=tts_options,
             render_engine=render_engine,
+            burn_subtitles=media_options.get('burn_subtitles', True),
+            **{
+                key: value for key, value in media_options.items()
+                if key.startswith('subtitle_')
+            },
             enable_tts=False,
             enable_video=False,
         )
@@ -794,6 +932,7 @@ def run_course_generation(
             max_illustrations=max_illustrations,
             footer_text=ppt_footer_text,
             logo_path=Path(school_logo_path) if school_logo_path else None,
+            visual_theme=visual_theme,
         ).run(
             Path(file_path), output_dir
         )
@@ -874,6 +1013,163 @@ def _read_preview(task_id: str) -> dict:
     return json.loads(preview_path.read_text(encoding='utf-8'))
 
 
+def _persist_preview(task_id: str, preview: dict) -> None:
+    _preview_file(task_id).write_text(
+        json.dumps(preview, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+
+def _slide_image_url(image_path: str) -> str:
+    """返回带文件版本的预览图片 URL，避免重渲染后浏览器复用旧图。"""
+    path = Path(image_path)
+    version = path.stat().st_mtime_ns if path.exists() else int(time.time_ns())
+    return f"/api/slide-image?path={quote(str(path), safe='')}&v={version}"
+
+
+def _estimate_page_duration(page: dict) -> float:
+    """用已知 duration 或讲稿字数估算页时长，单位秒。"""
+    try:
+        duration = float(page.get('duration') or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration > 0:
+        return duration
+    text = str(page.get('script') or page.get('original_script') or '')
+    return max(15.0, len(text.strip()) / 4.0)
+
+
+def _page_section_key(page: dict) -> str:
+    section = str(page.get('section_title') or '').strip()
+    if section:
+        return section
+    title = str(page.get('title') or '').strip()
+    return title or f"第 {page.get('page_number', '')} 页"
+
+
+def _segment_payload(
+    segment_id: int,
+    title: str,
+    pages: list[dict],
+) -> dict:
+    duration = sum(_estimate_page_duration(page) for page in pages)
+    return {
+        'id': segment_id,
+        'title': title or f'第 {segment_id} 课',
+        'start_page': int(pages[0]['page_number']),
+        'end_page': int(pages[-1]['page_number']),
+        'page_count': len(pages),
+        'estimated_seconds': round(duration, 1),
+        'estimated_minutes': round(duration / 60, 1),
+    }
+
+
+def _recommend_lesson_segments(
+    pages: list[dict],
+    target_minutes: int,
+    priority: str,
+) -> list[dict]:
+    if not pages:
+        return []
+    target_seconds = max(60, int(target_minutes) * 60)
+    ordered_pages = sorted(pages, key=lambda page: int(page['page_number']))
+    segments = []
+
+    if priority == 'section':
+        current_key = _page_section_key(ordered_pages[0])
+        current_pages = []
+        for page in ordered_pages:
+            page_key = _page_section_key(page)
+            current_duration = sum(_estimate_page_duration(item) for item in current_pages)
+            should_split = (
+                current_pages
+                and page_key != current_key
+                and current_duration >= target_seconds * 0.55
+            )
+            if should_split:
+                segments.append(_segment_payload(len(segments) + 1, current_key, current_pages))
+                current_pages = []
+                current_key = page_key
+            current_pages.append(page)
+        if current_pages:
+            segments.append(_segment_payload(len(segments) + 1, current_key, current_pages))
+        return segments
+
+    current_pages = []
+    for page in ordered_pages:
+        current_pages.append(page)
+        current_duration = sum(_estimate_page_duration(item) for item in current_pages)
+        if current_duration >= target_seconds:
+            title = _page_section_key(current_pages[0])
+            segments.append(_segment_payload(len(segments) + 1, title, current_pages))
+            current_pages = []
+    if current_pages:
+        title = _page_section_key(current_pages[0])
+        segments.append(_segment_payload(len(segments) + 1, title, current_pages))
+    return segments
+
+
+def _normalize_lesson_segments(raw_segments: list[dict], pages: list[dict]) -> list[dict]:
+    page_numbers = [int(page['page_number']) for page in pages]
+    if not page_numbers:
+        raise ValueError("没有可切分页面")
+    min_page, max_page = min(page_numbers), max(page_numbers)
+    covered = set()
+    normalized = []
+    for index, item in enumerate(raw_segments, 1):
+        try:
+            start_page = int(item.get('start_page'))
+            end_page = int(item.get('end_page'))
+        except (TypeError, ValueError):
+            raise ValueError("推荐范围页码必须是整数") from None
+        if start_page > end_page:
+            raise ValueError("推荐范围起始页不能大于结束页")
+        if start_page < min_page or end_page > max_page:
+            raise ValueError("推荐范围超出当前页面")
+        pages_in_segment = {
+            page_number for page_number in page_numbers
+            if start_page <= page_number <= end_page
+        }
+        if covered & pages_in_segment:
+            raise ValueError("推荐范围不能重叠")
+        covered.update(pages_in_segment)
+        normalized.append({
+            'id': index,
+            'title': str(item.get('title') or f'第 {index} 课').strip()[:80],
+            'start_page': start_page,
+            'end_page': end_page,
+        })
+    if covered != set(page_numbers):
+        raise ValueError("推荐范围必须覆盖全部页面且不能遗漏")
+    return normalized
+
+
+def _apply_lesson_segments_to_course(preview: dict, segments: list[dict]) -> None:
+    course_json_path = preview.get('course_json_path')
+    if not course_json_path:
+        return
+    course_path = Path(course_json_path)
+    if not course_path.exists():
+        return
+    course = Course.from_dict(json.loads(course_path.read_text(encoding='utf-8')))
+    for section_index, section in enumerate(course.sections, 1):
+        page_number = section_index
+        segment = next(
+            (
+                item for item in segments
+                if item['start_page'] <= page_number <= item['end_page']
+            ),
+            None,
+        )
+        if segment:
+            section.metadata['lesson_segment'] = segment
+    course.metadata['lesson_segments'] = segments
+    course_path.write_text(
+        json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+
 def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
     preview = _read_preview(task_id)
     changed_pages = set()
@@ -882,18 +1178,22 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         for item in updates
         if 'page_number' in item
     }
+    reviewed_by_page = {
+        int(item['page_number']): bool(item.get('reviewed'))
+        for item in updates
+        if 'page_number' in item and 'reviewed' in item
+    }
     for page in preview.get('pages', []):
         page_number = int(page['page_number'])
         if page_number in by_page:
             if page.get('script', '').strip() != by_page[page_number]:
                 changed_pages.add(page_number)
             page['script'] = by_page[page_number]
+        if page_number in reviewed_by_page:
+            page['reviewed'] = reviewed_by_page[page_number]
     if not any(page.get('script', '').strip() for page in preview.get('pages', [])):
         raise ValueError("至少需要保留一页非空讲稿")
-    _preview_file(task_id).write_text(
-        json.dumps(preview, ensure_ascii=False, indent=2),
-        encoding='utf-8',
-    )
+    _persist_preview(task_id, preview)
 
     course_json_path = preview.get('course_json_path')
     if course_json_path:
@@ -914,6 +1214,25 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
     for page_number in changed_pages:
         (output_dir / str(page_number) / 'audio.mp3').unlink(missing_ok=True)
     return preview
+
+
+def _remove_media_artifacts(task: dict, retry_stage: str, page_number: int | None):
+    """按重试阶段清理最小必要产物，其余检查点继续复用。"""
+    output_dir = Path(task['output_dir'])
+    if retry_stage == 'page_tts':
+        if not page_number or page_number < 1:
+            raise ValueError("page_number 必须为正整数")
+        (output_dir / str(page_number) / 'audio.mp3').unlink(missing_ok=True)
+    elif retry_stage == 'tts':
+        for audio_path in output_dir.glob('*/audio.mp3'):
+            audio_path.unlink(missing_ok=True)
+    elif retry_stage not in {'media', 'video'}:
+        raise ValueError("不支持的重试阶段")
+
+    for artifact in output_dir.glob('*.mp4'):
+        artifact.unlink(missing_ok=True)
+    for artifact in output_dir.glob('*.srt'):
+        artifact.unlink(missing_ok=True)
 
 
 def run_media_generation(task_id: str):
@@ -941,8 +1260,14 @@ def run_media_generation(task_id: str):
             skip_existing=True,
             tts_engine=options.get('tts_engine', 'edge-tts'),
             tts_voice=options.get('tts_voice'),
+            tts_rate=options.get('tts_rate', '+0%'),
             tts_options=options.get('tts_options', {}),
             render_engine=options.get('render_engine', 'spire'),
+            burn_subtitles=options.get('burn_subtitles', True),
+            **{
+                key: value for key, value in options.items()
+                if key.startswith('subtitle_')
+            },
             enable_tts=True,
             enable_video=True,
         )
@@ -951,6 +1276,9 @@ def run_media_generation(task_id: str):
                 page_number=int(page['page_number']),
                 text=page.get('script', ''),
                 slide_image=Path(page['image_path']),
+                metadata={
+                    'lesson_segment': page.get('lesson_segment'),
+                } if page.get('lesson_segment') else {},
             )
             for page in preview.get('pages', [])
         ])
@@ -987,7 +1315,11 @@ def run_media_generation(task_id: str):
         subtitles = SubtitleRenderer().render_course(
             timed_pages, config.output_dir / f'{stem}.srt'
         )
-        progress.set_stage('video', '合成视频并烧录字幕...')
+        progress.set_stage(
+            'video',
+            '合成视频并烧录字幕...'
+            if config.burn_subtitles else '合成无内嵌字幕视频...'
+        )
         base_video = config.output_dir / f'{stem}.base.mp4'
         last_reported = -1
 
@@ -1011,24 +1343,113 @@ def run_media_generation(task_id: str):
         if not base_video.exists():
             raise RuntimeError("视频合成未产生输出文件")
         video_path = config.output_dir / f'{stem}.mp4'
-        CoursePipeline._burn_subtitles(
-            base_video,
-            subtitles,
-            video_path,
-            config,
-            progress_callback=lambda fraction: report_video(
-                78 + round(fraction * 20),
-                f'正在烧录字幕 {round(fraction * 100)}%',
-            ),
-            cancel_check=cancel_event.is_set,
-        )
-        base_video.unlink(missing_ok=True)
+        if config.burn_subtitles:
+            CoursePipeline._burn_subtitles(
+                base_video,
+                subtitles,
+                video_path,
+                config,
+                progress_callback=lambda fraction: report_video(
+                    78 + round(fraction * 20),
+                    f'正在烧录字幕 {round(fraction * 100)}%',
+                ),
+                cancel_check=cancel_event.is_set,
+            )
+            base_video.unlink(missing_ok=True)
+        else:
+            base_video.replace(video_path)
         progress.update('video', 100, 100, '视频生成完成')
+        lesson_segments = [
+            segment for segment in preview.get('lesson_segments', [])
+            if isinstance(segment, dict)
+        ]
+        segment_artifacts = []
+        if lesson_segments:
+            progress.set_stage('video', '按智能切课范围生成分段视频...')
+            pages_by_number = {page.page_number: page for page in content.pages}
+            timed_by_number = {
+                int(page.page_number): (course_page, duration)
+                for page, (course_page, duration) in zip(content.pages, timed_pages)
+            }
+            segment_dir = config.output_dir / 'segments'
+            segment_dir.mkdir(exist_ok=True)
+            for index, segment in enumerate(lesson_segments, 1):
+                if cancel_event.is_set():
+                    raise InterruptedError("用户停止了生成")
+                start_page = int(segment['start_page'])
+                end_page = int(segment['end_page'])
+                segment_pages = [
+                    pages_by_number[number]
+                    for number in sorted(pages_by_number)
+                    if start_page <= number <= end_page
+                ]
+                segment_timed_pages = [
+                    timed_by_number[number]
+                    for number in sorted(timed_by_number)
+                    if start_page <= number <= end_page
+                ]
+                if not segment_pages or not segment_timed_pages:
+                    continue
+                segment_content = DocumentContent(
+                    pages=segment_pages,
+                    metadata={
+                        **content.metadata,
+                        'lesson_segment': segment,
+                    },
+                )
+                segment_stem = f"{index:02d}_pages_{start_page}_{end_page}"
+                segment_subtitles = SubtitleRenderer().render_course(
+                    segment_timed_pages, segment_dir / f'{segment_stem}.srt'
+                )
+                segment_base = segment_dir / f'{segment_stem}.base.mp4'
+                segment_video = segment_dir / f'{segment_stem}.mp4'
+                segment_last_reported = -1
+
+                def report_segment(fraction: float):
+                    nonlocal segment_last_reported
+                    stage_percentage = round(
+                        ((index - 1) + max(0.0, min(1.0, fraction))) / len(lesson_segments) * 100
+                    )
+                    if stage_percentage > segment_last_reported:
+                        segment_last_reported = stage_percentage
+                        progress.update(
+                            'video',
+                            stage_percentage,
+                            100,
+                            f'正在生成第 {index}/{len(lesson_segments)} 段视频',
+                        )
+
+                VideoComposer.compose(
+                    segment_content,
+                    config,
+                    segment_base,
+                    progress_callback=report_segment,
+                    cancel_check=cancel_event.is_set,
+                )
+                if config.burn_subtitles:
+                    CoursePipeline._burn_subtitles(
+                        segment_base,
+                        segment_subtitles,
+                        segment_video,
+                        config,
+                        progress_callback=report_segment,
+                        cancel_check=cancel_event.is_set,
+                    )
+                    segment_base.unlink(missing_ok=True)
+                else:
+                    segment_base.replace(segment_video)
+                segment_artifacts.append({
+                    **segment,
+                    'video_path': str(segment_video),
+                    'subtitles_path': str(segment_subtitles),
+                })
+            progress.update('video', 100, 100, '分段视频生成完成')
         progress.complete(
             str(video_path),
             course_json_path=preview.get('course_json_path'),
             presentation_path=preview.get('presentation_path'),
             subtitles_path=str(subtitles),
+            video_segments=segment_artifacts,
         )
     except InterruptedError as e:
         import traceback
@@ -1113,6 +1534,13 @@ def convert_ppt():
     original_name = data.get('original_name') or Path(file_path or '').name
     tts_engine = data.get('tts_engine', 'edge-tts')
     voice = data.get('voice', 'zh-CN-XiaoxiaoNeural')
+    tts_rate = '+0%'
+    vendor_tts_options = None
+    if tts_engine == 'volcengine':
+        try:
+            tts_rate, vendor_tts_options = _volcengine_tts_options(data, voice)
+        except (TypeError, ValueError) as exc:
+            return jsonify({'error': str(exc)}), 400
     render_engine = data.get('render_engine', 'spire')
     llm_enabled = data.get('llm_enabled', False)
     llm_mode = data.get('llm_mode', 'per-page')
@@ -1124,12 +1552,24 @@ def convert_ppt():
         data.get('ppt_footer_text', 'AI COURSE STUDIO')
     ).strip()[:40]
     school_logo_path = data.get('school_logo_path')
+    visual_theme = str(data.get('visual_theme', 'auto')).strip().lower()
+    burn_subtitles = bool(data.get('burn_subtitles', True))
+    try:
+        subtitle_options = _subtitle_options(data)
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
     batch_id = str(data.get('batch_id') or uuid.uuid4().hex)
     strategy_source = data.get('strategy_source', 'batch')
     if refinement_level not in {'light', 'standard', 'strong'}:
         return jsonify({'error': '不支持的精炼程度'}), 400
     if max_illustrations not in {1, 2, 3, 4}:
         return jsonify({'error': '插图数量必须为 1 到 4'}), 400
+    allowed_visual_themes = {
+        'auto', 'industry', 'technology', 'culture', 'nature',
+        'education', 'business', 'health', 'public', 'finance',
+    }
+    if visual_theme not in allowed_visual_themes:
+        return jsonify({'error': '不支持的 PPT 视觉方案'}), 400
     if school_logo_path:
         logo_path = Path(school_logo_path)
         if (
@@ -1158,6 +1598,8 @@ def convert_ppt():
     strategy = {
         'tts_engine': tts_engine,
         'voice': voice,
+        'tts_rate': tts_rate,
+        'tts_options': vendor_tts_options or {},
         'render_engine': render_engine,
         'llm_enabled': llm_enabled,
         'llm_engine': llm_engine,
@@ -1167,6 +1609,9 @@ def convert_ppt():
         'max_illustrations': max_illustrations,
         'ppt_footer_text': ppt_footer_text,
         'school_logo_path': school_logo_path,
+        'visual_theme': visual_theme,
+        'burn_subtitles': burn_subtitles,
+        **subtitle_options,
     }
     tasks[task_id] = {
         'status': 'queued',
@@ -1183,11 +1628,14 @@ def convert_ppt():
             'tts_engine': tts_engine,
             'tts_voice': None if tts_engine in {'volcengine', 'minimax'} else voice,
             'tts_options': (
-                {'voice_type': voice} if tts_engine == 'volcengine'
+                vendor_tts_options if tts_engine == 'volcengine'
                 else {'voice_id': voice} if tts_engine == 'minimax'
                 else {}
             ),
+            'tts_rate': tts_rate,
             'render_engine': render_engine,
+            'burn_subtitles': burn_subtitles,
+            **subtitle_options,
         },
     }
     save_state(task_id)
@@ -1198,7 +1646,7 @@ def convert_ppt():
             run_course_generation, task_id, file_path, output_dir,
             tts_engine, voice, render_engine, llm_enabled, llm_engine,
             refinement_level, illustrations_enabled, max_illustrations,
-            ppt_footer_text, school_logo_path
+            ppt_footer_text, school_logo_path, visual_theme
         )
     else:
         conversion_queue.enqueue(
@@ -1230,11 +1678,186 @@ def get_course_preview(task_id):
     preview['pages'] = [
         {
             **page,
-            'image_url': f"/api/slide-image?path={page['image_path']}",
+            'image_url': _slide_image_url(page['image_path']),
         }
         for page in preview.get('pages', [])
     ]
     return jsonify(preview)
+
+
+@app.route('/api/course-segments/<task_id>/recommend', methods=['POST'])
+def recommend_course_segments(task_id):
+    """根据目标时长和优先级给出智能切课范围。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '任务尚未进入讲稿确认阶段'}), 409
+    data = request.get_json(silent=True) or {}
+    try:
+        target_minutes = int(data.get('target_minutes', 5))
+    except (TypeError, ValueError):
+        return jsonify({'error': '分割时长必须是整数分钟'}), 400
+    priority = data.get('priority', 'section')
+    if target_minutes < 1 or target_minutes > 120:
+        return jsonify({'error': '分割时长必须在 1 到 120 分钟之间'}), 400
+    if priority not in {'section', 'duration'}:
+        return jsonify({'error': '不支持的切课优先级'}), 400
+    try:
+        preview = _read_preview(task_id)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 404
+    segments = _recommend_lesson_segments(
+        preview.get('pages', []),
+        target_minutes,
+        priority,
+    )
+    return jsonify({
+        'success': True,
+        'target_minutes': target_minutes,
+        'priority': priority,
+        'segments': segments,
+        'total_estimated_minutes': round(
+            sum(segment['estimated_seconds'] for segment in segments) / 60,
+            1,
+        ),
+    })
+
+
+@app.route('/api/course-segments/<task_id>', methods=['POST'])
+def apply_course_segments(task_id):
+    """把用户确认的切课范围写入预览数据和 course.json。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '当前任务不能应用切课'}), 409
+    data = request.get_json(silent=True) or {}
+    raw_segments = data.get('segments')
+    if not isinstance(raw_segments, list) or not raw_segments:
+        return jsonify({'error': 'segments 必须是非空数组'}), 400
+    try:
+        preview = _read_preview(task_id)
+        segments = _normalize_lesson_segments(
+            raw_segments,
+            preview.get('pages', []),
+        )
+    except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    segment_by_page = {}
+    for segment in segments:
+        for page_number in range(segment['start_page'], segment['end_page'] + 1):
+            segment_by_page[page_number] = segment
+    for page in preview.get('pages', []):
+        page_number = int(page['page_number'])
+        if page_number in segment_by_page:
+            page['lesson_segment'] = segment_by_page[page_number]
+    preview['lesson_segments'] = segments
+    _persist_preview(task_id, preview)
+    _apply_lesson_segments_to_course(preview, segments)
+
+    task['lesson_segments'] = segments
+    task['message'] = f'已应用智能切课，共 {len(segments)} 段'
+    save_state(task_id)
+    return jsonify({
+        'success': True,
+        'message': f'已应用智能切课，共 {len(segments)} 段',
+        'segments': segments,
+    })
+
+
+@app.route('/api/course-presentation/<task_id>', methods=['GET', 'POST'])
+def course_presentation(task_id):
+    """下载可编辑 PPTX，或接收用户修改后的版本并刷新审核预览。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '任务尚未进入 PPT 审核阶段'}), 409
+    try:
+        preview = _read_preview(task_id)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 404
+
+    presentation_path = preview.get('presentation_path') or task.get('file_path')
+    if request.method == 'GET':
+        if not presentation_path:
+            return jsonify({'error': '当前任务没有可编辑 PPT'}), 404
+        presentation = Path(presentation_path)
+        if not presentation.is_file() or presentation.suffix.lower() not in {'.ppt', '.pptx'}:
+            return jsonify({'error': '可编辑 PPT 文件不存在'}), 404
+        return send_file(
+            presentation,
+            as_attachment=True,
+            download_name=_artifact_download_name(task, str(presentation)),
+        )
+
+    upload = request.files.get('presentation')
+    if not upload or not upload.filename:
+        return jsonify({'error': '请选择修改后的 PPTX 文件'}), 400
+    if Path(upload.filename).suffix.lower() != '.pptx':
+        return jsonify({'error': '仅支持上传 PPTX 文件'}), 400
+
+    output_dir = Path(task['output_dir'])
+    reviewed_path = output_dir / 'reviewed.pptx'
+    temporary_path = output_dir / f'.reviewed-{uuid.uuid4().hex}.pptx'
+    try:
+        upload.save(temporary_path)
+        temporary_path.replace(reviewed_path)
+
+        from vidppt.processors.ppt_processor import PPTProcessor
+        content = PPTProcessor().process(ProcessConfig(
+            input_path=reviewed_path,
+            output_dir=output_dir,
+            save_intermediate=True,
+            skip_existing=False,
+            render_engine=task.get('media_options', {}).get('render_engine', 'spire'),
+        ))
+        old_pages = {
+            int(page['page_number']): page
+            for page in preview.get('pages', [])
+        }
+        refreshed_pages = []
+        for page in content.pages:
+            previous = old_pages.get(page.page_number, {})
+            script = previous.get('script', page.text)
+            refreshed_pages.append({
+                'page_number': page.page_number,
+                'title': _page_title(page.text, page.page_number),
+                'image_path': str(page.slide_image),
+                'script': script,
+                'original_script': previous.get('original_script', page.text),
+                'reviewed': False,
+            })
+        if not refreshed_pages:
+            raise ValueError('上传的 PPTX 不包含可渲染页面')
+
+        preview['presentation_path'] = str(reviewed_path)
+        preview['pages'] = refreshed_pages
+        _preview_file(task_id).write_text(
+            json.dumps(preview, ensure_ascii=False, indent=2),
+            encoding='utf-8',
+        )
+        task['presentation_path'] = str(reviewed_path)
+        task['message'] = 'PPT 已更新，请确认预览和讲稿'
+        save_state(task_id)
+        return jsonify({
+            'success': True,
+            'message': 'PPT 已更新并重新渲染',
+            'pages': [
+                {
+                    **page,
+                    'image_url': _slide_image_url(page['image_path']),
+                }
+                for page in refreshed_pages
+            ],
+        })
+    except Exception as exc:
+        logger.exception("更新审核 PPT 失败")
+        return jsonify({'error': f'PPT 更新失败: {exc}'}), 400
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 @app.route('/api/course-preview/<task_id>', methods=['PATCH'])
@@ -1268,6 +1891,11 @@ def continue_course(task_id):
     pages = data.get('pages')
     tts_engine = data.get('tts_engine')
     voice = data.get('voice')
+    burn_subtitles = bool(data.get('burn_subtitles', True))
+    try:
+        subtitle_options = _subtitle_options(data)
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
 
     with _continue_lock:
         if task.get('status') != 'awaiting_confirmation':
@@ -1283,15 +1911,27 @@ def continue_course(task_id):
             return jsonify({'error': str(exc)}), 400
 
         if tts_engine and voice:
+            tts_rate = '+0%'
+            volcengine_options = None
+            if tts_engine == 'volcengine':
+                try:
+                    tts_rate, volcengine_options = _volcengine_tts_options(
+                        data, voice
+                    )
+                except (TypeError, ValueError) as exc:
+                    return jsonify({'error': str(exc)}), 400
             task['media_options'] = {
                 **task.get('media_options', {}),
                 'tts_engine': tts_engine,
                 'tts_voice': None if tts_engine in {'volcengine', 'minimax'} else voice,
                 'tts_options': (
-                    {'voice_type': voice} if tts_engine == 'volcengine'
+                    volcengine_options if tts_engine == 'volcengine'
                     else {'voice_id': voice} if tts_engine == 'minimax'
                     else {}
                 ),
+                'tts_rate': tts_rate,
+                'burn_subtitles': burn_subtitles,
+                **subtitle_options,
             }
 
         progress_queues[task_id] = Queue()
@@ -1328,9 +1968,64 @@ def stop_task(task_id):
             'current': task.get('percentage', 0),
             'total': 100,
             'percentage': task.get('percentage', 0),
+            'stage_percentage': task.get('stage_percentage', 0),
             'message': '正在停止生成，请稍候…',
         })
     return jsonify({'success': True, 'message': '已请求停止，正在回退上一步'})
+
+
+@app.route('/api/tasks/<task_id>/retry', methods=['POST'])
+def retry_task_stage(task_id):
+    """从讲稿检查点重新执行指定媒体阶段，并尽量复用已有成果。"""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    if task.get('status') not in {
+        'awaiting_confirmation', 'completed', 'error', 'interrupted'
+    }:
+        return jsonify({'error': '任务仍在运行或排队，不能重复提交'}), 409
+    try:
+        _read_preview(task_id)
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as exc:
+        return jsonify({'error': f'缺少讲稿检查点，无法分阶段重试: {exc}'}), 409
+
+    data = request.get_json(silent=True) or {}
+    retry_stage = str(data.get('stage', 'media')).strip()
+    page_number = data.get('page_number')
+    try:
+        page_number = int(page_number) if page_number is not None else None
+        _remove_media_artifacts(task, retry_stage, page_number)
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    progress_queues[task_id] = Queue()
+    cancellation_events.pop(task_id, None)
+    label = {
+        'page_tts': f'第 {page_number} 页配音',
+        'tts': '全部配音',
+        'video': '视频合成',
+        'media': '媒体生成',
+    }[retry_stage]
+    task.update(
+        status='queued',
+        stage='queue',
+        percentage=50,
+        message=f'{label}已重新进入队列',
+        error=None,
+        failed_stage=None,
+        retryable=False,
+        retry_stage=retry_stage,
+        retry_page=page_number,
+    )
+    save_state(task_id)
+    conversion_queue.enqueue(run_media_generation, task_id)
+    return jsonify({
+        'success': True,
+        'task_id': task_id,
+        'stage': retry_stage,
+        'message': task['message'],
+        'queue_size': conversion_queue.size(),
+    })
 
 
 @app.route('/api/tasks/<task_id>', methods=['DELETE'])
@@ -1349,7 +2044,7 @@ def delete_task(task_id):
         return jsonify({'error': '任务仍在运行或排队，请先停止任务再删除'}), 409
 
     output_root = OUTPUT_FOLDER.resolve()
-    output_dir = Path(task.get('output_dir') or (OUTPUT_FOLDER / task_id))
+    output_dir = OUTPUT_FOLDER / task_id
     try:
         resolved_output = output_dir.resolve()
     except OSError:
@@ -1362,6 +2057,16 @@ def delete_task(task_id):
             f'Refused to delete task {task_id}: unsafe output path {resolved_output}'
         )
         return jsonify({'error': '任务输出路径不安全，已拒绝删除'}), 400
+    recorded_output = task.get('output_dir')
+    if recorded_output:
+        try:
+            recorded_path = Path(recorded_output).resolve()
+        except OSError:
+            recorded_path = None
+        if recorded_path != resolved_output:
+            logger.warning(
+                f'Ignoring stale output path for task {task_id}: {recorded_output}'
+            )
     try:
         if resolved_output.exists():
             shutil.rmtree(resolved_output)
@@ -1491,7 +2196,11 @@ def get_slide_image():
     """获取单张幻灯片图片"""
     slide_path = request.args.get('path', '')
     try:
-        return send_file(slide_path, mimetype='image/png')
+        response = make_response(send_file(slide_path, mimetype='image/png'))
+        response.headers['Cache-Control'] = 'no-store, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     except FileNotFoundError:
         return jsonify({'error': '图片不存在'}), 404
 
@@ -1560,6 +2269,7 @@ def get_status(task_id):
         'preview_path': task.get('preview_path'),
         'stage': task.get('stage'),
         'percentage': task.get('percentage', 0),
+        'stage_percentage': task.get('stage_percentage', 0),
         'message': task.get('message', ''),
         'batch_id': task.get('batch_id'),
         'strategy_source': task.get('strategy_source', 'batch'),
@@ -1601,6 +2311,7 @@ def get_tasks():
             'file_path': task.get('file_path', ''),
             'stage': task.get('stage'),
             'percentage': task.get('percentage', 0),
+            'stage_percentage': task.get('stage_percentage', 0),
             'message': task.get('message', ''),
             'video_path': task.get('video_path'),
             'course_json_path': task.get('course_json_path'),
@@ -1612,6 +2323,10 @@ def get_tasks():
             'strategy_source': task.get('strategy_source', 'batch'),
             'strategy': task.get('strategy', {}),
             'queue_position': queue_positions.get(task_id),
+            'started_at': task.get('started_at'),
+            'stage_started_at': task.get('stage_started_at'),
+            'stage_timings': task.get('stage_timings', {}),
+            'updated_at': task.get('updated_at'),
         })
     # 按最近排序，限制 50 条
     all_tasks = all_tasks[-MAX_STATE_ENTRIES:]
@@ -1738,15 +2453,36 @@ def get_frame():
         return jsonify({'error': '图片文件不存在'}), 404
 
 
+def _artifact_download_name(task: dict | None, file_path: str) -> str:
+    """使用上传时的原始主文件名，并保留产物自身扩展名。"""
+    artifact = Path(file_path)
+    original_name = (task or {}).get('original_name', '')
+    original_basename = str(original_name).replace('\\', '/').rsplit('/', 1)[-1]
+    stem = Path(original_basename).stem.strip() if original_basename else ''
+    return f"{stem or artifact.stem or 'course'}{artifact.suffix}"
+
+
 @app.route('/api/download')
 def download_file():
     """下载文件"""
     file_path = request.args.get('path', '')
+    task = tasks.get(request.args.get('task_id', ''))
+    if not task:
+        task = next((
+            item for item in tasks.values()
+            if file_path in {
+                item.get('video_path'),
+                item.get('course_json_path'),
+                item.get('presentation_path'),
+                item.get('subtitles_path'),
+            }
+        ), None)
     try:
-        filename = Path(file_path).name
-        response = make_response(send_file(file_path))
-        response.headers['Content-Disposition'] = f'attachment; filename={filename}'
-        return response
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=_artifact_download_name(task, file_path),
+        )
     except FileNotFoundError:
         return jsonify({'error': '文件不存在'}), 404
 
@@ -1846,6 +2582,8 @@ def list_voices():
             for voice_id, name in minimax_zh
         ],
         'volcengine': [
+            {'id': 'zh_male_yangguangqingnian_emo_v2_mars_bigtts', 'name': '阳光青年（多情感·推荐）', 'gender': 'male'},
+            {'id': 'zh_female_roumeinvyou_emo_v2_mars_bigtts', 'name': '柔美女友（多情感·推荐）', 'gender': 'female'},
             {'id': 'zh_female_cancan_mars_bigtts', 'name': '灿灿', 'gender': 'female'},
             {'id': 'zh_female_vv_mars_bigtts', 'name': 'Vivi', 'gender': 'female'},
             {'id': 'zh_female_vv_uranus_bigtts', 'name': 'Vivi 2.0', 'gender': 'female'},
@@ -1869,8 +2607,6 @@ def list_voices():
             {'id': 'ICL_zh_male_shuanglangshaonian_tob', 'name': '爽朗少年', 'gender': 'male'},
             {'id': 'ICL_zh_male_tiancaitongzhuo_tob', 'name': '天才同桌', 'gender': 'male'},
             {'id': 'zh_male_beijingxiaoye_emo_v2_mars_bigtts', 'name': '北京小爷（多情感）', 'gender': 'male'},
-            {'id': 'zh_female_roumeinvyou_emo_v2_mars_bigtts', 'name': '柔美女友（多情感）', 'gender': 'female'},
-            {'id': 'zh_male_yangguangqingnian_emo_v2_mars_bigtts', 'name': '阳光青年（多情感）', 'gender': 'male'},
             {'id': 'zh_female_meilinvyou_emo_v2_mars_bigtts', 'name': '魅力女友（多情感）', 'gender': 'female'},
             {'id': 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts', 'name': '爽快思思（多情感）', 'gender': 'female'},
             {'id': 'zh_female_tianxinxiaomei_emo_v2_mars_bigtts', 'name': '甜心小美（多情感）', 'gender': 'female'},
@@ -1912,6 +2648,50 @@ def preview_voice():
         return jsonify({'error': f'试听生成失败: {exc}'}), 502
 
 
+@app.route('/api/script-preview', methods=['POST'])
+def preview_script():
+    """使用所选音色生成当前页讲稿前 300 字的试听音频。"""
+    data = request.get_json(silent=True) or {}
+    engine = str(data.get('engine', '')).strip()
+    voice = str(data.get('voice', '')).strip()
+    text = str(data.get('text', '')).strip()
+    if engine not in {'edge-tts', 'volcengine', 'minimax'}:
+        return jsonify({'error': '不支持的语音引擎'}), 400
+    if not voice or len(voice) > 200:
+        return jsonify({'error': '无效的音色 ID'}), 400
+    if not text:
+        return jsonify({'error': '当前页讲稿为空'}), 400
+
+    sample = text[:300]
+    rate = '+0%'
+    tts_options = {}
+    if engine == 'volcengine':
+        try:
+            rate, tts_options = _volcengine_tts_options(data, voice)
+        except (TypeError, ValueError) as exc:
+            return jsonify({'error': str(exc)}), 400
+    cache_key = hashlib.sha256(
+        (
+            f'script:{engine}:{voice}:{sample}:{rate}:'
+            f'{json.dumps(tts_options, sort_keys=True)}'
+        ).encode()
+    ).hexdigest()
+    preview_path = VOICE_PREVIEW_FOLDER / f'{cache_key}.mp3'
+    try:
+        if not preview_path.exists() or preview_path.stat().st_size == 0:
+            if engine == 'volcengine':
+                _synthesize_script_preview(
+                    engine, voice, sample, preview_path, rate, tts_options
+                )
+            else:
+                _synthesize_script_preview(engine, voice, sample, preview_path)
+        return send_file(preview_path, mimetype='audio/mpeg')
+    except Exception as exc:
+        logger.exception(f'生成讲稿试听失败: engine={engine}, voice={voice}')
+        preview_path.unlink(missing_ok=True)
+        return jsonify({'error': f'讲稿试听生成失败: {exc}'}), 502
+
+
 def resume_queued_tasks():
     """Rebuild executable queue entries that were persisted before a restart."""
     resumed = 0
@@ -1943,6 +2723,7 @@ def resume_queued_tasks():
                 int(strategy.get('max_illustrations', 3)),
                 strategy.get('ppt_footer_text', 'AI COURSE STUDIO'),
                 strategy.get('school_logo_path'),
+                strategy.get('visual_theme', 'auto'),
             )
         else:
             conversion_queue.enqueue(

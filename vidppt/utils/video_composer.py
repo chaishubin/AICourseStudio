@@ -30,9 +30,13 @@ class _MoviePyProgressLogger:
             def bars_callback(self, bar, attr, value, old_value=None):
                 if cancel_check and cancel_check():
                     raise InterruptedError("用户停止了视频生成")
+                # MoviePy 会依次报告音频 chunk 和视频 frame_index。
+                # 音频条会更早到达 100%，不能拿它冒充视频编码进度。
+                if bar != "frame_index" or attr != "index":
+                    return
                 state = self.bars.get(bar, {})
                 total = state.get("total")
-                if progress_callback and total and attr == "index":
+                if progress_callback and total:
                     progress_callback(min(1.0, max(0.0, value / total)))
 
         return CallbackLogger()

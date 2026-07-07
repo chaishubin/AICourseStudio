@@ -52,11 +52,20 @@ def test_volcengine_payload_and_rate():
         "zh_female_cancan_mars_bigtts",
         "+20%",
         emotion="happy",
+        emotion_scale=5,
+        pitch_ratio=1.1,
+        volume_ratio=1.2,
+        silence_duration=350,
     )
 
     assert payload["app"]["appid"] == "app"
     assert payload["audio"]["speed_ratio"] == 1.2
     assert payload["audio"]["emotion"] == "happy"
+    assert payload["audio"]["emotion_scale"] == 5
+    assert payload["audio"]["pitch_ratio"] == 1.1
+    assert payload["audio"]["volume_ratio"] == 1.2
+    assert payload["request"]["silence_duration"] == "350"
+    assert payload["request"]["with_frontend"] == "1"
     assert payload["request"]["operation"] == "query"
     assert len(engine._split_text("中" * 400)) == 2
 

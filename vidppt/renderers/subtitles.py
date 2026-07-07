@@ -5,14 +5,13 @@ from pathlib import Path
 
 from ..core.course import CourseSection
 
+# 高校课程常见验收口径：每屏一行，控制在 20 个汉字以内。
+MAX_SUBTITLE_CHARS = 20
+
 
 class SubtitleRenderer:
     def render_page(self, page: CourseSection, duration: float, output_path: Path) -> Path:
-        sentences = [
-            item.strip()
-            for item in re.split(r"(?<=[。！？!?])", page.script)
-            if item.strip()
-        ]
+        sentences = _subtitle_chunks(page.script)
         if not sentences:
             sentences = [page.script.strip() or page.title]
 
@@ -23,7 +22,8 @@ class SubtitleRenderer:
         for index, (sentence, weight) in enumerate(zip(sentences, weights), 1):
             end = duration if index == len(sentences) else cursor + duration * weight / total_weight
             entries.append(
-                f"{index}\n{_srt_time(cursor)} --> {_srt_time(end)}\n{sentence}\n"
+                f"{index}\n{_srt_time(cursor)} --> {_srt_time(end)}\n"
+                f"{_wrap_subtitle(sentence)}\n"
             )
             cursor = end
 
@@ -42,11 +42,9 @@ class SubtitleRenderer:
         index = 1
         entries = []
         for page, duration in pages:
-            sentences = [
-                item.strip()
-                for item in re.split(r"(?<=[。！？!?])", page.script)
-                if item.strip()
-            ] or [page.script.strip() or page.title]
+            sentences = _subtitle_chunks(page.script) or [
+                page.script.strip() or page.title
+            ]
             weights = [max(1, len(sentence)) for sentence in sentences]
             total_weight = sum(weights)
             page_cursor = cursor
@@ -60,7 +58,7 @@ class SubtitleRenderer:
                 )
                 entries.append(
                     f"{index}\n{_srt_time(page_cursor)} --> {_srt_time(end)}\n"
-                    f"{sentence}\n"
+                    f"{_wrap_subtitle(sentence)}\n"
                 )
                 page_cursor = end
                 index += 1
@@ -70,6 +68,40 @@ class SubtitleRenderer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text("\n".join(entries), encoding="utf-8")
         return output_path
+
+
+def _subtitle_chunks(text: str) -> list[str]:
+    """按语义标点切成适合画面展示的短字幕，避免长讲稿覆盖幻灯片。"""
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return []
+
+    phrases = [
+        item.strip()
+        for item in re.split(r"(?<=[。！？!?；;，,：:])", text)
+        if item.strip()
+    ]
+    chunks: list[str] = []
+    current = ""
+    for phrase in phrases:
+        if len(current) + len(phrase) <= MAX_SUBTITLE_CHARS:
+            current += phrase
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        while len(phrase) > MAX_SUBTITLE_CHARS:
+            chunks.append(phrase[:MAX_SUBTITLE_CHARS])
+            phrase = phrase[MAX_SUBTITLE_CHARS:]
+        current = phrase
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _wrap_subtitle(text: str) -> str:
+    """保持单行字幕；超长文本已由 _subtitle_chunks 拆分。"""
+    return re.sub(r"\s+", " ", text).strip()[:MAX_SUBTITLE_CHARS]
 
 
 def _srt_time(seconds: float) -> str:

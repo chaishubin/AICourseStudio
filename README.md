@@ -111,6 +111,19 @@ cd web && python app.py
 
 浏览器打开 `http://localhost:5000`，拖拽上传 PPT 即可在线转换。
 
+### Docker 本地开发
+
+默认 Docker 镜像会把 `web/` 和 `vidppt/` 复制进镜像，修改代码后需要重新构建。开发时可叠加源码挂载配置：
+
+```bash
+docker compose --env-file .env \
+  -f docker/docker-compose.yml \
+  -f docker/docker-compose.dev.yml \
+  up -d
+```
+
+此模式下，前端模板、JS、CSS 修改后刷新浏览器即可生效；Python 后端修改后重启容器即可，无需重新构建镜像。
+
 ---
 
 ## 架构

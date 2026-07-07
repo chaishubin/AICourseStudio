@@ -13,12 +13,17 @@ llm_options:
 
 enable_tts: true
 tts_engine: "volcengine"
-tts_rate: "+0%"
+tts_rate: "-8%"
 tts_options:
-  voice_type: "zh_female_cancan_mars_bigtts"
+  voice_type: "zh_male_yangguangqingnian_emo_v2_mars_bigtts"
   cluster: "volcano_tts"
   sample_rate: 24000
   audio_format: "mp3"
+  emotion: "happy"
+  emotion_scale: 3
+  volume_ratio: 1.0
+  pitch_ratio: 1.0
+  silence_duration: 260
   # appid 默认读取 VOLCENGINE_TTS_APPID
   # access_token 默认读取 VOLCENGINE_TTS_ACCESS_TOKEN
 

@@ -27,6 +27,14 @@ class AICourseStudioApp {
         this.slideUrls = [];
         this.voicePreviewAudio = null;
         this.activeVoicePreviewButton = null;
+        this.voiceFavoritesStorageKey = 'vidppt.voiceFavorites.v1';
+        this.strategyDraftStorageKey = 'vidppt.currentStrategy.v1';
+        this.voiceFavorites = this.loadVoiceFavorites();
+        this.pendingVoiceSelection = null;
+        this.previewAutoSaveTimer = null;
+        this.previewSaveSequence = 0;
+        this.currentPreviewPage = 1;
+        this.smartCutSegments = [];
 
         try {
             this.elements = {
@@ -42,11 +50,34 @@ class AICourseStudioApp {
                 fileList: document.getElementById('file-list'),
                 selectAllFiles: document.getElementById('select-all-files'),
                 applyStrategyBtn: document.getElementById('apply-strategy-btn'),
+                routeSummary: document.getElementById('route-summary'),
+                routeSummaryIcon: document.getElementById('route-summary-icon'),
+                routeSummaryTitle: document.getElementById('route-summary-title'),
+                routeSummaryDescription: document.getElementById('route-summary-description'),
 
                 ttsEngine: document.getElementById('tts-engine'),
                 voiceSelect: document.getElementById('voice-select'),
                 voicePreviewList: document.getElementById('voice-preview-list'),
                 customVoice: document.getElementById('custom-voice'),
+                volcengineExpressionGroup: document.getElementById('volcengine-expression-group'),
+                ttsEmotion: document.getElementById('tts-emotion'),
+                ttsRate: document.getElementById('tts-rate'),
+                ttsEmotionScale: document.getElementById('tts-emotion-scale'),
+                ttsSentencePause: document.getElementById('tts-sentence-pause'),
+                burnSubtitles: document.getElementById('burn-subtitles'),
+                subtitlePreviewFrame: document.getElementById('subtitle-position-preview'),
+                subtitlePreviewBar: document.getElementById('subtitle-preview-bar'),
+                subtitleX: document.getElementById('subtitle-x'),
+                subtitleY: document.getElementById('subtitle-y'),
+                subtitleWidth: document.getElementById('subtitle-width'),
+                subtitleHeight: document.getElementById('subtitle-height'),
+                subtitleFontSize: document.getElementById('subtitle-font-size'),
+                subtitleFontName: document.getElementById('subtitle-font-name'),
+                subtitleColor: document.getElementById('subtitle-color'),
+                subtitleBackgroundColor: document.getElementById('subtitle-background-color'),
+                subtitleBackgroundOpacity: document.getElementById('subtitle-background-opacity'),
+                subtitleOutlineWidth: document.getElementById('subtitle-outline-width'),
+                subtitleOutlineColor: document.getElementById('subtitle-outline-color'),
                 renderEngine: document.getElementById('render-engine'),
 
                 llmEnabled: document.getElementById('llm-enabled'),
@@ -54,6 +85,7 @@ class AICourseStudioApp {
                 llmModeGroup: document.getElementById('llm-mode-group'),
                 llmMode: document.getElementById('llm-mode'),
                 refinementLevel: document.getElementById('refinement-level'),
+                visualTheme: document.getElementById('visual-theme'),
                 illustrationsEnabled: document.getElementById('illustrations-enabled'),
                 maxIllustrations: document.getElementById('max-illustrations'),
                 pptFooterText: document.getElementById('ppt-footer-text'),
@@ -63,6 +95,12 @@ class AICourseStudioApp {
                 schoolLogoImage: document.getElementById('school-logo-image'),
                 schoolLogoRemove: document.getElementById('school-logo-remove'),
                 schoolLogoHint: document.getElementById('school-logo-hint'),
+                advancedToggle: document.getElementById('advanced-toggle'),
+                workflowBadge: document.getElementById('workflow-badge'),
+                workflowDescription: document.getElementById('workflow-description'),
+                strategyTemplateSelect: document.getElementById('strategy-template-select'),
+                saveTemplateBtn: document.getElementById('save-template-btn'),
+                deleteTemplateBtn: document.getElementById('delete-template-btn'),
 
                 convertBtn: document.getElementById('convert-btn'),
                 renderBtn: document.getElementById('render-btn'),
@@ -86,6 +124,19 @@ class AICourseStudioApp {
                 coursePreviewModule: document.getElementById('course-preview-module'),
                 coursePreviewPages: document.getElementById('course-preview-pages'),
                 coursePreviewSaveState: document.getElementById('course-preview-save-state'),
+                coursePreviewPosition: document.getElementById('course-preview-position'),
+                previewPreviousBtn: document.getElementById('preview-previous-btn'),
+                previewNextBtn: document.getElementById('preview-next-btn'),
+                previewPageSelect: document.getElementById('preview-page-select'),
+                unreviewedOnly: document.getElementById('unreviewed-only'),
+                cutDurationMinutes: document.getElementById('cut-duration-minutes'),
+                smartCutRecommendBtn: document.getElementById('smart-cut-recommend-btn'),
+                smartCutApplyBtn: document.getElementById('smart-cut-apply-btn'),
+                smartCutList: document.getElementById('smart-cut-list'),
+                smartCutSummary: document.getElementById('smart-cut-summary'),
+                downloadEditablePptBtn: document.getElementById('download-editable-ppt-btn'),
+                uploadEditedPptBtn: document.getElementById('upload-edited-ppt-btn'),
+                editedPptInput: document.getElementById('edited-ppt-input'),
                 cancelCourseBtn: document.getElementById('cancel-course-btn'),
                 saveScriptsBtn: document.getElementById('save-scripts-btn'),
                 continueCourseBtn: document.getElementById('continue-course-btn'),
@@ -103,7 +154,10 @@ class AICourseStudioApp {
 
     init() {
         this.bindEvents();
-        this.loadVoices();
+        this.bindSubtitleControls();
+        this.restoreCurrentStrategy();
+        this.loadStrategyTemplates();
+        this.loadVoices({ preferredVoice: this.pendingVoiceSelection });
         this.restoreTasks();
         this.taskRefreshTimer = setInterval(() => this.reconcileTasks(), 5000);
     }
@@ -115,7 +169,297 @@ class AICourseStudioApp {
     }
 
     updateItem(index, patch) {
-        Object.assign(this.state.files[index], patch);
+        const item = this.state.files[index];
+        const changed = Object.entries(patch).some(([key, value]) =>
+            !this._stateValueEquals(item[key], value)
+        );
+        if (changed) Object.assign(item, patch);
+        return changed;
+    }
+
+    _stateValueEquals(left, right) {
+        if (left === right) return true;
+        if (
+            left
+            && right
+            && typeof left === 'object'
+            && typeof right === 'object'
+        ) {
+            try {
+                return JSON.stringify(left) === JSON.stringify(right);
+            } catch {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    _taskStatus(status) {
+        return ['pending', 'processing'].includes(status) ? 'processing' : status;
+    }
+
+    // ── Strategy draft persistence ─────────────────────
+    bindStrategyPersistence() {
+        const controls = [
+            this.elements.voiceSelect,
+            this.elements.customVoice,
+            this.elements.ttsEmotion,
+            this.elements.ttsRate,
+            this.elements.ttsEmotionScale,
+            this.elements.ttsSentencePause,
+            this.elements.burnSubtitles,
+            this.elements.subtitleX,
+            this.elements.subtitleY,
+            this.elements.subtitleWidth,
+            this.elements.subtitleHeight,
+            this.elements.subtitleFontSize,
+            this.elements.subtitleFontName,
+            this.elements.subtitleColor,
+            this.elements.subtitleBackgroundColor,
+            this.elements.subtitleBackgroundOpacity,
+            this.elements.subtitleOutlineWidth,
+            this.elements.subtitleOutlineColor,
+            this.elements.renderEngine,
+            this.elements.llmEnabled,
+            this.elements.llmEngine,
+            this.elements.llmMode,
+            this.elements.refinementLevel,
+            this.elements.visualTheme,
+            this.elements.illustrationsEnabled,
+            this.elements.maxIllustrations,
+            this.elements.pptFooterText
+        ];
+        controls.forEach(control => {
+            if (!control) return;
+            const eventName = control.tagName === 'INPUT' && control.type === 'text'
+                ? 'input'
+                : 'change';
+            control.addEventListener(eventName, () => {
+                if (control === this.elements.customVoice && control.value.trim()) {
+                    this.elements.voicePreviewList
+                        .querySelectorAll('.voice-preview-item')
+                        .forEach(row => {
+                            row.classList.remove('selected');
+                            row.setAttribute('aria-selected', 'false');
+                        });
+                }
+                if (control === this.elements.llmEnabled) this.toggleLLMMode();
+                this.saveCurrentStrategy();
+            });
+        });
+    }
+
+    bindSubtitleControls() {
+        const controls = [
+            this.elements.subtitleX,
+            this.elements.subtitleY,
+            this.elements.subtitleWidth,
+            this.elements.subtitleHeight,
+            this.elements.subtitleFontSize,
+            this.elements.subtitleColor,
+            this.elements.subtitleBackgroundColor,
+            this.elements.subtitleBackgroundOpacity,
+            this.elements.subtitleOutlineWidth,
+            this.elements.subtitleOutlineColor
+        ];
+        controls.forEach(control => {
+            if (!control) return;
+            control.addEventListener('input', () => {
+                this.clampSubtitleInputs();
+                this.syncSubtitlePreviewFromInputs();
+                this.saveCurrentStrategy();
+            });
+        });
+        this.elements.subtitleFontName?.addEventListener('change', () => {
+            this.syncSubtitlePreviewFromInputs();
+            this.saveCurrentStrategy();
+        });
+        const bar = this.elements.subtitlePreviewBar;
+        const frame = this.elements.subtitlePreviewFrame?.querySelector('.subtitle-preview-frame');
+        if (!bar || !frame) return;
+        let dragOffset = { x: 0, y: 0 };
+        bar.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            const barRect = bar.getBoundingClientRect();
+            dragOffset = {
+                x: event.clientX - barRect.left,
+                y: event.clientY - barRect.top
+            };
+            bar.setPointerCapture(event.pointerId);
+        });
+        bar.addEventListener('pointermove', event => {
+            if (!bar.hasPointerCapture(event.pointerId)) return;
+            const frameRect = frame.getBoundingClientRect();
+            const width = Number(this.elements.subtitleWidth.value) || 1;
+            const height = Number(this.elements.subtitleHeight.value) || 1;
+            const x = Math.round(
+                (event.clientX - frameRect.left - dragOffset.x) / frameRect.width * 1920
+            );
+            const y = Math.round(
+                (event.clientY - frameRect.top - dragOffset.y) / frameRect.height * 1080
+            );
+            this.elements.subtitleX.value = Math.max(0, Math.min(1920 - width, x));
+            this.elements.subtitleY.value = Math.max(0, Math.min(1080 - height, y));
+            this.syncSubtitlePreviewFromInputs();
+            this.saveCurrentStrategy();
+        });
+        bar.addEventListener('pointerup', event => {
+            if (bar.hasPointerCapture(event.pointerId)) {
+                bar.releasePointerCapture(event.pointerId);
+            }
+        });
+        this.syncSubtitlePreviewFromInputs();
+    }
+
+    clampSubtitleInputs() {
+        const width = Math.max(1, Math.min(1920, Number(this.elements.subtitleWidth.value) || 1920));
+        const height = Math.max(1, Math.min(360, Number(this.elements.subtitleHeight.value) || 50));
+        const x = Math.max(0, Math.min(1920 - width, Number(this.elements.subtitleX.value) || 0));
+        const y = Math.max(0, Math.min(1080 - height, Number(this.elements.subtitleY.value) || 976));
+        this.elements.subtitleWidth.value = width;
+        this.elements.subtitleHeight.value = height;
+        this.elements.subtitleX.value = x;
+        this.elements.subtitleY.value = y;
+    }
+
+    syncSubtitlePreviewFromInputs() {
+        const bar = this.elements.subtitlePreviewBar;
+        if (!bar) return;
+        this.clampSubtitleInputs();
+        const x = Number(this.elements.subtitleX.value) || 0;
+        const y = Number(this.elements.subtitleY.value) || 0;
+        const width = Number(this.elements.subtitleWidth.value) || 1920;
+        const height = Number(this.elements.subtitleHeight.value) || 50;
+        const color = this.elements.subtitleColor.value || '#ffffff';
+        const background = this.elements.subtitleBackgroundColor.value || '#333333';
+        const opacity = Number(this.elements.subtitleBackgroundOpacity.value);
+        const outline = Number(this.elements.subtitleOutlineWidth.value) || 0;
+        const outlineColor = this.elements.subtitleOutlineColor.value || '#000000';
+        bar.style.left = `${x / 1920 * 100}%`;
+        bar.style.top = `${y / 1080 * 100}%`;
+        bar.style.width = `${width / 1920 * 100}%`;
+        bar.style.height = `${height / 1080 * 100}%`;
+        bar.style.color = color;
+        bar.style.background = this._hexToRgba(
+            background,
+            Number.isFinite(opacity) ? opacity : 0.45
+        );
+        bar.style.webkitTextStroke = outline ? `${outline / 5}px ${outlineColor}` : '';
+        bar.style.fontFamily = this.elements.subtitleFontName.value || 'Noto Sans CJK SC';
+        this.syncCourseSubtitleOverlays();
+    }
+
+    syncCourseSubtitleOverlays() {
+        const overlays = document.querySelectorAll('.course-preview-subtitle-overlay');
+        if (!overlays.length) return;
+        this.clampSubtitleInputs();
+        const x = Number(this.elements.subtitleX.value) || 0;
+        const y = Number(this.elements.subtitleY.value) || 0;
+        const width = Number(this.elements.subtitleWidth.value) || 1920;
+        const height = Number(this.elements.subtitleHeight.value) || 50;
+        const fontSize = Number(this.elements.subtitleFontSize.value) || 50;
+        const color = this.elements.subtitleColor.value || '#ffffff';
+        const background = this.elements.subtitleBackgroundColor.value || '#333333';
+        const opacity = Number(this.elements.subtitleBackgroundOpacity.value);
+        const outline = Number(this.elements.subtitleOutlineWidth.value) || 0;
+        const outlineColor = this.elements.subtitleOutlineColor.value || '#000000';
+        const fontName = this.elements.subtitleFontName.value || 'Noto Sans CJK SC';
+        overlays.forEach(overlay => {
+            overlay.style.left = `${x / 1920 * 100}%`;
+            overlay.style.top = `${y / 1080 * 100}%`;
+            overlay.style.width = `${width / 1920 * 100}%`;
+            overlay.style.height = `${height / 1080 * 100}%`;
+            overlay.style.color = color;
+            overlay.style.background = this._hexToRgba(
+                background,
+                Number.isFinite(opacity) ? opacity : 0.45
+            );
+            overlay.style.webkitTextStroke = outline ? `${outline / 4}px ${outlineColor}` : '';
+            overlay.style.fontFamily = fontName;
+            overlay.style.fontSize = `${Math.max(10, Math.min(28, fontSize / 2.5))}px`;
+        });
+    }
+
+    _hexToRgba(hex, opacity) {
+        const value = String(hex || '#333333').replace('#', '');
+        const red = parseInt(value.slice(0, 2), 16);
+        const green = parseInt(value.slice(2, 4), 16);
+        const blue = parseInt(value.slice(4, 6), 16);
+        return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, opacity))})`;
+    }
+
+    saveCurrentStrategy() {
+        try {
+            localStorage.setItem(
+                this.strategyDraftStorageKey,
+                JSON.stringify(this.collectCurrentStrategy())
+            );
+        } catch (error) {
+            console.warn('保存当前生成策略失败:', error);
+        }
+    }
+
+    restoreCurrentStrategy() {
+        try {
+            const rawStrategy = localStorage.getItem(this.strategyDraftStorageKey);
+            if (!rawStrategy) return;
+            const strategy = JSON.parse(rawStrategy);
+            if (!strategy || typeof strategy !== 'object') return;
+            this.applyStrategyToControls(strategy);
+        } catch (error) {
+            console.warn('恢复当前生成策略失败:', error);
+        }
+    }
+
+    applyStrategyToControls(strategy) {
+        if (strategy.tts_engine) this.elements.ttsEngine.value = strategy.tts_engine;
+
+        const values = {
+            renderEngine: 'render_engine',
+            llmEngine: 'llm_engine',
+            llmMode: 'llm_mode',
+            refinementLevel: 'refinement_level',
+            visualTheme: 'visual_theme',
+            maxIllustrations: 'max_illustrations',
+            pptFooterText: 'ppt_footer_text',
+            ttsEmotion: 'tts_emotion',
+            ttsRate: 'tts_rate',
+            ttsEmotionScale: 'tts_emotion_scale',
+            ttsSentencePause: 'tts_sentence_pause',
+            subtitleX: 'subtitle_x',
+            subtitleY: 'subtitle_y',
+            subtitleWidth: 'subtitle_width',
+            subtitleHeight: 'subtitle_height',
+            subtitleFontSize: 'subtitle_font_size',
+            subtitleFontName: 'subtitle_font_name',
+            subtitleColor: 'subtitle_color',
+            subtitleBackgroundColor: 'subtitle_background_color',
+            subtitleBackgroundOpacity: 'subtitle_background_opacity',
+            subtitleOutlineWidth: 'subtitle_outline_width',
+            subtitleOutlineColor: 'subtitle_outline_color'
+        };
+        Object.entries(values).forEach(([elementName, key]) => {
+            if (strategy[key] !== undefined && this.elements[elementName]) {
+                this.elements[elementName].value = strategy[key];
+            }
+        });
+
+        if (strategy.llm_enabled !== undefined) {
+            this.elements.llmEnabled.checked = Boolean(strategy.llm_enabled);
+        }
+        if (strategy.illustrations_enabled !== undefined) {
+            this.elements.illustrationsEnabled.checked = Boolean(strategy.illustrations_enabled);
+        }
+        if (strategy.burn_subtitles !== undefined) {
+            this.elements.burnSubtitles.checked = Boolean(strategy.burn_subtitles);
+        }
+
+        const customVoice = strategy.custom_voice || '';
+        this.elements.customVoice.value = customVoice;
+        this.pendingVoiceSelection = strategy.selected_voice || strategy.voice || null;
+        this.state.logoPath = strategy.school_logo_path || null;
+        this.syncSubtitlePreviewFromInputs();
+        this.toggleLLMMode();
     }
 
     // ── Events ─────────────────────────────────────────
@@ -162,11 +506,15 @@ class AICourseStudioApp {
             this.elements.schoolLogoImage.removeAttribute('src');
             this.elements.schoolLogoHint.textContent =
                 '支持 PNG/JPG/WebP，生成时按每页版式自动调整位置与大小';
+            this.saveCurrentStrategy();
         });
 
         convertBtn.addEventListener('click', () => this.handleConvert());
         renderBtn.addEventListener('click', () => this.handleRender());
-        ttsEngine.addEventListener('change', () => this.loadVoices());
+        ttsEngine.addEventListener('change', async () => {
+            await this.loadVoices();
+            this.saveCurrentStrategy();
+        });
 
         const { llmEnabled } = this.elements;
         llmEnabled.addEventListener('change', () => this.toggleLLMMode());
@@ -176,6 +524,41 @@ class AICourseStudioApp {
         this.elements.cancelCourseBtn.addEventListener('click', () => this.cancelCourse());
         this.elements.saveScriptsBtn.addEventListener('click', () => this.savePreviewScripts());
         this.elements.continueCourseBtn.addEventListener('click', () => this.continueCourse());
+        this.elements.previewPreviousBtn.addEventListener(
+            'click', () => this.goToPreviewPage(this.currentPreviewPage - 1)
+        );
+        this.elements.previewNextBtn.addEventListener(
+            'click', () => this.goToPreviewPage(this.currentPreviewPage + 1)
+        );
+        this.elements.previewPageSelect.addEventListener(
+            'change', event => this.goToPreviewPage(Number(event.target.value))
+        );
+        this.elements.unreviewedOnly.addEventListener(
+            'change', () => this.filterPreviewPages()
+        );
+        this.elements.smartCutRecommendBtn.addEventListener(
+            'click', () => this.recommendSmartCuts()
+        );
+        this.elements.smartCutApplyBtn.addEventListener(
+            'click', () => this.applySmartCuts()
+        );
+        this.elements.uploadEditedPptBtn.addEventListener(
+            'click', () => this.elements.editedPptInput.click()
+        );
+        this.elements.editedPptInput.addEventListener('change', event => {
+            const file = event.target.files[0];
+            if (file) this.uploadEditedPresentation(file);
+            event.target.value = '';
+        });
+        this.elements.strategyTemplateSelect.addEventListener(
+            'change', event => this.applyStrategyTemplate(event.target.value)
+        );
+        this.elements.saveTemplateBtn.addEventListener(
+            'click', () => this.saveStrategyTemplate()
+        );
+        this.elements.deleteTemplateBtn.addEventListener(
+            'click', () => this.deleteStrategyTemplate()
+        );
         this.elements.selectAllFiles.addEventListener('change', (event) => {
             this.state.files.forEach(item => {
                 if (item.status === 'pending') item.selected = event.target.checked;
@@ -185,6 +568,16 @@ class AICourseStudioApp {
         this.elements.applyStrategyBtn.addEventListener(
             'click', () => this.applyStrategyToSelected()
         );
+        this.bindStrategyPersistence();
+        this.elements.advancedToggle.addEventListener('click', () => {
+            const expanded = this.elements.advancedToggle.getAttribute('aria-expanded') === 'true';
+            this.elements.advancedToggle.setAttribute('aria-expanded', String(!expanded));
+            this.elements.advancedToggle.textContent = expanded ? '展开高级设置' : '收起高级设置';
+            document.querySelectorAll('.advanced-option').forEach(element => {
+                element.hidden = expanded;
+            });
+            if (!expanded) this.toggleLLMMode();
+        });
 
     }
 
@@ -211,6 +604,7 @@ class AICourseStudioApp {
             this.elements.schoolLogoPreview.hidden = false;
             this.elements.schoolLogoHint.textContent =
                 '已上传，Logo 将根据封面、正文和小结版式自动适配';
+            this.saveCurrentStrategy();
         } catch (error) {
             this.state.logoPath = null;
             this.elements.schoolLogoHint.textContent = error.message;
@@ -232,8 +626,12 @@ class AICourseStudioApp {
         llmModeGroup.classList.toggle('visible', llmEnabled.checked);
     }
 
-    async loadVoices() {
+    async loadVoices({ preferredVoice = null } = {}) {
         const { ttsEngine, voiceSelect, voicePreviewList } = this.elements;
+        preferredVoice = preferredVoice || this.pendingVoiceSelection || voiceSelect.value;
+        this.pendingVoiceSelection = null;
+        this.elements.volcengineExpressionGroup.hidden =
+            ttsEngine.value !== 'volcengine';
         this.stopVoicePreview();
         voiceSelect.disabled = true;
         voiceSelect.innerHTML = '<option value="">正在加载对应厂商音色...</option>';
@@ -251,7 +649,15 @@ class AICourseStudioApp {
                 option.textContent = `${voice.name} · ${voice.id}`;
                 voiceSelect.appendChild(option);
             });
-            this.renderVoicePreviewList(engine, voiceList);
+            const matchedPreferredVoice = voiceList.some(voice => voice.id === preferredVoice);
+            this.renderVoicePreviewList(
+                engine,
+                voiceList,
+                matchedPreferredVoice ? preferredVoice : null
+            );
+            if (preferredVoice && !matchedPreferredVoice && !this.elements.customVoice.value.trim()) {
+                this.elements.customVoice.value = preferredVoice;
+            }
             if (!voiceList.length) {
                 voiceSelect.innerHTML = '<option value="">无公共音色，请输入专属音色 ID</option>';
             }
@@ -264,27 +670,48 @@ class AICourseStudioApp {
         }
     }
 
-    renderVoicePreviewList(engine, voices) {
+    renderVoicePreviewList(engine, voices, selectedVoiceId = null) {
         const { voicePreviewList, voiceSelect } = this.elements;
         voicePreviewList.innerHTML = '';
         if (!voices.length) {
             voicePreviewList.innerHTML = '<div class="voice-list-message">暂无公共音色</div>';
             return;
         }
-        voices.forEach((voice, index) => {
+        const sortedVoices = [...voices].sort((left, right) => {
+            const leftFavorite = this.isVoiceFavorite(engine, left.id);
+            const rightFavorite = this.isVoiceFavorite(engine, right.id);
+            if (leftFavorite !== rightFavorite) return leftFavorite ? -1 : 1;
+            return 0;
+        });
+        const selectedVoice = selectedVoiceId || sortedVoices[0]?.id || '';
+        sortedVoices.forEach((voice, index) => {
+            const isFavorite = this.isVoiceFavorite(engine, voice.id);
+            const isSelected = voice.id === selectedVoice;
+            const voiceNameAttr = this._escAttr(voice.name);
             const item = document.createElement('div');
-            item.className = `voice-preview-item${index === 0 ? ' selected' : ''}`;
+            item.className = `voice-preview-item${isSelected ? ' selected' : ''}`;
             item.setAttribute('role', 'option');
-            item.setAttribute('aria-selected', index === 0 ? 'true' : 'false');
+            item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
             item.innerHTML = `
                 <button type="button" class="voice-play-btn"
-                        aria-label="试听 ${this._esc(voice.name)}" title="试听音色">▶</button>
-                <span>
+                        aria-label="试听 ${voiceNameAttr}" title="试听音色">▶</button>
+                <span class="voice-preview-copy">
                     <span class="voice-preview-name">${this._esc(voice.name)}</span>
                     <span class="voice-preview-id">${this._esc(voice.id)}</span>
                 </span>
+                <button type="button"
+                        class="voice-favorite-btn${isFavorite ? ' active' : ''}"
+                        aria-label="${isFavorite ? '取消收藏' : '收藏'} ${voiceNameAttr}"
+                        aria-pressed="${isFavorite ? 'true' : 'false'}"
+                        title="${isFavorite ? '取消收藏' : '收藏音色'}">${isFavorite ? '★' : '☆'}</button>
             `;
             item.addEventListener('click', (event) => {
+                const favoriteButton = event.target.closest('.voice-favorite-btn');
+                if (favoriteButton) {
+                    event.stopPropagation();
+                    this.toggleVoiceFavorite(engine, voice, favoriteButton);
+                    return;
+                }
                 this.selectVoiceItem(item, voice.id);
                 if (event.target.closest('.voice-play-btn')) {
                     this.playVoicePreview(
@@ -294,7 +721,59 @@ class AICourseStudioApp {
             });
             voicePreviewList.appendChild(item);
         });
-        voiceSelect.value = voices[0].id;
+        voiceSelect.value = selectedVoice;
+    }
+
+    loadVoiceFavorites() {
+        try {
+            const rawFavorites = localStorage.getItem(this.voiceFavoritesStorageKey);
+            const parsed = rawFavorites ? JSON.parse(rawFavorites) : {};
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (error) {
+            console.warn('读取收藏音色失败:', error);
+            return {};
+        }
+    }
+
+    saveVoiceFavorites() {
+        try {
+            localStorage.setItem(
+                this.voiceFavoritesStorageKey,
+                JSON.stringify(this.voiceFavorites)
+            );
+        } catch (error) {
+            console.warn('保存收藏音色失败:', error);
+        }
+    }
+
+    getVoiceFavoriteSet(engine) {
+        return new Set(Array.isArray(this.voiceFavorites[engine])
+            ? this.voiceFavorites[engine]
+            : []);
+    }
+
+    isVoiceFavorite(engine, voiceId) {
+        return this.getVoiceFavoriteSet(engine).has(voiceId);
+    }
+
+    toggleVoiceFavorite(engine, voice, button) {
+        const favoriteSet = this.getVoiceFavoriteSet(engine);
+        const nextFavoriteState = !favoriteSet.has(voice.id);
+        if (nextFavoriteState) {
+            favoriteSet.add(voice.id);
+        } else {
+            favoriteSet.delete(voice.id);
+        }
+        this.voiceFavorites[engine] = [...favoriteSet];
+        this.saveVoiceFavorites();
+        button.classList.toggle('active', nextFavoriteState);
+        button.textContent = nextFavoriteState ? '★' : '☆';
+        button.setAttribute('aria-pressed', nextFavoriteState ? 'true' : 'false');
+        button.setAttribute(
+            'aria-label',
+            `${nextFavoriteState ? '取消收藏' : '收藏'} ${voice.name}`
+        );
+        button.title = nextFavoriteState ? '取消收藏' : '收藏音色';
     }
 
     selectVoiceItem(item, voiceId) {
@@ -305,6 +784,7 @@ class AICourseStudioApp {
             row.classList.toggle('selected', selected);
             row.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
+        this.saveCurrentStrategy();
     }
 
     stopVoicePreview() {
@@ -314,7 +794,10 @@ class AICourseStudioApp {
             this.voicePreviewAudio = null;
         }
         if (this.activeVoicePreviewButton) {
-            this.activeVoicePreviewButton.textContent = '▶';
+            this.activeVoicePreviewButton.textContent =
+                this.activeVoicePreviewButton.classList.contains('script-preview-button')
+                    ? '试听本页讲稿'
+                    : '▶';
             this.activeVoicePreviewButton.classList.remove('loading');
             this.activeVoicePreviewButton.disabled = false;
             this.activeVoicePreviewButton = null;
@@ -465,6 +948,9 @@ class AICourseStudioApp {
                     <polyline points="14 2 14 8 20 8"/>
                 </svg>
                 <span class="file-list-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                <span class="file-route-badge ${item.sourceType === 'lesson-plan' ? 'lesson-plan' : 'presentation'}">
+                    ${item.sourceType === 'lesson-plan' ? 'AI 设计' : '保留原稿'}
+                </span>
                 <span class="file-list-status status-${item.status}">${statusText}</span>
                 ${item.status === 'pending' ? `
                     <span class="file-strategy-badge">
@@ -505,7 +991,79 @@ class AICourseStudioApp {
         this.elements.convertBtn.disabled = pendingCount === 0 || this.state.isConverting;
         this.elements.renderBtn.disabled = previewableCount === 0 || this.state.isConverting;
         this.updateWorkspaceMetrics();
+        this.updateRouteSummary();
         this._syncSelectAll();
+    }
+
+    updateRouteSummary() {
+        const active = this.state.files.filter(item =>
+            !['error', 'completed'].includes(item.status)
+        );
+        const lessonPlans = active.filter(item => item.sourceType === 'lesson-plan').length;
+        const presentations = active.filter(item => item.sourceType === 'presentation').length;
+        const { routeSummary } = this.elements;
+
+        if (!active.length) {
+            routeSummary.hidden = true;
+            this.elements.workflowBadge.textContent = '智能识别';
+            this.elements.workflowDescription.textContent =
+                '上传素材后将自动匹配教案设计或原稿保真路线。';
+            return;
+        }
+
+        routeSummary.hidden = false;
+        if (lessonPlans && !presentations) {
+            this.elements.routeSummaryIcon.textContent = 'AI';
+            this.elements.routeSummaryTitle.textContent = '教案设计路线';
+            this.elements.routeSummaryDescription.textContent =
+                `${lessonPlans} 份 Word/PDF 将经过内容提炼、PPT 设计、讲稿审核后合成视频。`;
+            this.elements.workflowBadge.textContent = '教案设计';
+            this.elements.workflowDescription.textContent =
+                'AI 将生成可编辑 PPT；插图、页脚和 Logo 等高级设置会应用到新课件。';
+        } else if (presentations && !lessonPlans) {
+            this.elements.routeSummaryIcon.textContent = 'PPT';
+            this.elements.routeSummaryTitle.textContent = '原稿保真路线';
+            this.elements.routeSummaryDescription.textContent =
+                `${presentations} 份 PPT 将保留原有版式，提取页面内容与备注生成讲稿和视频。`;
+            this.elements.workflowBadge.textContent = '原稿保真';
+            this.elements.workflowDescription.textContent =
+                '保留现有 PPT 样式；课程设计类视觉选项不会改写原稿版式。';
+        } else {
+            this.elements.routeSummaryIcon.textContent = '2×';
+            this.elements.routeSummaryTitle.textContent = '混合生产任务';
+            this.elements.routeSummaryDescription.textContent =
+                `${lessonPlans} 份教案走 AI 设计路线，${presentations} 份 PPT 走原稿保真路线。`;
+            this.elements.workflowBadge.textContent = '两条路线';
+            this.elements.workflowDescription.textContent =
+                '系统将按文件类型分别处理，共用当前声音和基础生成策略。';
+        }
+    }
+
+    confirmProduction(pending) {
+        const lessonPlans = pending.filter(item => item.sourceType === 'lesson-plan').length;
+        const presentations = pending.length - lessonPlans;
+        const engineNames = {
+            'edge-tts': 'Edge TTS',
+            'volcengine': '火山引擎 TTS',
+            'minimax': 'MiniMax TTS'
+        };
+        const routeLines = [];
+        if (lessonPlans) routeLines.push(`教案设计路线：${lessonPlans} 个`);
+        if (presentations) routeLines.push(`原稿保真路线：${presentations} 个`);
+        const voiceName = this.elements.customVoice.value.trim()
+            || this.elements.voiceSelect.selectedOptions[0]?.textContent
+            || '默认音色';
+        return window.confirm([
+            `即将提交 ${pending.length} 个课程任务`,
+            '',
+            ...routeLines,
+            `语音：${engineNames[this.elements.ttsEngine.value] || this.elements.ttsEngine.value} · ${voiceName}`,
+            `字幕：${this.elements.burnSubtitles.checked ? '烧录到视频' : '仅生成 SRT 文件'}`,
+            lessonPlans ? `AI 提炼：${this.elements.refinementLevel.selectedOptions[0]?.textContent}` : '',
+            lessonPlans ? `视觉方案：${this.elements.visualTheme.selectedOptions[0]?.textContent}` : '',
+            '',
+            '确认开始生成课程草稿？'
+        ].filter(Boolean).join('\n'));
     }
 
     _syncSelectAll() {
@@ -518,19 +1076,145 @@ class AICourseStudioApp {
     }
 
     collectCurrentStrategy() {
+        const customVoice = this.elements.customVoice.value.trim();
         return {
             tts_engine: this.elements.ttsEngine.value,
-            voice: this.elements.customVoice.value.trim() || this.elements.voiceSelect.value,
+            voice: customVoice || this.elements.voiceSelect.value,
+            selected_voice: this.elements.voiceSelect.value,
+            custom_voice: customVoice,
+            tts_rate: this.elements.ttsRate.value,
+            tts_emotion: this.elements.ttsEmotion.value,
+            tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
+            tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
+            burn_subtitles: this.elements.burnSubtitles.checked,
+            subtitle_x: Number(this.elements.subtitleX.value),
+            subtitle_y: Number(this.elements.subtitleY.value),
+            subtitle_width: Number(this.elements.subtitleWidth.value),
+            subtitle_height: Number(this.elements.subtitleHeight.value),
+            subtitle_font_size: Number(this.elements.subtitleFontSize.value),
+            subtitle_font_name: this.elements.subtitleFontName.value,
+            subtitle_color: this.elements.subtitleColor.value,
+            subtitle_background_color: this.elements.subtitleBackgroundColor.value,
+            subtitle_background_opacity: Number(this.elements.subtitleBackgroundOpacity.value),
+            subtitle_outline_width: Number(this.elements.subtitleOutlineWidth.value),
+            subtitle_outline_color: this.elements.subtitleOutlineColor.value,
             render_engine: this.elements.renderEngine.value,
             llm_enabled: this.elements.llmEnabled.checked,
             llm_engine: this.elements.llmEngine.value,
             llm_mode: this.elements.llmMode.value,
             refinement_level: this.elements.refinementLevel.value,
+            visual_theme: this.elements.visualTheme.value,
             illustrations_enabled: this.elements.illustrationsEnabled.checked,
             max_illustrations: Number(this.elements.maxIllustrations.value),
             ppt_footer_text: this.elements.pptFooterText.value.trim(),
             school_logo_path: this.state.logoPath
         };
+    }
+
+    collectSubtitleOptions() {
+        return {
+            subtitle_x: Number(this.elements.subtitleX.value),
+            subtitle_y: Number(this.elements.subtitleY.value),
+            subtitle_width: Number(this.elements.subtitleWidth.value),
+            subtitle_height: Number(this.elements.subtitleHeight.value),
+            subtitle_font_size: Number(this.elements.subtitleFontSize.value),
+            subtitle_font_name: this.elements.subtitleFontName.value,
+            subtitle_color: this.elements.subtitleColor.value,
+            subtitle_background_color: this.elements.subtitleBackgroundColor.value,
+            subtitle_background_opacity: Number(this.elements.subtitleBackgroundOpacity.value),
+            subtitle_outline_width: Number(this.elements.subtitleOutlineWidth.value),
+            subtitle_outline_color: this.elements.subtitleOutlineColor.value
+        };
+    }
+
+    loadStrategyTemplates() {
+        const builtIns = {
+            '高校理论课': {
+                tts_engine: 'volcengine',
+                llm_enabled: true,
+                llm_engine: 'qwen',
+                llm_mode: 'per-page',
+                refinement_level: 'standard',
+                illustrations_enabled: true,
+                max_illustrations: 3
+            },
+            '企业制度宣讲': {
+                tts_engine: 'volcengine',
+                llm_enabled: true,
+                llm_engine: 'qwen',
+                llm_mode: 'per-page',
+                refinement_level: 'light',
+                illustrations_enabled: false,
+                max_illustrations: 1
+            },
+            '高度提炼微课': {
+                tts_engine: 'edge-tts',
+                llm_enabled: true,
+                llm_engine: 'qwen',
+                llm_mode: 'per-page',
+                refinement_level: 'strong',
+                illustrations_enabled: true,
+                max_illustrations: 2
+            }
+        };
+        let personal = {};
+        try {
+            personal = JSON.parse(localStorage.getItem('courseStrategyTemplates') || '{}');
+        } catch {
+            personal = {};
+        }
+        this.strategyTemplates = { ...builtIns, ...personal };
+        const select = this.elements.strategyTemplateSelect;
+        select.innerHTML = '<option value="">选择生产模板</option>';
+        Object.keys(this.strategyTemplates).forEach(name => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = personal[name] ? `${name} · 我的` : name;
+            select.appendChild(option);
+        });
+        this.personalStrategyTemplates = personal;
+        this.elements.deleteTemplateBtn.disabled = true;
+    }
+
+    async applyStrategyTemplate(name) {
+        const strategy = this.strategyTemplates?.[name];
+        if (!strategy) {
+            this.elements.deleteTemplateBtn.disabled = true;
+            return;
+        }
+        this.applyStrategyToControls(strategy);
+        await this.loadVoices({ preferredVoice: this.pendingVoiceSelection });
+        this.elements.deleteTemplateBtn.disabled = !this.personalStrategyTemplates[name];
+        this.saveCurrentStrategy();
+        this.showStatus('success', `已应用“${name}”生产模板`);
+    }
+
+    saveStrategyTemplate() {
+        const name = window.prompt('请输入模板名称');
+        if (!name?.trim()) return;
+        const trimmedName = name.trim().slice(0, 30);
+        this.personalStrategyTemplates[trimmedName] = this.collectCurrentStrategy();
+        localStorage.setItem(
+            'courseStrategyTemplates',
+            JSON.stringify(this.personalStrategyTemplates)
+        );
+        this.loadStrategyTemplates();
+        this.elements.strategyTemplateSelect.value = trimmedName;
+        this.elements.deleteTemplateBtn.disabled = false;
+        this.showStatus('success', `已保存模板“${trimmedName}”`);
+    }
+
+    deleteStrategyTemplate() {
+        const name = this.elements.strategyTemplateSelect.value;
+        if (!this.personalStrategyTemplates[name]) return;
+        if (!window.confirm(`删除个人模板“${name}”？`)) return;
+        delete this.personalStrategyTemplates[name];
+        localStorage.setItem(
+            'courseStrategyTemplates',
+            JSON.stringify(this.personalStrategyTemplates)
+        );
+        this.loadStrategyTemplates();
+        this.showStatus('success', '模板已删除');
     }
 
     applyStrategyToSelected() {
@@ -589,6 +1273,10 @@ class AICourseStudioApp {
         return d.innerHTML;
     }
 
+    _escAttr(s) {
+        return this._esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     // ── Remove file ────────────────────────────────────
     async removeFile(index) {
         const item = this.state.files[index];
@@ -613,6 +1301,7 @@ class AICourseStudioApp {
     async handleConvert() {
         const pending = this.state.files.filter(f => f.status === 'pending' && f.filePath);
         if (pending.length === 0) return;
+        if (!this.confirmProduction(pending)) return;
 
         this.state.isConverting = true;
         this.elements.convertBtn.disabled = true;
@@ -755,6 +1444,7 @@ class AICourseStudioApp {
                                 status: 'processing',
                                 stage: data.stage,
                                 percentage,
+                                stagePercentage: Number(data.stage_percentage ?? 0),
                                 message,
                                 completedStages
                             });
@@ -766,8 +1456,14 @@ class AICourseStudioApp {
 
                     case 'progress': {
                         const percentage = data.percentage || 0;
+                        const stagePercentage = Number(data.stage_percentage ?? 0);
                         const message = data.message || (data.stage ? `${this.stageNames[data.stage] || data.stage} (${data.current}/${data.total})` : '');
-                        this.updateItem(index, { percentage, stage: data.stage || item.stage, message });
+                        this.updateItem(index, {
+                            percentage,
+                            stagePercentage,
+                            stage: data.stage || item.stage,
+                            message
+                        });
                         this.renderFileList();
                         this.renderResultsGrid();
                         this.updateBatchSummary();
@@ -793,6 +1489,7 @@ class AICourseStudioApp {
                             percentage: 50,
                             stage: 'preview',
                             message: '请确认逐页讲稿',
+                            previewPath: data.preview_path || item.previewPath,
                             courseJsonPath: data.course_json_path || null,
                             presentationPath: data.presentation_path || null
                         });
@@ -837,7 +1534,8 @@ class AICourseStudioApp {
                             videoPath: data.video_path,
                             courseJsonPath: data.course_json_path || null,
                             presentationPath: data.presentation_path || null,
-                            subtitlesPath: data.subtitles_path || null
+                            subtitlesPath: data.subtitles_path || null,
+                            videoSegments: data.video_segments || []
                         });
                         this.renderFileList();
                         this.renderResultsGrid();
@@ -936,8 +1634,37 @@ class AICourseStudioApp {
         const completed = new Set(item.completedStages || []);
         const activeIndex = stages.indexOf(item.stage);
         const percentage = Math.max(0, Math.min(100, Number(item.percentage) || 0));
+        const stagePercentage = Math.max(
+            0, Math.min(100, Number(item.stagePercentage) || 0)
+        );
+        const displayedPercentage = item.stage === 'video'
+            ? stagePercentage
+            : percentage;
         const message = item.message
             || (item.status === 'queued' ? '排队中...' : `${this.stageNames[item.stage] || '准备'}中...`);
+        const now = Date.now() / 1000;
+        const elapsed = item.startedAt ? Math.max(0, now - item.startedAt) : null;
+        const stageElapsed = item.stageStartedAt
+            ? Math.max(0, now - item.stageStartedAt)
+            : null;
+        const progressForEta = item.stage === 'video'
+            ? stagePercentage
+            : percentage;
+        const elapsedForEta = item.stage === 'video'
+            ? stageElapsed
+            : elapsed;
+        const remaining = elapsedForEta && progressForEta >= 3
+            ? Math.max(
+                0,
+                elapsedForEta * (100 - progressForEta) / progressForEta
+            )
+            : null;
+        const timing = [
+            elapsed !== null ? `已耗时 ${this.formatDuration(elapsed)}` : null,
+            remaining !== null ? `预计剩余 ${this.formatDuration(remaining)}` : null,
+            item.queuePosition ? `队列第 ${item.queuePosition} 位` : null,
+            item.updatedAt ? `更新于 ${new Date(item.updatedAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` : null
+        ].filter(Boolean).join(' · ');
         const steps = stages.map((stage, index) => {
             const isCompleted = completed.has(stage) || (activeIndex > index);
             const stateClass = item.stage === stage
@@ -955,18 +1682,37 @@ class AICourseStudioApp {
             <div class="card-progress">
                 <div class="card-progress-heading">
                     <span>${this._esc(message)}</span>
-                    <strong>${Math.round(percentage)}%</strong>
+                    <strong>${Math.round(displayedPercentage)}%</strong>
                 </div>
                 <div class="card-progress-track">
-                    <div class="card-progress-fill" style="width:${percentage}%"></div>
+                    <div class="card-progress-fill" style="width:${displayedPercentage}%"></div>
                 </div>
+                ${timing ? `<div class="card-progress-timing">${this._esc(timing)}</div>` : ''}
                 <div class="card-progress-steps">${steps}</div>
             </div>
         `;
     }
 
+    formatDuration(seconds) {
+        const value = Math.max(0, Math.round(seconds));
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        if (hours) return `${hours}小时${minutes}分`;
+        if (minutes) return `${minutes}分${value % 60}秒`;
+        return `${value}秒`;
+    }
+
     renderResultsGrid() {
         const container = this.elements.resultsGrid;
+        const preservedVideoCards = new Map();
+        container.querySelectorAll('.result-card[data-preserve-video="true"]').forEach(card => {
+            preservedVideoCards.set(this._resultVideoPreserveKey(
+                card.dataset.taskId,
+                card.dataset.videoPath,
+                card.dataset.artifactKey
+            ), card);
+            card.remove();
+        });
         container.innerHTML = '';
 
         let hasVisible = false;
@@ -975,7 +1721,7 @@ class AICourseStudioApp {
             if (!['awaiting_confirmation', 'completed', 'processing', 'queued', 'error', 'interrupted'].includes(item.status)) return;
             hasVisible = true;
 
-            const card = document.createElement('div');
+            let card = document.createElement('div');
             card.className = 'result-card';
             if (item.status === 'error') card.classList.add('error-card');
 
@@ -991,29 +1737,53 @@ class AICourseStudioApp {
                     <button class="result-card-download preview-open-btn" data-index="${index}">编辑讲稿</button>
                 `;
                 card.querySelector('.preview-open-btn').addEventListener('click', () => this.loadCoursePreview(item.taskId));
-                card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(index));
+                card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(item.taskId));
             } else if (item.status === 'completed' && item.videoPath) {
                 const artifacts = this._artifactLinks(item);
-                card.innerHTML = `
-                    <div class="result-video-wrap">
-                        ${this._deleteTaskButton(item)}
-                        <video src="/api/video?path=${encodeURIComponent(item.videoPath)}" controls preload="metadata"></video>
-                    </div>
-                    <div class="result-card-footer">
-                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
-                        <button class="result-card-download" data-index="${index}">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <polyline points="7 10 12 15 17 10"/>
-                                <line x1="12" y1="15" x2="12" y2="3"/>
-                            </svg>
-                            下载
-                        </button>
-                    </div>
-                    ${artifacts}
-                `;
-                card.querySelector('.result-card-download').addEventListener('click', () => this.handleDownload(index));
-                card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(index));
+                const artifactKey = this._resultArtifactKey(item);
+                const preserveKey = this._resultVideoPreserveKey(
+                    item.taskId,
+                    item.videoPath,
+                    artifactKey
+                );
+                const preservedCard = preservedVideoCards.get(preserveKey);
+                if (preservedCard) {
+                    card = preservedCard;
+                } else {
+                    card.innerHTML = `
+                        <div class="result-video-wrap">
+                            ${this._deleteTaskButton(item)}
+                            <video src="/api/video?path=${encodeURIComponent(item.videoPath)}" controls preload="metadata"></video>
+                        </div>
+                        <div class="result-card-footer">
+                            <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                            <button class="result-card-download" data-task-id="${this._esc(item.taskId)}">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="7 10 12 15 17 10"/>
+                                    <line x1="12" y1="15" x2="12" y2="3"/>
+                                </svg>
+                                下载
+                            </button>
+                        </div>
+                        ${artifacts}
+                        ${this._retryStageActions(item)}
+                    `;
+                    card.querySelector('.result-card-download').addEventListener('click', () => this.handleDownloadByTaskId(item.taskId));
+                    card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(item.taskId));
+                    card.querySelectorAll('.result-stage-retry').forEach(button => {
+                        button.addEventListener('click', () => this.retryTaskStage(
+                            item.taskId,
+                            button.dataset.stage,
+                            null,
+                            button
+                        ));
+                    });
+                }
+                card.dataset.preserveVideo = 'true';
+                card.dataset.taskId = item.taskId || '';
+                card.dataset.videoPath = item.videoPath || '';
+                card.dataset.artifactKey = artifactKey;
             } else if (item.status === 'completed') {
                 card.innerHTML = `
                     <div class="result-video-wrap">
@@ -1024,11 +1794,23 @@ class AICourseStudioApp {
                         <span class="result-card-name">${this._esc(item.fileName)}</span>
                     </div>
                     ${this._artifactLinks(item)}
+                    ${this._retryStageActions(item)}
                 `;
-                card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(index));
+                card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(item.taskId));
+                card.querySelectorAll('.result-stage-retry').forEach(button => {
+                    button.addEventListener('click', () => this.retryTaskStage(
+                        item.taskId,
+                        button.dataset.stage,
+                        null,
+                        button
+                    ));
+                });
             } else {
+                const isInterrupted = item.status === 'interrupted';
                 const placeholderText = item.status === 'error'
                     ? this._esc(item.error || '转换失败')
+                    : isInterrupted
+                        ? this._esc(item.message || '服务曾重启，本次生成已中断')
                     : item.status === 'queued'
                         ? '排队中...'
                         : '转换中...';
@@ -1037,9 +1819,13 @@ class AICourseStudioApp {
                     <div class="result-video-wrap">
                         ${['error', 'interrupted'].includes(item.status) ? this._deleteTaskButton(item) : ''}
                         <div class="result-placeholder">
-                            ${item.status !== 'error' ? '<div class="spinner"></div>' : ''}
+                            ${!['error', 'interrupted'].includes(item.status) ? '<div class="spinner"></div>' : ''}
                             <p>${placeholderText}</p>
-                            ${item.status !== 'error' ? this._renderCardProgress(item) : ''}
+                            ${!['error', 'interrupted'].includes(item.status) ? this._renderCardProgress(item) : ''}
+                            ${isInterrupted ? `
+                                <button class="result-card-retry" type="button"
+                                        data-task-id="${this._esc(item.taskId)}">重新提交</button>
+                            ` : ''}
                         </div>
                     </div>
                     <div class="result-card-footer">
@@ -1055,7 +1841,11 @@ class AICourseStudioApp {
                 }
                 const deleteButton = card.querySelector('.result-card-delete');
                 if (deleteButton) {
-                    deleteButton.addEventListener('click', () => this.deleteTask(index));
+                    deleteButton.addEventListener('click', () => this.deleteTask(item.taskId));
+                }
+                const retryButton = card.querySelector('.result-card-retry');
+                if (retryButton) {
+                    retryButton.addEventListener('click', () => this.retryTask(item.taskId));
                 }
             }
 
@@ -1063,6 +1853,21 @@ class AICourseStudioApp {
         });
 
         this.elements.resultsModule.hidden = !hasVisible;
+    }
+
+    _resultArtifactKey(item) {
+        return [
+            item.fileName,
+            item.courseJsonPath,
+            item.presentationPath,
+            item.subtitlesPath,
+            item.previewPath,
+            JSON.stringify(item.videoSegments || [])
+        ].map(value => value || '').join('|');
+    }
+
+    _resultVideoPreserveKey(taskId, videoPath, artifactKey) {
+        return `${taskId || ''}|${videoPath || ''}|${artifactKey || ''}`;
     }
 
     _deleteTaskButton(item) {
@@ -1085,8 +1890,22 @@ class AICourseStudioApp {
         `;
     }
 
-    async deleteTask(index) {
-        const item = this.state.files[index];
+    _retryStageActions(item) {
+        if (item.status !== 'completed' || !item.previewPath) return '';
+        return `
+            <div class="result-stage-actions">
+                <button type="button" class="result-stage-retry" data-stage="video">重新合成视频</button>
+                <button type="button" class="result-stage-retry" data-stage="tts">重新生成全部配音</button>
+            </div>
+        `;
+    }
+
+    async deleteTask(taskIdOrIndex) {
+        const taskId = typeof taskIdOrIndex === 'number'
+            ? this.state.files[taskIdOrIndex]?.taskId
+            : taskIdOrIndex;
+        const found = this.getItemByTaskId(taskId);
+        const item = found?.item;
         if (
             !item?.taskId
             || !['completed', 'error', 'interrupted', 'awaiting_confirmation'].includes(item.status)
@@ -1106,11 +1925,108 @@ class AICourseStudioApp {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '删除失败');
-            this.state.files.splice(index, 1);
+            const current = this.getItemByTaskId(item.taskId);
+            if (current) this.state.files.splice(current.index, 1);
             this.renderFileList();
             this.renderResultsGrid();
             this.updateBatchSummary();
             this.showStatus('success', data.message || '课程产物已删除');
+        } catch (error) {
+            if (button) button.disabled = false;
+            this.showStatus('error', error.message);
+        }
+    }
+
+    async retryTask(taskId) {
+        const found = this.getItemByTaskId(taskId);
+        if (!found || found.item.status !== 'interrupted') return;
+
+        const { item } = found;
+        const button = this.elements.resultsGrid.querySelector(
+            `.result-card-retry[data-task-id="${CSS.escape(taskId)}"]`
+        );
+        if (button) {
+            button.disabled = true;
+            button.textContent = '提交中...';
+        }
+
+        try {
+            const response = await fetch('/api/convert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    file_path: item.filePath,
+                    original_name: item.fileName,
+                    batch_id: globalThis.crypto?.randomUUID?.() || `retry-${Date.now()}`,
+                    strategy_source: item.strategySource || 'batch',
+                    ...(item.strategy || {})
+                })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '重新提交失败');
+
+            // 新任务成功入队后再清理已中断的旧任务，避免提交失败时丢失恢复入口。
+            await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+            const current = this.getItemByTaskId(taskId);
+            if (!current) return;
+            this.updateItem(current.index, {
+                taskId: data.task_id,
+                status: 'queued',
+                stage: 'queue',
+                percentage: 0,
+                message: data.message || '已重新进入生产队列',
+                error: null,
+                queuePosition: data.queue_size || null
+            });
+            this.renderFileList();
+            this.renderResultsGrid();
+            this.updateBatchSummary();
+            this.showStatus('success', '任务已重新提交');
+            this.startProgressStream(data.task_id);
+        } catch (error) {
+            if (button) {
+                button.disabled = false;
+                button.textContent = '重新提交';
+            }
+            this.showStatus('error', error.message);
+        }
+    }
+
+    async retryTaskStage(taskId, stage, pageNumber = null, button = null) {
+        const labels = {
+            page_tts: `第 ${pageNumber} 页配音`,
+            tts: '全部配音',
+            video: '视频',
+            media: '媒体'
+        };
+        if (!window.confirm(`确认重新生成${labels[stage] || '当前阶段'}？已有可复用成果会保留。`)) {
+            return;
+        }
+        if (button) button.disabled = true;
+        try {
+            const response = await fetch(`/api/tasks/${taskId}/retry`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stage, page_number: pageNumber })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '阶段重试失败');
+            const found = this.getItemByTaskId(taskId);
+            if (found) {
+                this.updateItem(found.index, {
+                    status: 'queued',
+                    stage: 'queue',
+                    percentage: 50,
+                    message: data.message,
+                    error: null
+                });
+            }
+            this.elements.coursePreviewModule.hidden = true;
+            this.renderFileList();
+            this.renderResultsGrid();
+            this.updateBatchSummary();
+            this.showStatus('success', data.message);
+            this.startProgressStream(taskId);
         } catch (error) {
             if (button) button.disabled = false;
             this.showStatus('error', error.message);
@@ -1151,7 +2067,9 @@ class AICourseStudioApp {
         }
 
         try {
-            const downloadUrl = '/api/download?path=' + encodeURIComponent(item.videoPath);
+            const downloadUrl = '/api/download?task_id='
+                + encodeURIComponent(item.taskId)
+                + '&path=' + encodeURIComponent(item.videoPath);
             const a = document.createElement('a');
             a.href = downloadUrl;
             a.download = item.fileName.replace(/\.(ppt|pptx)$/i, '.mp4');
@@ -1164,6 +2082,15 @@ class AICourseStudioApp {
         }
     }
 
+    handleDownloadByTaskId(taskId) {
+        const found = this.getItemByTaskId(taskId);
+        if (!found) {
+            alert('没有可下载的视频');
+            return;
+        }
+        this.handleDownload(found.index);
+    }
+
     _artifactLinks(item) {
         const artifacts = [
             ['课程 JSON', item.courseJsonPath],
@@ -1171,9 +2098,18 @@ class AICourseStudioApp {
             ['字幕 SRT', item.subtitlesPath],
             ['课程视频', item.videoPath]
         ].filter(([, path]) => path);
-        if (!artifacts.length) return '';
+        const segmentLinks = (item.videoSegments || [])
+            .filter(segment => segment.video_path)
+            .map(segment => [
+                `第 ${segment.id} 段`,
+                segment.video_path,
+                `${segment.start_page}-${segment.end_page}`
+            ]);
+        if (!artifacts.length && !segmentLinks.length) return '';
         return `<div class="artifact-links">${artifacts.map(([label, path]) =>
-            `<a class="artifact-link" href="/api/download?path=${encodeURIComponent(path)}">${label}</a>`
+            `<a class="artifact-link" href="/api/download?task_id=${encodeURIComponent(item.taskId)}&path=${encodeURIComponent(path)}">${label}</a>`
+        ).join('')}${segmentLinks.map(([label, path, range]) =>
+            `<a class="artifact-link segment-artifact-link" href="/api/download?task_id=${encodeURIComponent(item.taskId)}&path=${encodeURIComponent(path)}">${label} · ${range} 页</a>`
         ).join('')}</div>`;
     }
 
@@ -1247,20 +2183,25 @@ class AICourseStudioApp {
                     fileName: t.original_name || '未知文件',
                     sourceType: /\.(docx|pdf)$/i.test(t.original_name || '') ? 'lesson-plan' : 'presentation',
                     taskId: t.task_id,
-                    status: t.status === 'processing' || t.status === 'pending' ? 'processing' : t.status,
+                    status: this._taskStatus(t.status),
                     percentage: t.percentage || 0,
+                    stagePercentage: t.stage_percentage || 0,
                     stage: t.stage,
                     message: t.message || '',
                     videoPath: t.video_path || null,
                     courseJsonPath: t.course_json_path || null,
                     presentationPath: t.presentation_path || null,
                     subtitlesPath: t.subtitles_path || null,
+                    videoSegments: t.video_segments || [],
                     previewPath: t.preview_path || null,
                     error: t.error || null,
                     queuePosition: t.queue_position || null,
                     selected: false,
                     strategy: t.strategy || null,
-                    strategySource: t.strategy_source || 'batch'
+                    strategySource: t.strategy_source || 'batch',
+                    startedAt: t.started_at || null,
+                    stageStartedAt: t.stage_started_at || null,
+                    updatedAt: t.updated_at || null
                 }));
 
                 this.renderFileList();
@@ -1286,24 +2227,31 @@ class AICourseStudioApp {
             const response = await fetch('/api/tasks');
             if (!response.ok) return;
             const data = await response.json();
+            let changed = false;
             for (const task of data.tasks || []) {
                 const found = this.getItemByTaskId(task.task_id);
                 if (!found) continue;
-                this.updateItem(found.index, {
-                    status: task.status,
-                    stage: task.stage,
+                changed = this.updateItem(found.index, {
+                    status: this._taskStatus(task.status),
+                    stage: task.stage || null,
                     percentage: task.percentage || 0,
+                    stagePercentage: task.stage_percentage || 0,
                     message: task.message || '',
-                    videoPath: task.video_path,
-                    error: task.error,
+                    videoPath: task.video_path || null,
+                    error: task.error || null,
                     queuePosition: task.queue_position || null,
                     strategy: task.strategy || found.item.strategy,
-                    strategySource: task.strategy_source || found.item.strategySource
-                });
+                    strategySource: task.strategy_source || found.item.strategySource,
+                    startedAt: task.started_at || found.item.startedAt,
+                    stageStartedAt: task.stage_started_at || found.item.stageStartedAt,
+                    updatedAt: task.updated_at || found.item.updatedAt
+                }) || changed;
             }
-            this.renderFileList();
-            this.renderResultsGrid();
-            this.updateBatchSummary();
+            if (changed) {
+                this.renderFileList();
+                this.renderResultsGrid();
+                this.updateBatchSummary();
+            }
         } catch (error) {
             console.debug('任务状态轮询暂时不可用:', error);
         }
@@ -1315,68 +2263,399 @@ class AICourseStudioApp {
             const response = await fetch(`/api/course-preview/${taskId}`);
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '加载预览失败');
-            this.renderCoursePreview(taskId, data.pages || []);
+            this.renderCoursePreview(taskId, data.pages || [], data.lesson_segments || []);
         } catch (error) {
             this.showStatus('error', error.message);
         }
     }
 
-    renderCoursePreview(taskId, pages) {
+    renderCoursePreview(taskId, pages, lessonSegments = []) {
         const { coursePreviewModule, coursePreviewPages, coursePreviewSaveState } = this.elements;
+        clearTimeout(this.previewAutoSaveTimer);
+        this.smartCutSegments = lessonSegments;
         this.elements.continueCourseBtn.disabled = false;
         coursePreviewModule.dataset.taskId = taskId;
+        this.elements.downloadEditablePptBtn.href = `/api/course-presentation/${taskId}`;
         coursePreviewPages.innerHTML = '';
+        this.elements.previewPageSelect.innerHTML = '';
         pages.forEach(page => {
             const card = document.createElement('article');
             card.className = 'course-preview-page';
             card.dataset.pageNumber = page.page_number;
+            const segment = page.lesson_segment;
+            const segmentLabel = segment
+                ? `<span class="course-preview-segment">第 ${segment.id} 段 · ${this._esc(segment.title || '')}</span>`
+                : '';
             card.innerHTML = `
-                <img class="course-preview-image" src="${page.image_url}" alt="第 ${page.page_number} 页">
+                <div class="course-preview-slide-canvas">
+                    <img class="course-preview-image" src="${page.image_url}" alt="第 ${page.page_number} 页">
+                    <div class="course-preview-subtitle-overlay">这里是字幕位置</div>
+                </div>
                 <div class="course-preview-editor">
-                    <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}</div>
+                    <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}${segmentLabel}</div>
                     <textarea class="course-preview-script" aria-label="第 ${page.page_number} 页讲稿">${this._esc(page.script || '')}</textarea>
+                    <div class="course-preview-page-meta">
+                        <span class="course-preview-length"></span>
+                        <div class="course-preview-page-actions">
+                            <label class="page-reviewed-control">
+                                <input type="checkbox" class="page-reviewed" ${page.reviewed ? 'checked' : ''}>
+                                已审核
+                            </label>
+                            <button type="button" class="page-retry-tts-button">重配本页</button>
+                            <button type="button" class="script-preview-button">试听本页讲稿</button>
+                        </div>
+                    </div>
                 </div>
             `;
-            card.querySelector('textarea').addEventListener('input', () => {
-                coursePreviewSaveState.textContent = '有未保存修改';
+            const textarea = card.querySelector('textarea');
+            const updateLength = () => {
+                const length = textarea.value.trim().length;
+                const seconds = Math.max(1, Math.round(length / 4));
+                card.querySelector('.course-preview-length').textContent =
+                    `${length} 字 · 预计 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+            };
+            updateLength();
+            textarea.addEventListener('input', () => {
+                updateLength();
+                coursePreviewSaveState.textContent = '等待自动保存…';
                 coursePreviewSaveState.classList.remove('saved');
+                clearTimeout(this.previewAutoSaveTimer);
+                this.previewAutoSaveTimer = setTimeout(
+                    () => this.savePreviewScripts({ automatic: true }),
+                    1200
+                );
             });
+            card.querySelector('.script-preview-button').addEventListener(
+                'click', event => this.previewPageScript(event.currentTarget, textarea.value)
+            );
+            card.querySelector('.page-reviewed').addEventListener('change', () => {
+                coursePreviewSaveState.textContent = '等待自动保存…';
+                coursePreviewSaveState.classList.remove('saved');
+                this.filterPreviewPages();
+                clearTimeout(this.previewAutoSaveTimer);
+                this.previewAutoSaveTimer = setTimeout(
+                    () => this.savePreviewScripts({ automatic: true }),
+                    400
+                );
+            });
+            card.querySelector('.page-retry-tts-button').addEventListener(
+                'click',
+                event => this.retryTaskStage(taskId, 'page_tts', page.page_number, event.currentTarget)
+            );
+            this.bindCourseSubtitleOverlayDrag(card.querySelector('.course-preview-subtitle-overlay'));
             coursePreviewPages.appendChild(card);
+
+            const option = document.createElement('option');
+            option.value = page.page_number;
+            option.textContent = `第 ${page.page_number} 页 · ${page.title || '未命名'}`;
+            this.elements.previewPageSelect.appendChild(option);
         });
-        coursePreviewSaveState.textContent = '';
+        this.renderSmartCutSegments();
+        this.currentPreviewPage = Number(pages[0]?.page_number || 1);
+        this.updatePreviewNavigation();
+        coursePreviewSaveState.textContent = '修改将自动保存';
         coursePreviewModule.hidden = false;
+        this.syncSubtitlePreviewFromInputs();
         coursePreviewModule.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    bindCourseSubtitleOverlayDrag(overlay) {
+        if (!overlay) return;
+        const canvas = overlay.closest('.course-preview-slide-canvas');
+        if (!canvas) return;
+        let dragOffset = { x: 0, y: 0 };
+        overlay.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            const overlayRect = overlay.getBoundingClientRect();
+            dragOffset = {
+                x: event.clientX - overlayRect.left,
+                y: event.clientY - overlayRect.top
+            };
+            overlay.setPointerCapture(event.pointerId);
+        });
+        overlay.addEventListener('pointermove', event => {
+            if (!overlay.hasPointerCapture(event.pointerId)) return;
+            const canvasRect = canvas.getBoundingClientRect();
+            const width = Number(this.elements.subtitleWidth.value) || 1;
+            const height = Number(this.elements.subtitleHeight.value) || 1;
+            const x = Math.round(
+                (event.clientX - canvasRect.left - dragOffset.x) / canvasRect.width * 1920
+            );
+            const y = Math.round(
+                (event.clientY - canvasRect.top - dragOffset.y) / canvasRect.height * 1080
+            );
+            this.elements.subtitleX.value = Math.max(0, Math.min(1920 - width, x));
+            this.elements.subtitleY.value = Math.max(0, Math.min(1080 - height, y));
+            this.syncSubtitlePreviewFromInputs();
+            this.saveCurrentStrategy();
+        });
+        overlay.addEventListener('pointerup', event => {
+            if (overlay.hasPointerCapture(event.pointerId)) {
+                overlay.releasePointerCapture(event.pointerId);
+            }
+        });
+        overlay.addEventListener('pointercancel', event => {
+            if (overlay.hasPointerCapture(event.pointerId)) {
+                overlay.releasePointerCapture(event.pointerId);
+            }
+        });
+    }
+
+    goToPreviewPage(pageNumber) {
+        const cards = Array.from(
+            this.elements.coursePreviewPages.querySelectorAll('.course-preview-page')
+        );
+        const target = cards.find(card => Number(card.dataset.pageNumber) === pageNumber);
+        if (!target) return;
+        this.currentPreviewPage = pageNumber;
+        this.updatePreviewNavigation();
+        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        target.querySelector('textarea')?.focus({ preventScroll: true });
+    }
+
+    updatePreviewNavigation() {
+        const total = this.elements.previewPageSelect.options.length;
+        this.elements.previewPageSelect.value = String(this.currentPreviewPage);
+        this.elements.coursePreviewPosition.textContent =
+            total ? `第 ${this.currentPreviewPage} / ${total} 页` : '';
+        this.elements.previewPreviousBtn.disabled = this.currentPreviewPage <= 1;
+        this.elements.previewNextBtn.disabled = this.currentPreviewPage >= total;
     }
 
     collectPreviewScripts() {
         return Array.from(this.elements.coursePreviewPages.querySelectorAll('.course-preview-page')).map(card => ({
             page_number: Number(card.dataset.pageNumber),
-            script: card.querySelector('.course-preview-script').value
+            script: card.querySelector('.course-preview-script').value,
+            reviewed: card.querySelector('.page-reviewed').checked
         }));
     }
 
-    async savePreviewScripts() {
+    filterPreviewPages() {
+        const onlyUnreviewed = this.elements.unreviewedOnly.checked;
+        this.elements.coursePreviewPages.querySelectorAll('.course-preview-page').forEach(card => {
+            card.hidden = onlyUnreviewed && card.querySelector('.page-reviewed').checked;
+        });
+    }
+
+    getSmartCutPriority() {
+        return document.querySelector('input[name="cut-priority"]:checked')?.value || 'section';
+    }
+
+    renderSmartCutSegments() {
+        const { smartCutList, smartCutSummary, smartCutApplyBtn } = this.elements;
+        if (!smartCutList || !smartCutSummary || !smartCutApplyBtn) return;
+        smartCutList.innerHTML = '';
+        if (!this.smartCutSegments.length) {
+            smartCutSummary.textContent = '尚未生成切课建议';
+            smartCutApplyBtn.disabled = true;
+            return;
+        }
+        smartCutSummary.textContent =
+            `已生成 ${this.smartCutSegments.length} 段，应用后将额外输出分段 MP4`;
+        this.smartCutSegments.forEach((segment, index) => {
+            const row = document.createElement('div');
+            row.className = 'smart-cut-row';
+            row.innerHTML = `
+                <span class="smart-cut-index">${index + 1}</span>
+                <input type="text" class="smart-cut-title"
+                       value="${this._escAttr(segment.title || `第 ${index + 1} 课`)}"
+                       aria-label="第 ${index + 1} 段标题">
+                <input type="number" class="smart-cut-start" min="1"
+                       value="${Number(segment.start_page) || 1}"
+                       aria-label="第 ${index + 1} 段起始页">
+                <span class="smart-cut-dash">-</span>
+                <input type="number" class="smart-cut-end" min="1"
+                       value="${Number(segment.end_page) || 1}"
+                       aria-label="第 ${index + 1} 段结束页">
+                <span class="smart-cut-estimate">约 ${segment.estimated_minutes || '?'} 分钟</span>
+            `;
+            smartCutList.appendChild(row);
+        });
+        smartCutApplyBtn.disabled = false;
+    }
+
+    collectSmartCutSegments() {
+        return Array.from(this.elements.smartCutList.querySelectorAll('.smart-cut-row')).map((row, index) => ({
+            id: index + 1,
+            title: row.querySelector('.smart-cut-title').value.trim() || `第 ${index + 1} 课`,
+            start_page: Number(row.querySelector('.smart-cut-start').value),
+            end_page: Number(row.querySelector('.smart-cut-end').value)
+        }));
+    }
+
+    async recommendSmartCuts() {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        if (!taskId) return;
+        clearTimeout(this.previewAutoSaveTimer);
+        await this.savePreviewScripts({ automatic: true });
+        const button = this.elements.smartCutRecommendBtn;
+        button.disabled = true;
+        button.textContent = '分析中...';
+        try {
+            const response = await fetch(`/api/course-segments/${taskId}/recommend`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    target_minutes: Number(this.elements.cutDurationMinutes.value) || 5,
+                    priority: this.getSmartCutPriority()
+                })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '智能切课失败');
+            this.smartCutSegments = data.segments || [];
+            this.renderSmartCutSegments();
+            this.showStatus('success', `已生成 ${this.smartCutSegments.length} 段切课建议`);
+        } catch (error) {
+            this.showStatus('error', error.message);
+        } finally {
+            button.disabled = false;
+            button.textContent = '确定';
+        }
+    }
+
+    async applySmartCuts() {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        if (!taskId) return;
+        const segments = this.collectSmartCutSegments();
+        if (!segments.length) return;
+        clearTimeout(this.previewAutoSaveTimer);
+        const button = this.elements.smartCutApplyBtn;
+        button.disabled = true;
+        button.textContent = '应用中...';
+        try {
+            const response = await fetch(`/api/course-segments/${taskId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ segments })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '应用切课失败');
+            this.smartCutSegments = data.segments || [];
+            await this.loadCoursePreview(taskId);
+            this.showStatus('success', data.message || '已应用智能切课');
+        } catch (error) {
+            this.showStatus('error', error.message);
+        } finally {
+            button.disabled = false;
+            button.textContent = '应用';
+        }
+    }
+
+    async savePreviewScripts({ automatic = false } = {}) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return false;
-        const response = await fetch(`/api/course-preview/${taskId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pages: this.collectPreviewScripts() })
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            this.showStatus('error', data.error || '保存讲稿失败');
+        const sequence = ++this.previewSaveSequence;
+        this.elements.coursePreviewSaveState.textContent = '保存中…';
+        try {
+            const response = await fetch(`/api/course-preview/${taskId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pages: this.collectPreviewScripts() })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '保存讲稿失败');
+            if (sequence !== this.previewSaveSequence) return true;
+            this.elements.coursePreviewSaveState.textContent = automatic ? '已自动保存' : '已保存';
+            this.elements.coursePreviewSaveState.classList.add('saved');
+            return true;
+        } catch (error) {
+            if (sequence !== this.previewSaveSequence) return false;
+            this.elements.coursePreviewSaveState.textContent = '自动保存失败，请手动保存';
+            this.elements.coursePreviewSaveState.classList.remove('saved');
+            if (!automatic) this.showStatus('error', error.message);
             return false;
         }
-        this.elements.coursePreviewSaveState.textContent = '已保存';
-        this.elements.coursePreviewSaveState.classList.add('saved');
-        return true;
+    }
+
+    async uploadEditedPresentation(file) {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        if (!taskId) return;
+        if (!file.name.toLowerCase().endsWith('.pptx')) {
+            this.showStatus('error', '请上传修改后的 PPTX 文件');
+            return;
+        }
+        const button = this.elements.uploadEditedPptBtn;
+        const originalText = button.textContent;
+        const formData = new FormData();
+        formData.append('presentation', file);
+        button.disabled = true;
+        button.textContent = '上传并重新渲染…';
+        this.elements.continueCourseBtn.disabled = true;
+        try {
+            const response = await fetch(`/api/course-presentation/${taskId}`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'PPT 更新失败');
+            this.renderCoursePreview(taskId, data.pages || [], []);
+            this.elements.coursePreviewSaveState.textContent = 'PPT 已更新';
+            this.elements.coursePreviewSaveState.classList.add('saved');
+        } catch (error) {
+            this.elements.continueCourseBtn.disabled = false;
+            this.showStatus('error', error.message);
+        } finally {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
+    async previewPageScript(button, text) {
+        if (this.activeVoicePreviewButton === button && this.voicePreviewAudio) {
+            this.stopVoicePreview();
+            return;
+        }
+        const voice = this.elements.customVoice.value.trim() || this.elements.voiceSelect.value;
+        if (!text.trim()) {
+            this.showStatus('error', '当前页讲稿为空');
+            return;
+        }
+        this.stopVoicePreview();
+        button.disabled = true;
+        button.textContent = '生成试听…';
+        try {
+            const response = await fetch('/api/script-preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    engine: this.elements.ttsEngine.value,
+                    voice,
+                    text,
+                    tts_rate: this.elements.ttsRate.value,
+                    tts_emotion: this.elements.ttsEmotion.value,
+                    tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
+                    tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
+                    burn_subtitles: this.elements.burnSubtitles.checked,
+                    ...this.collectSubtitleOptions()
+                })
+            });
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || '讲稿试听失败');
+            }
+            const audioUrl = URL.createObjectURL(await response.blob());
+            const audio = new Audio(audioUrl);
+            this.voicePreviewAudio = audio;
+            this.activeVoicePreviewButton = button;
+            button.textContent = '停止试听';
+            button.disabled = false;
+            audio.addEventListener('ended', () => {
+                URL.revokeObjectURL(audioUrl);
+                this.stopVoicePreview();
+            }, { once: true });
+            await audio.play();
+        } catch (error) {
+            button.disabled = false;
+            button.textContent = '试听本页讲稿';
+            this.showStatus('error', error.message);
+        }
     }
 
     async continueCourse() {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         const found = this.getItemByTaskId(taskId);
         if (!taskId || !found) return;
+        clearTimeout(this.previewAutoSaveTimer);
         const button = this.elements.continueCourseBtn;
         button.disabled = true;
         try {
@@ -1389,7 +2668,13 @@ class AICourseStudioApp {
                     voice: (
                         this.elements.customVoice.value.trim()
                         || this.elements.voiceSelect.value
-                    )
+                    ),
+                    tts_rate: this.elements.ttsRate.value,
+                    tts_emotion: this.elements.ttsEmotion.value,
+                    tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
+                    tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
+                    burn_subtitles: this.elements.burnSubtitles.checked,
+                    ...this.collectSubtitleOptions()
                 })
             });
             const data = await response.json();
@@ -1414,6 +2699,7 @@ class AICourseStudioApp {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         const found = this.getItemByTaskId(taskId);
         if (!taskId || !found) return;
+        clearTimeout(this.previewAutoSaveTimer);
 
         const button = this.elements.cancelCourseBtn;
         button.disabled = true;

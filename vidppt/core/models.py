@@ -90,6 +90,18 @@ class ProcessConfig:
     audio_sample_rate: int = 48000
     audio_channels: int = 1
     audio_loudness_lufs: float = -16.0
+    burn_subtitles: bool = True
+    subtitle_x: int = 0
+    subtitle_y: int = 976
+    subtitle_width: int = 1920
+    subtitle_height: int = 50
+    subtitle_font_size: int = 50
+    subtitle_font_name: str = "Noto Sans CJK SC"
+    subtitle_color: str = "#FFFFFF"
+    subtitle_background_color: str = "#333333"
+    subtitle_background_opacity: float = 0.45
+    subtitle_outline_width: float = 0.0
+    subtitle_outline_color: str = "#000000"
 
     # 数字人配置（可选）
     enable_avatar: bool = False  # 是否启用数字人叠加

@@ -26,6 +26,12 @@ class VolcengineTTSEngine(TTSEngine):
         timeout: float = 60.0,
         max_retries: int = 3,
         uid: str = "ai-course-studio",
+        volume_ratio: float = 1.0,
+        pitch_ratio: float = 1.0,
+        emotion: Optional[str] = None,
+        emotion_scale: float = 4.0,
+        language: str = "cn",
+        silence_duration: Optional[int] = None,
         **kwargs,
     ):
         self.appid = appid or os.getenv("VOLCENGINE_TTS_APPID")
@@ -44,7 +50,20 @@ class VolcengineTTSEngine(TTSEngine):
         self.timeout = timeout
         self.max_retries = max_retries
         self.uid = uid
+        self.volume_ratio = self._clamp(volume_ratio, 0.1, 3.0, 1.0)
+        self.pitch_ratio = self._clamp(pitch_ratio, 0.1, 3.0, 1.0)
+        self.emotion = emotion
+        self.emotion_scale = self._clamp(emotion_scale, 1.0, 5.0, 4.0)
+        self.language = language
+        self.silence_duration = silence_duration
         self.options = kwargs
+
+    @staticmethod
+    def _clamp(value, minimum: float, maximum: float, default: float) -> float:
+        try:
+            return max(minimum, min(maximum, float(value)))
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _parse_rate(rate: str) -> float:
@@ -64,14 +83,38 @@ class VolcengineTTSEngine(TTSEngine):
         emotion: Optional[str] = None,
         **kwargs,
     ) -> dict:
+        selected_emotion = emotion or kwargs.get("emotion") or self.emotion
         audio = {
             "voice_type": voice,
             "encoding": kwargs.get("audio_format", self.audio_format),
             "rate": kwargs.get("sample_rate", self.sample_rate),
             "speed_ratio": self._parse_rate(rate),
+            "volume_ratio": self._clamp(
+                kwargs.get("volume_ratio", self.volume_ratio), 0.1, 3.0, 1.0
+            ),
+            "pitch_ratio": self._clamp(
+                kwargs.get("pitch_ratio", self.pitch_ratio), 0.1, 3.0, 1.0
+            ),
+            "language": kwargs.get("language", self.language),
         }
-        if emotion:
-            audio["emotion"] = emotion
+        if selected_emotion:
+            audio["emotion"] = selected_emotion
+            audio["emotion_scale"] = self._clamp(
+                kwargs.get("emotion_scale", self.emotion_scale), 1.0, 5.0, 4.0
+            )
+        request = {
+            "reqid": uuid.uuid4().hex,
+            "text": text.strip() or "此页无文字内容。",
+            "text_type": "plain",
+            "operation": "query",
+            "with_frontend": "1",
+            "frontend_type": "unitTson",
+        }
+        silence_duration = kwargs.get("silence_duration", self.silence_duration)
+        if silence_duration is not None:
+            request["silence_duration"] = str(
+                int(self._clamp(silence_duration, 0, 3000, 0))
+            )
         return {
             "app": {
                 "appid": self.appid,
@@ -80,12 +123,7 @@ class VolcengineTTSEngine(TTSEngine):
             },
             "user": {"uid": self.uid},
             "audio": audio,
-            "request": {
-                "reqid": uuid.uuid4().hex,
-                "text": text.strip() or "此页无文字内容。",
-                "text_type": "plain",
-                "operation": "query",
-            },
+            "request": request,
         }
 
     async def convert_async(

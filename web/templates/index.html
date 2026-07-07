@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=12">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=15">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -128,6 +128,13 @@
                         </div>
                     </div>
                     <div class="file-list" id="file-list"></div>
+                    <div class="route-summary" id="route-summary" hidden>
+                        <div class="route-summary-icon" id="route-summary-icon">AI</div>
+                        <div>
+                            <strong id="route-summary-title"></strong>
+                            <p id="route-summary-description"></p>
+                        </div>
+                    </div>
                     <div class="batch-selection-actions" id="batch-selection-actions">
                         <label class="batch-select-all">
                             <input type="checkbox" id="select-all-files" checked>
@@ -143,14 +150,22 @@
                 <section class="card" id="options-module">
                     <div class="section-heading">
                         <div><span class="section-kicker">02 / 生产配置</span><h3>生成策略</h3></div>
-                        <span class="section-state">支持批量统一与单项覆盖</span>
+                        <button class="advanced-toggle" id="advanced-toggle" type="button"
+                                aria-expanded="false">展开高级设置</button>
                     </div>
                     <div class="workflow-note">
-                        <span class="workflow-badge">教案模式</span>
-                        <span>Word/PDF 将依次生成 Course JSON、可编辑 PPT、逐页讲稿、配音、字幕和视频。</span>
+                        <span class="workflow-badge" id="workflow-badge">智能识别</span>
+                        <span id="workflow-description">上传素材后将自动匹配教案设计或原稿保真路线。</span>
+                    </div>
+                    <div class="strategy-template-bar">
+                        <select id="strategy-template-select" class="select-input" aria-label="课程生产模板">
+                            <option value="">选择生产模板</option>
+                        </select>
+                        <button type="button" class="btn-secondary" id="save-template-btn">保存当前配置</button>
+                        <button type="button" class="btn-secondary" id="delete-template-btn" disabled>删除模板</button>
                     </div>
                     <div class="options-grid">
-                        <div class="option-group">
+                        <div class="option-group advanced-option" hidden>
                             <label for="render-engine">渲染引擎</label>
                             <select id="render-engine" class="select-input">
                                 <option value="libreoffice">LibreOffice (中文更友好)</option>
@@ -177,7 +192,49 @@
                             <input id="custom-voice" class="select-input"
                                    placeholder="可选：输入账户专属/复刻音色 ID">
                         </div>
+                        <div class="option-group" id="volcengine-expression-group" hidden>
+                            <label for="tts-emotion">火山表达风格</label>
+                            <select id="tts-emotion" class="select-input">
+                                <option value="">自然讲解（音色默认）</option>
+                                <option value="happy" selected>温暖积极</option>
+                                <option value="sad">沉静低沉</option>
+                                <option value="angry">有力严肃</option>
+                                <option value="surprised">惊喜强调</option>
+                            </select>
+                            <label for="tts-rate">语速</label>
+                            <select id="tts-rate" class="select-input">
+                                <option value="-15%">舒缓</option>
+                                <option value="-8%" selected>自然偏慢</option>
+                                <option value="+0%">标准</option>
+                                <option value="+10%">紧凑</option>
+                            </select>
+                            <label for="tts-emotion-scale">情感强度</label>
+                            <select id="tts-emotion-scale" class="select-input">
+                                <option value="2">轻</option>
+                                <option value="3" selected>自然</option>
+                                <option value="4">明显</option>
+                                <option value="5">强烈</option>
+                            </select>
+                            <label for="tts-sentence-pause">句间停顿</label>
+                            <select id="tts-sentence-pause" class="select-input">
+                                <option value="180">紧凑</option>
+                                <option value="260" selected>自然</option>
+                                <option value="420">舒缓</option>
+                            </select>
+                        </div>
                         <div class="option-group toggle-group">
+                            <label>视频字幕</label>
+                            <div class="toggle-row">
+                                <span style="font-size:13px;color:var(--color-text-3)">不烧录</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="burn-subtitles" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span style="font-size:13px;color:var(--color-text-3)">烧录到视频</span>
+                            </div>
+                            <small class="field-hint">始终生成 UTF-8 SRT；开启后按课程草稿中的字幕位置和样式烧录</small>
+                        </div>
+                        <div class="option-group toggle-group advanced-option" hidden>
                             <label>AI 内容生成</label>
                             <div class="toggle-row">
                                 <span style="font-size:13px;color:var(--color-text-3)">关闭</span>
@@ -188,7 +245,7 @@
                                 <span style="font-size:13px;color:var(--color-text-3)">开启</span>
                             </div>
                         </div>
-                        <div class="option-group llm-mode-group visible" id="llm-mode-group">
+                        <div class="option-group llm-mode-group visible advanced-option" id="llm-mode-group" hidden>
                             <label for="llm-engine">文本模型</label>
                             <select id="llm-engine" class="select-input">
                                 <option value="qwen">通义千问（百炼）</option>
@@ -205,6 +262,22 @@
                                 <option value="standard" selected>标准：精炼且完整</option>
                                 <option value="strong">高度：只保留核心内容</option>
                             </select>
+                            <label for="visual-theme">PPT 视觉方案</label>
+                            <select id="visual-theme" class="select-input">
+                                <option value="auto" selected>智能设计：根据内容匹配色调与版式</option>
+                                <option value="education">教育学术</option>
+                                <option value="technology">科技数字</option>
+                                <option value="industry">工业制造</option>
+                                <option value="business">商务管理</option>
+                                <option value="culture">文化人文</option>
+                                <option value="nature">自然生态</option>
+                                <option value="health">医疗健康</option>
+                                <option value="public">公共政务</option>
+                                <option value="finance">金融专业</option>
+                            </select>
+                            <small class="option-hint">
+                                智能设计会分析课程内容，为整套课件确定视觉语言，并逐页选择对比、流程、时间线、框架等版式。
+                            </small>
                             <label class="toggle-row" for="illustrations-enabled">
                                 <input type="checkbox" id="illustrations-enabled" checked>
                                 <span>生成内容匹配插图（通义万相）</span>
@@ -244,17 +317,18 @@
                 <section class="card" id="convert-module">
                     <div class="section-heading">
                         <div><span class="section-kicker">03 / 提交生产</span><h3>生成课程</h3></div>
+                        <span class="section-state">提交前将核对任务与策略</span>
                     </div>
                     <div class="convert-area">
                         <button class="btn-convert" id="convert-btn" disabled>
-                            <span class="btn-text">生成课程</span>
+                            <span class="btn-text">生成课程草稿</span>
                             <span class="btn-loading" hidden>
                                 <span class="spinner"></span>
                                 转换中...
                             </span>
                         </button>
                         <button class="btn-preview" id="render-btn" disabled>
-                            <span class="btn-text">预览幻灯片</span>
+                            <span class="btn-text">仅预览原始幻灯片</span>
                             <span class="btn-loading" hidden>
                                 <span class="spinner"></span>
                                 渲染中...
@@ -276,17 +350,126 @@
                     </div>
                 </section>
 
-                <!-- 逐页讲稿确认 -->
+                <!-- 课程草稿确认 -->
                 <section class="card course-preview-card" id="course-preview-module" hidden>
                     <div class="course-preview-header">
                         <div>
-                            <h3 class="results-title">确认逐页讲稿</h3>
-                            <p class="course-preview-hint">逐页核对 PPT 与讲稿。保存修改后，点击继续生成配音、字幕和视频。</p>
+                            <h3 class="results-title">确认课程草稿</h3>
+                            <p class="course-preview-hint">逐页核对 PPT、讲稿和字幕效果。保存修改后，点击继续生成配音、字幕和视频。</p>
                         </div>
-                        <span class="course-preview-save-state" id="course-preview-save-state"></span>
+                        <div class="course-preview-status">
+                            <span class="course-preview-position" id="course-preview-position"></span>
+                            <span class="course-preview-save-state" id="course-preview-save-state"></span>
+                        </div>
+                    </div>
+                    <div class="course-preview-toolbar">
+                        <button type="button" class="btn-secondary" id="preview-previous-btn">上一页</button>
+                        <select id="preview-page-select" class="select-input" aria-label="跳转到讲稿页"></select>
+                        <button type="button" class="btn-secondary" id="preview-next-btn">下一页</button>
+                        <label class="preview-review-filter">
+                            <input type="checkbox" id="unreviewed-only">
+                            只看未审核
+                        </label>
+                    </div>
+                    <div class="smart-cut-panel">
+                        <div class="smart-cut-tabs" role="tablist" aria-label="课程拆分设置">
+                            <button type="button" class="smart-cut-tab active">智能切课</button>
+                            <button type="button" class="smart-cut-tab muted" disabled>数字人出镜策略</button>
+                        </div>
+                        <div class="smart-cut-section">
+                            <h4>分割时长</h4>
+                            <div class="smart-cut-form">
+                                <label class="smart-cut-duration">
+                                    <span>分割时长：</span>
+                                    <span class="duration-prefix">每</span>
+                                    <input type="number" id="cut-duration-minutes" min="1" max="120" step="1" value="5">
+                                    <span class="duration-unit">分钟</span>
+                                </label>
+                                <fieldset class="smart-cut-priority">
+                                    <legend>优先级：</legend>
+                                    <label><input type="radio" name="cut-priority" value="section" checked> 小节优先</label>
+                                    <label><input type="radio" name="cut-priority" value="duration"> 时长优先</label>
+                                </fieldset>
+                                <button type="button" class="btn-preview smart-cut-confirm" id="smart-cut-recommend-btn">确定</button>
+                            </div>
+                        </div>
+                        <div class="smart-cut-section">
+                            <h4>推荐范围</h4>
+                            <div class="smart-cut-summary" id="smart-cut-summary">尚未生成切课建议</div>
+                            <div class="smart-cut-list" id="smart-cut-list"></div>
+                            <button type="button" class="btn-convert smart-cut-apply" id="smart-cut-apply-btn" disabled>应用</button>
+                        </div>
+                    </div>
+                    <div class="course-subtitle-panel">
+                        <div class="course-subtitle-panel-header">
+                            <h4>字幕调试</h4>
+                            <span>拖动 PPT 画面中的字幕框，确认位置和样式后继续生成视频。</span>
+                        </div>
+                        <div class="course-subtitle-grid">
+                            <div class="course-subtitle-controls">
+                                <label>x坐标
+                                    <input id="subtitle-x" class="number-input" type="number"
+                                           min="0" max="1919" value="0">
+                                </label>
+                                <label>y坐标
+                                    <input id="subtitle-y" class="number-input" type="number"
+                                           min="0" max="1079" value="976">
+                                </label>
+                                <label>宽度
+                                    <input id="subtitle-width" class="number-input" type="number"
+                                           min="1" max="1920" value="1920">
+                                </label>
+                                <label>高度
+                                    <input id="subtitle-height" class="number-input" type="number"
+                                           min="1" max="360" value="50">
+                                </label>
+                                <label>字号
+                                    <input id="subtitle-font-size" class="number-input" type="number"
+                                           min="12" max="120" value="50">
+                                </label>
+                                <label>字体
+                                    <select id="subtitle-font-name" class="select-input">
+                                        <option value="Noto Sans CJK SC">Noto Sans CJK SC</option>
+                                        <option value="WenQuanYi Zen Hei">文泉驿正黑</option>
+                                        <option value="Droid Sans Fallback">Droid Sans Fallback</option>
+                                    </select>
+                                </label>
+                                <label>颜色
+                                    <input id="subtitle-color" class="color-input" type="color"
+                                           value="#ffffff">
+                                </label>
+                                <label>背景
+                                    <input id="subtitle-background-color" class="color-input" type="color"
+                                           value="#333333">
+                                </label>
+                                <label>背景透明
+                                    <input id="subtitle-background-opacity" class="number-input"
+                                           type="number" min="0" max="1" step="0.05" value="0.45">
+                                </label>
+                                <label>描边宽
+                                    <input id="subtitle-outline-width" class="number-input"
+                                           type="number" min="0" max="12" step="0.5" value="0">
+                                </label>
+                                <label>描边颜色
+                                    <input id="subtitle-outline-color" class="color-input" type="color"
+                                           value="#000000">
+                                </label>
+                            </div>
+                            <div class="subtitle-position-preview" id="subtitle-position-preview">
+                                <div class="subtitle-preview-frame">
+                                    <div class="subtitle-preview-grid"></div>
+                                    <div class="subtitle-preview-bar" id="subtitle-preview-bar">
+                                        这里是字幕位置
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div class="course-preview-pages" id="course-preview-pages"></div>
                     <div class="course-preview-actions">
+                        <a class="btn-preview" id="download-editable-ppt-btn" href="#">下载并编辑 PPT</a>
+                        <input type="file" id="edited-ppt-input" accept=".pptx" hidden>
+                        <button class="btn-preview" id="upload-edited-ppt-btn">上传修改后的 PPT</button>
                         <button class="btn-preview" id="cancel-course-btn">取消并返回生成策略</button>
                         <button class="btn-preview" id="save-scripts-btn">保存讲稿</button>
                         <button class="btn-convert" id="continue-course-btn">
@@ -333,14 +516,10 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=12"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=19"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/task-timer.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({
-        container: '#dashboard-column'
-      });
-      window.taskTimer = new TaskTimerDashboard({
         container: '#dashboard-column'
       });
     </script>

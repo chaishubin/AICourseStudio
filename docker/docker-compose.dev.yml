@@ -1,0 +1,5 @@
+services:
+  vidppt:
+    volumes:
+      - ../web:/app/web
+      - ../vidppt:/app/vidppt

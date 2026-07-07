@@ -45,6 +45,12 @@ def test_llm_builder_accepts_json_code_fence(temp_dir):
               "title": "AI 课程",
               "audience": "初学者",
               "learning_objectives": ["理解概念"],
+              "design_spec": {
+                "theme": "technology",
+                "mood": "理性、未来感",
+                "density": "medium",
+                "visual_language": "网络节点与数据流"
+              },
               "slides": [{
                 "title": "封面",
                 "layout": "cover",
@@ -66,6 +72,8 @@ def test_llm_builder_accepts_json_code_fence(temp_dir):
     assert course.title == "AI 课程"
     assert course.audience == "初学者"
     assert course.sections[0].script == "欢迎学习。"
+    assert course.metadata["design_spec"]["theme"] == "technology"
+    assert course.metadata["design_spec"]["visual_language"] == "网络节点与数据流"
 
 
 def test_course_new_fields_round_trip():
@@ -116,6 +124,38 @@ def test_subtitle_renderer_builds_course_timeline(temp_dir):
     assert "第三句。" in text
 
 
+def test_subtitle_renderer_splits_long_script_into_single_line_cues(temp_dir):
+    course = Course.from_dict(
+        {
+            "title": "课程",
+            "sections": [
+                {
+                    "id": "1",
+                    "title": "一",
+                    "script": (
+                        "第一，厘清模型定位——企业不是要造大脑，而是选对工具脑；"
+                        "第二，直面知识库建设中最容易被忽视的管理难题；"
+                        "第三，说明为什么连接CRM、ERP等系统才是真实价值。"
+                    ),
+                },
+            ],
+        }
+    )
+
+    output = SubtitleRenderer().render_course(
+        [(course.sections[0], 12.0)], temp_dir / "course.srt"
+    )
+    blocks = output.read_text(encoding="utf-8").strip().split("\n\n")
+
+    assert len(blocks) >= 3
+    assert all(len(block.splitlines()[2:]) == 1 for block in blocks)
+    assert all(
+        len(line) <= 20
+        for block in blocks
+        for line in block.splitlines()[2:]
+    )
+
+
 def test_course_pipeline_rejects_video_without_tts(temp_dir):
     from vidppt.core.models import ProcessConfig
     from vidppt.course_pipeline import CoursePipeline
@@ -154,6 +194,13 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     command = run.call_args.args[0]
     assert "-vf" in command
     assert "subtitles=filename='course.srt'" in command[command.index("-vf") + 1]
+    subtitle_filter = command[command.index("-vf") + 1]
+    assert "drawbox=x=0:y=976:w=1920:h=50" in subtitle_filter
+    assert "color=0x333333@0.45" in subtitle_filter
+    assert "FontSize=50" in subtitle_filter
+    assert "PrimaryColour=&H00FFFFFF" in subtitle_filter
+    assert "Outline=0" in subtitle_filter
+    assert "Alignment=2" in subtitle_filter
     assert command[command.index("-c:v") + 1] == "libx264"
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-crf") + 1] == "21"
@@ -161,6 +208,20 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     assert command[command.index("-g") + 1] == "48"
     assert command[command.index("-movflags") + 1] == "+faststart"
     assert run.call_args.kwargs["cwd"] == temp_dir
+
+
+def test_moviepy_progress_uses_video_frames_not_audio_chunks():
+    from vidppt.utils.video_composer import _MoviePyProgressLogger
+
+    reported = []
+    progress = _MoviePyProgressLogger.create(reported.append, None)
+    progress.bars["chunk"] = {"total": 10}
+    progress.bars_callback("chunk", "index", 10)
+    assert reported == []
+
+    progress.bars["frame_index"] = {"total": 200}
+    progress.bars_callback("frame_index", "index", 50)
+    assert reported == [0.25]
 
 
 def test_docx_pipeline_outputs_course_json_and_editable_pptx(temp_dir):
@@ -279,3 +340,32 @@ def test_pptx_theme_selects_distinct_visual_systems():
         renderer._apply_course_theme(course)
         assert course.metadata["visual_theme"] == expected_theme
         assert course.metadata["visual_style"] == expected_style
+
+
+def test_manual_theme_overrides_content_and_auto_layouts_vary():
+    from vidppt.core.course import Course, CourseSection
+    from vidppt.renderers.pptx_renderer import PPTXRenderer
+
+    course = Course(
+        title="人工智能系统",
+        metadata={"visual_theme": "culture"},
+        sections=[
+            CourseSection(id="1", title="封面", layout="cover"),
+            CourseSection(
+                id="2",
+                title="系统实施流程",
+                bullets=["需求分析", "方案设计", "部署验证"],
+            ),
+            CourseSection(
+                id="3",
+                title="架构的四大支柱",
+                bullets=["模型", "知识", "系统", "治理"],
+            ),
+        ],
+    )
+    renderer = PPTXRenderer()
+    renderer._apply_course_theme(course)
+
+    assert course.metadata["visual_theme"] == "culture"
+    assert renderer._resolve_layout(course.sections[1], 2) == "process"
+    assert renderer._resolve_layout(course.sections[2], 3) == "framework"

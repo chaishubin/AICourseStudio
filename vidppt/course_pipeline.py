@@ -1,6 +1,7 @@
 """Word/PDF 教案到 Course JSON 与可编辑 PPTX 的路线 A 流水线。"""
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ class CoursePipeline:
         max_illustrations: int = 3,
         footer_text: str = "AI COURSE STUDIO",
         logo_path: Optional[Path] = None,
+        visual_theme: str = "auto",
     ):
         self.builder = CourseBuilder(llm_engine, refinement_level)
         self.pptx_renderer = PPTXRenderer()
@@ -41,6 +43,7 @@ class CoursePipeline:
         self.max_illustrations = max_illustrations
         self.footer_text = footer_text.strip()[:40]
         self.logo_path = Path(logo_path) if logo_path else None
+        self.visual_theme = visual_theme
 
     def run(
         self,
@@ -57,6 +60,9 @@ class CoursePipeline:
         document = read_source_document(input_path)
         course = self.builder.build(document)
         course.metadata["footer_text"] = self.footer_text
+        if self.visual_theme != "auto":
+            course.metadata["visual_theme"] = self.visual_theme
+            course.metadata["theme_source"] = "manual"
         if self.logo_path and self.logo_path.is_file():
             course.metadata["logo_path"] = str(self.logo_path)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -154,8 +160,13 @@ class CoursePipeline:
             raise RuntimeError("视频合成未产生输出文件")
 
         final_video = output_dir / f"{presentation.stem}.mp4"
-        self._burn_subtitles(silent_video, subtitles, final_video, media_config)
-        silent_video.unlink(missing_ok=True)
+        if media_config.burn_subtitles:
+            self._burn_subtitles(
+                silent_video, subtitles, final_video, media_config
+            )
+            silent_video.unlink(missing_ok=True)
+        else:
+            silent_video.replace(final_video)
         progress.complete_stage(ProcessStage.VIDEO)
         return subtitles, final_video
 
@@ -173,17 +184,14 @@ class CoursePipeline:
         if not ffmpeg:
             raise RuntimeError("烧录字幕需要 ffmpeg，但当前环境未找到该命令")
         subtitle_name = subtitles.name.replace("\\", r"\\").replace("'", r"\'")
+        subtitle_filter = CoursePipeline._subtitle_filter(subtitle_name, config)
         command = [
                 ffmpeg,
                 "-y",
                 "-i",
                 str(video),
                 "-vf",
-                (
-                    f"subtitles=filename='{subtitle_name}':"
-                    "force_style='FontName=Noto Sans CJK SC,"
-                    "FontSize=18,Outline=2,Shadow=1,MarginV=28'"
-                ),
+                subtitle_filter,
                 "-c:v",
                 config.video_codec,
                 "-preset",
@@ -244,6 +252,51 @@ class CoursePipeline:
         finally:
             if process.poll() is None:
                 process.terminate()
+
+    @staticmethod
+    def _subtitle_filter(subtitle_name: str, config: ProcessConfig) -> str:
+        x = max(0, int(config.subtitle_x))
+        y = max(0, int(config.subtitle_y))
+        width = max(1, int(config.subtitle_width))
+        height = max(1, int(config.subtitle_height))
+        font_size = max(12, int(config.subtitle_font_size))
+        opacity = min(1.0, max(0.0, float(config.subtitle_background_opacity)))
+        font_name = CoursePipeline._sanitize_ass_value(config.subtitle_font_name)
+        primary = CoursePipeline._hex_to_ass_color(config.subtitle_color)
+        outline = CoursePipeline._hex_to_ass_color(config.subtitle_outline_color)
+        background = CoursePipeline._hex_to_ffmpeg_color(
+            config.subtitle_background_color
+        )
+        outline_width = max(0.0, float(config.subtitle_outline_width))
+        margin_v = max(0, config.video_height - y - height + 6)
+        margin_r = max(0, config.video_width - x - width)
+        return (
+            f"drawbox=x={x}:y={y}:w={width}:h={height}:"
+            f"color={background}@{opacity:.2f}:t=fill,"
+            f"subtitles=filename='{subtitle_name}':"
+            f"force_style='FontName={font_name},"
+            f"FontSize={font_size},PrimaryColour={primary},"
+            f"OutlineColour={outline},BorderStyle=1,"
+            f"Outline={outline_width:g},Shadow=0,"
+            f"Alignment=2,MarginL={x},MarginR={margin_r},MarginV={margin_v}'"
+        )
+
+    @staticmethod
+    def _sanitize_ass_value(value: str) -> str:
+        cleaned = re.sub(r"[,']", "", str(value or "")).strip()
+        return cleaned or "Noto Sans CJK SC"
+
+    @staticmethod
+    def _hex_to_ffmpeg_color(value: str) -> str:
+        match = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(value or ""))
+        return f"0x{match.group(1).upper()}" if match else "0x333333"
+
+    @staticmethod
+    def _hex_to_ass_color(value: str) -> str:
+        match = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(value or ""))
+        hex_value = match.group(1) if match else "FFFFFF"
+        red, green, blue = hex_value[0:2], hex_value[2:4], hex_value[4:6]
+        return f"&H00{blue.upper()}{green.upper()}{red.upper()}"
 
     @staticmethod
     def _probe_duration(video: Path) -> float:

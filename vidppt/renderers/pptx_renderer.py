@@ -40,6 +40,10 @@ class PPTXRenderer:
         "public": "executive",
         "finance": "executive",
     }
+    CONTENT_LAYOUTS = {
+        "title_and_content", "two_column", "comparison", "process",
+        "timeline", "framework", "key_point", "card_grid",
+    }
 
     def render(self, course: Course, output_path: Path) -> Path:
         from pptx import Presentation
@@ -73,7 +77,8 @@ class PPTXRenderer:
         total: int,
     ) -> None:
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-        layout = (page.layout or "title_and_content").lower()
+        layout = self._resolve_layout(page, index)
+        page.metadata["resolved_layout"] = layout
         if layout == "cover" or index == 1:
             self._render_cover(slide, course, page)
             logo_layout = "cover"
@@ -83,6 +88,18 @@ class PPTXRenderer:
         elif layout == "summary" or index == total:
             self._render_summary(slide, page, index, total)
             logo_layout = "summary"
+        elif layout == "comparison":
+            self._render_comparison(slide, page, index, total)
+            logo_layout = "content"
+        elif layout in {"process", "timeline"}:
+            self._render_sequence(slide, page, index, total, layout)
+            logo_layout = "content"
+        elif layout in {"framework", "card_grid"}:
+            self._render_framework(slide, page, index, total)
+            logo_layout = "content"
+        elif layout == "key_point":
+            self._render_key_point(slide, page, index, total)
+            logo_layout = "content"
         else:
             self._render_content(slide, page, index, total)
             logo_layout = "content"
@@ -230,6 +247,114 @@ class PPTXRenderer:
 
         self._footer(slide, index, total)
 
+    def _render_comparison(
+        self, slide, page: CourseSection, index: int, total: int
+    ) -> None:
+        from pptx.enum.shapes import MSO_SHAPE
+
+        self._render_page_header(slide, page)
+        bullets = page.bullets[:6] or [page.title]
+        midpoint = max(1, (len(bullets) + 1) // 2)
+        groups = (bullets[:midpoint], bullets[midpoint:] or ["补充说明"])
+        labels = ("方案 A", "方案 B")
+        colors = (self.BLUE, self.TEAL)
+        for column, items in enumerate(groups):
+            x = 0.78 + column * 6.05
+            self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 2.0, 5.55, 4.45, self.WHITE)
+            self._shape(slide, MSO_SHAPE.RECTANGLE, x, 2.0, 5.55, 0.68, colors[column])
+            self._text(slide, labels[column], x + 0.3, 2.18, 4.8, 0.25, 14, self.WHITE, bold=True)
+            for item_index, item in enumerate(items[:3], 1):
+                y = 2.95 + (item_index - 1) * 1.0
+                self._shape(slide, MSO_SHAPE.OVAL, x + 0.34, y + 0.08, 0.3, 0.3, colors[column])
+                self._text(slide, item, x + 0.82, y, 4.35, 0.7, 17, self.INK, bold=True)
+        self._footer(slide, index, total)
+
+    def _render_sequence(
+        self, slide, page: CourseSection, index: int, total: int, layout: str
+    ) -> None:
+        from pptx.enum.shapes import MSO_SHAPE
+
+        self._render_page_header(slide, page)
+        bullets = (page.bullets[:5] or [page.title])
+        count = len(bullets)
+        left, width = 0.9, 11.55
+        step_width = min(2.15, (width - 0.28 * (count - 1)) / count)
+        y = 2.55 if layout == "process" else 3.05
+        self._shape(slide, MSO_SHAPE.RECTANGLE, left, y + 0.72, width, 0.06, self.LINE)
+        for item_index, item in enumerate(bullets):
+            x = left + item_index * ((width - step_width) / max(1, count - 1))
+            marker = self.TEAL if item_index % 2 == 0 else self.ORANGE
+            self._shape(slide, MSO_SHAPE.OVAL, x + 0.72, y + 0.48, 0.5, 0.5, marker)
+            self._text(slide, str(item_index + 1), x + 0.72, y + 0.57, 0.5, 0.22, 10, self.WHITE, bold=True)
+            card_y = y - 0.95 if layout == "timeline" and item_index % 2 == 0 else y + 1.1
+            self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, card_y, step_width, 1.25, self.WHITE)
+            self._text(slide, item, x + 0.18, card_y + 0.2, step_width - 0.36, 0.82, 14, self.INK, bold=True)
+        self._footer(slide, index, total)
+
+    def _render_framework(
+        self, slide, page: CourseSection, index: int, total: int
+    ) -> None:
+        from pptx.enum.shapes import MSO_SHAPE
+
+        self._render_page_header(slide, page)
+        bullets = page.bullets[:6] or [page.title]
+        columns = 3 if len(bullets) >= 5 else 2
+        rows = (len(bullets) + columns - 1) // columns
+        card_width = (11.65 - 0.28 * (columns - 1)) / columns
+        card_height = min(1.85, (4.55 - 0.28 * (rows - 1)) / rows)
+        for item_index, item in enumerate(bullets):
+            col, row = item_index % columns, item_index // columns
+            x = 0.82 + col * (card_width + 0.28)
+            y = 2.0 + row * (card_height + 0.28)
+            accent = (self.BLUE, self.TEAL, self.ORANGE)[item_index % 3]
+            self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, card_width, card_height, self.WHITE)
+            self._shape(slide, MSO_SHAPE.RECTANGLE, x, y, card_width, 0.09, accent)
+            self._text(slide, f"{item_index + 1:02d}", x + 0.24, y + 0.26, 0.5, 0.3, 12, accent, bold=True)
+            self._text(slide, item, x + 0.82, y + 0.22, card_width - 1.06, card_height - 0.42, 16, self.INK, bold=True)
+        self._footer(slide, index, total)
+
+    def _render_key_point(
+        self, slide, page: CourseSection, index: int, total: int
+    ) -> None:
+        from pptx.enum.shapes import MSO_SHAPE
+        from pptx.enum.text import PP_ALIGN
+
+        self._background(slide, self.NAVY)
+        self._shape(slide, MSO_SHAPE.OVAL, 9.9, -0.8, 4.2, 4.2, self.BLUE, 0.35)
+        self._shape(slide, MSO_SHAPE.OVAL, -1.0, 5.4, 3.0, 3.0, self.TEAL, 0.35)
+        self._text(slide, page.section_title or "核心观点", 1.0, 1.15, 4.0, 0.4, 13, self.ORANGE, bold=True)
+        statement = (page.bullets[0] if page.bullets else page.title)
+        self._text(slide, statement, 1.15, 2.15, 11.0, 2.3, 31, self.WHITE, bold=True, align=PP_ALIGN.CENTER)
+        if len(page.bullets) > 1:
+            self._text(slide, " · ".join(page.bullets[1:4]), 1.5, 4.9, 10.3, 0.8, 16, "C8D5EA", align=PP_ALIGN.CENTER)
+        self._footer(slide, index, total, dark=True)
+
+    def _render_page_header(self, slide, page: CourseSection) -> None:
+        from pptx.enum.shapes import MSO_SHAPE
+
+        self._background(slide, self.PAPER)
+        self._shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 13.333, 0.14, self.TEAL)
+        self._text(slide, page.section_title or "课程内容", 0.8, 0.52, 2.7, 0.3, 11, self.BLUE, bold=True)
+        self._text(slide, page.title, 0.8, 0.92, 10.9, 0.72, 28, self.INK, bold=True)
+        self._shape(slide, MSO_SHAPE.RECTANGLE, 0.82, 1.72, 0.9, 0.07, self.ORANGE)
+
+    def _resolve_layout(self, page: CourseSection, index: int) -> str:
+        requested = (page.layout or "title_and_content").lower()
+        if requested not in {"title_and_content", ""}:
+            return requested
+        text = f"{page.title} {' '.join(page.bullets)}"
+        if any(word in text for word in ("对比", "区别", "优缺点", "相比", " versus ", " vs ")):
+            return "comparison"
+        if any(word in text for word in ("流程", "步骤", "路径", "方法", "实施")):
+            return "process"
+        if any(word in text for word in ("阶段", "演进", "历程", "时间线", "发展")):
+            return "timeline"
+        if any(word in text for word in ("框架", "体系", "支柱", "架构", "维度", "模块")):
+            return "framework"
+        if len(page.bullets) <= 1:
+            return "key_point"
+        return ("two_column", "card_grid", "title_and_content")[(index - 1) % 3]
+
     def _render_content_cards(
         self, slide, page: CourseSection, x: float, y: float,
         width: float, height: float, accent: str, columns: int,
@@ -315,7 +440,16 @@ class PPTXRenderer:
             theme: sum(text.count(keyword) for keyword in keywords)
             for theme, keywords in keyword_groups.items()
         }
-        theme_name = max(scores, key=scores.get) if any(scores.values()) else "education"
+        requested_theme = str(course.metadata.get("visual_theme", "")).lower()
+        design_spec = course.metadata.get("design_spec")
+        if not requested_theme and isinstance(design_spec, dict):
+            requested_theme = str(design_spec.get("theme", "")).lower()
+        if requested_theme in self.THEMES:
+            theme_name = requested_theme
+            course.metadata.setdefault("theme_source", "ai")
+        else:
+            theme_name = max(scores, key=scores.get) if any(scores.values()) else "education"
+            course.metadata["theme_source"] = "keyword_fallback"
         navy, blue, accent, paper = self.THEMES[theme_name]
         self.NAVY, self.BLUE, self.TEAL, self.PAPER = navy, blue, accent, paper
         self.DESIGN_STYLE = self.THEME_STYLES[theme_name]

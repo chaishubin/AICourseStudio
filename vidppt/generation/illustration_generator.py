@@ -76,11 +76,13 @@ class DashScopeIllustrationGenerator:
             [section.title, *section.bullets[:3]]
         )
         return (
-            f"为中文课程《{course_title}》制作一张与本页主题匹配的横版教学插图。"
-            f"本页内容：{subject}。"
+            "生成一张纯无字横版教学插图，只画场景、人物、物体、流程意象或抽象图形。"
+            "画面中绝对禁止出现任何文字、标题、标签、字母、拼音、数字、符号、Logo、水印、印章或边框，"
+            "也不要生成海报、封面、信息图、看板、屏幕文字、书页文字、路牌文字或图表文字。"
+            f"课程主题：{course_title}。本页语义：{subject}。"
             "现代编辑插画风，构图清晰，主体位于画面右侧或中央，"
             "适合放入16:9课程幻灯片，专业、克制、具有真实细节。"
-            "不要出现文字、字母、数字、标志、水印或边框。"
+            "最终图片必须保持无任何可读或不可读字符，所有说明文字由 PPT 文本框另行排版。"
         )
 
     def _generate(self, prompt: str, output_path: Path) -> None:

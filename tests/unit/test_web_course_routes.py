@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 from queue import Queue
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -77,12 +78,29 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
             "voice": "zh_female_cancan_mars_bigtts",
             "llm_enabled": True,
             "llm_engine": "qwen",
+            "visual_theme": "technology",
+            "burn_subtitles": False,
+            "subtitle_y": 940,
+            "subtitle_height": 80,
+            "subtitle_font_size": 48,
+            "subtitle_background_opacity": 0.5,
         },
     )
 
     assert response.status_code == 200
     assert enqueue
     assert enqueue[0][0][0] is web_app.run_course_generation
+    assert enqueue[0][0][-1] == "technology"
+    task_id = response.get_json()["task_id"]
+    assert web_app.tasks[task_id]["strategy"]["burn_subtitles"] is False
+    assert web_app.tasks[task_id]["strategy"]["subtitle_y"] == 940
+    assert web_app.tasks[task_id]["strategy"]["subtitle_font_size"] == 48
+    assert web_app.tasks[task_id]["media_options"]["burn_subtitles"] is False
+    assert web_app.tasks[task_id]["media_options"]["subtitle_height"] == 80
+    assert (
+        web_app.tasks[task_id]["media_options"]["subtitle_background_opacity"]
+        == 0.5
+    )
 
 
 def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
@@ -134,9 +152,15 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     client = web_app.app.test_client()
     preview_response = client.get(f"/api/course-preview/{task_id}")
     assert preview_response.status_code == 200
-    assert preview_response.get_json()["pages"][0]["image_url"].startswith(
+    preview_image_url = preview_response.get_json()["pages"][0]["image_url"]
+    assert preview_image_url.startswith(
         "/api/slide-image"
     )
+    assert "&v=" in preview_image_url
+
+    image_response = client.get(preview_image_url)
+    assert image_response.status_code == 200
+    assert image_response.headers["Cache-Control"] == "no-store, max-age=0"
 
     save_response = client.patch(
         f"/api/course-preview/{task_id}",
@@ -154,6 +178,102 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
 
     duplicate = client.post(f"/api/course-continue/{task_id}", json={})
     assert duplicate.status_code == 409
+
+
+def test_review_presentation_can_be_downloaded_and_replaced(monkeypatch, temp_dir):
+    import web.app as web_app
+    from vidppt.processors.ppt_processor import PPTProcessor
+
+    task_id = "edit-presentation-task"
+    output_dir = temp_dir / task_id
+    output_dir.mkdir()
+    source = temp_dir / "source.pptx"
+    source.write_bytes(b"original-pptx")
+    old_image = output_dir / "1" / "slide.png"
+    old_image.parent.mkdir()
+    old_image.write_bytes(b"old")
+    new_image = output_dir / "1" / "edited.png"
+    new_image.write_bytes(b"new")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "awaiting_confirmation",
+            "file_path": str(source),
+            "output_dir": str(output_dir),
+            "original_name": "课程.pptx",
+            "media_options": {"render_engine": "spire"},
+        }
+    })
+    monkeypatch.setattr(web_app, "STATE_FILE", temp_dir / "state.json")
+    (output_dir / "preview.json").write_text(json.dumps({
+        "task_id": task_id,
+        "source_type": "presentation",
+        "presentation_path": str(source),
+        "pages": [{
+            "page_number": 1,
+            "title": "旧标题",
+            "image_path": str(old_image),
+            "script": "保留讲稿",
+            "original_script": "原讲稿",
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        PPTProcessor,
+        "process",
+        lambda self, config: SimpleNamespace(pages=[
+            SimpleNamespace(
+                page_number=1,
+                text="修改后的标题",
+                slide_image=new_image,
+            )
+        ]),
+    )
+
+    client = web_app.app.test_client()
+    download = client.get(f"/api/course-presentation/{task_id}")
+    assert download.status_code == 200
+    assert download.data == b"original-pptx"
+
+    upload = client.post(
+        f"/api/course-presentation/{task_id}",
+        data={"presentation": (io.BytesIO(b"edited-pptx"), "edited.pptx")},
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 200
+    payload = upload.get_json()
+    assert payload["pages"][0]["script"] == "保留讲稿"
+    assert payload["pages"][0]["title"] == "修改后的标题"
+    assert "&v=" in payload["pages"][0]["image_url"]
+    assert (output_dir / "reviewed.pptx").read_bytes() == b"edited-pptx"
+
+
+def test_artifact_downloads_use_original_upload_name(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "named-download-task"
+    artifacts = {}
+    for extension in (".mp4", ".srt", ".pptx", ".json"):
+        path = temp_dir / f"internal-uuid{extension}"
+        path.write_bytes(extension.encode())
+        artifacts[extension] = path
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "original_name": "../../课程设计.docx",
+            "video_path": str(artifacts[".mp4"]),
+            "subtitles_path": str(artifacts[".srt"]),
+            "presentation_path": str(artifacts[".pptx"]),
+            "course_json_path": str(artifacts[".json"]),
+        }
+    })
+    client = web_app.app.test_client()
+
+    for extension, path in artifacts.items():
+        response = client.get(
+            "/api/download",
+            query_string={"task_id": task_id, "path": str(path)},
+        )
+        assert response.status_code == 200
+        disposition = response.headers["Content-Disposition"]
+        assert f"filename*=UTF-8''%E8%AF%BE%E7%A8%8B%E8%AE%BE%E8%AE%A1{extension}" in disposition
 
 
 def test_preview_can_be_cancelled_and_removed_from_state(monkeypatch, temp_dir):
@@ -220,14 +340,20 @@ def test_completed_task_can_be_physically_deleted(monkeypatch, temp_dir):
     assert [item["task_id"] for item in persisted] == ["keep-task"]
 
 
-def test_task_delete_rejects_running_and_unsafe_paths(monkeypatch, temp_dir):
+def test_task_delete_rejects_running_and_ignores_unsafe_recorded_path(
+    monkeypatch,
+    temp_dir,
+):
     import web.app as web_app
 
     output_root = temp_dir / "outputs"
     output_root.mkdir()
+    state_file = output_root / "state.json"
+    state_file.write_text(json.dumps([]), encoding="utf-8")
     outside = temp_dir / "outside"
     outside.mkdir()
     monkeypatch.setattr(web_app, "OUTPUT_FOLDER", output_root)
+    monkeypatch.setattr(web_app, "STATE_FILE", state_file)
     monkeypatch.setattr(web_app, "tasks", {
         "running-task": {
             "status": "processing",
@@ -241,8 +367,9 @@ def test_task_delete_rejects_running_and_unsafe_paths(monkeypatch, temp_dir):
     client = web_app.app.test_client()
 
     assert client.delete("/api/tasks/running-task").status_code == 409
-    assert client.delete("/api/tasks/unsafe-task").status_code == 400
+    assert client.delete("/api/tasks/unsafe-task").status_code == 200
     assert outside.exists()
+    assert "unsafe-task" not in web_app.tasks
 
 
 def test_task_delete_accepts_interrupted_and_awaiting_confirmation(
@@ -282,6 +409,84 @@ def test_task_delete_accepts_interrupted_and_awaiting_confirmation(
 
     assert web_app.tasks == {}
     assert json.loads(state_file.read_text(encoding="utf-8")) == []
+
+
+def test_retry_video_reuses_audio_and_enqueues_media(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "retry-video-task"
+    output_dir = temp_dir / "outputs" / task_id
+    audio_dir = output_dir / "1"
+    audio_dir.mkdir(parents=True)
+    audio_path = audio_dir / "audio.mp3"
+    audio_path.write_bytes(b"audio")
+    (output_dir / "old.mp4").write_bytes(b"video")
+    (output_dir / "old.srt").write_text("subtitle", encoding="utf-8")
+    preview_path = output_dir / "preview.json"
+    preview_path.write_text(json.dumps({
+        "task_id": task_id,
+        "pages": [{"page_number": 1, "script": "讲稿", "image_path": "slide.png"}],
+    }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "completed",
+            "output_dir": str(output_dir),
+            "preview_path": str(preview_path),
+        }
+    })
+    monkeypatch.setattr(web_app, "progress_queues", {})
+    enqueued = []
+    monkeypatch.setattr(
+        web_app.conversion_queue,
+        "enqueue",
+        lambda func, *args: enqueued.append((func, args)),
+    )
+
+    response = web_app.app.test_client().post(
+        f"/api/tasks/{task_id}/retry",
+        json={"stage": "video"},
+    )
+
+    assert response.status_code == 200
+    assert audio_path.exists()
+    assert not (output_dir / "old.mp4").exists()
+    assert not (output_dir / "old.srt").exists()
+    assert web_app.tasks[task_id]["status"] == "queued"
+    assert enqueued == [(web_app.run_media_generation, (task_id,))]
+
+
+def test_retry_single_page_tts_only_removes_selected_audio(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "retry-page-task"
+    output_dir = temp_dir / "outputs" / task_id
+    for page_number in (1, 2):
+        page_dir = output_dir / str(page_number)
+        page_dir.mkdir(parents=True)
+        (page_dir / "audio.mp3").write_bytes(b"audio")
+    preview_path = output_dir / "preview.json"
+    preview_path.write_text(json.dumps({
+        "task_id": task_id,
+        "pages": [{"page_number": 1, "script": "讲稿", "image_path": "slide.png"}],
+    }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "awaiting_confirmation",
+            "output_dir": str(output_dir),
+            "preview_path": str(preview_path),
+        }
+    })
+    monkeypatch.setattr(web_app, "progress_queues", {})
+    monkeypatch.setattr(web_app.conversion_queue, "enqueue", lambda *args: None)
+
+    response = web_app.app.test_client().post(
+        f"/api/tasks/{task_id}/retry",
+        json={"stage": "page_tts", "page_number": 2},
+    )
+
+    assert response.status_code == 200
+    assert (output_dir / "1" / "audio.mp3").exists()
+    assert not (output_dir / "2" / "audio.mp3").exists()
 
 
 def test_task_list_includes_source_path_for_preview_retry(monkeypatch, temp_dir):
@@ -444,7 +649,13 @@ def test_stage_event_carries_non_regressing_percentage(monkeypatch, temp_dir):
     event = list(queue.queue)[0]
     assert event["type"] == "stage"
     assert event["percentage"] == 50
+    assert event["stage_percentage"] == 0
     assert web_app.tasks[task_id]["percentage"] == 50
+
+    tracker.update("video", 37, 100, "正在编码视频 37%")
+    progress_event = list(queue.queue)[1]
+    assert progress_event["stage_percentage"] == 37
+    assert web_app.tasks[task_id]["stage_percentage"] == 37
 
 
 def test_media_failure_rolls_back_and_keeps_preview(monkeypatch, temp_dir):
@@ -512,6 +723,7 @@ def test_editing_script_removes_only_changed_page_audio(monkeypatch, temp_dir):
             {"page_number": 2, "script": "旧讲稿二"},
         ]
     }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "STATE_FILE", temp_dir / "state.json")
     monkeypatch.setattr(web_app, "tasks", {
         task_id: {"output_dir": str(output_dir)}
     })
@@ -523,6 +735,84 @@ def test_editing_script_removes_only_changed_page_audio(monkeypatch, temp_dir):
 
     assert not (output_dir / "1" / "audio.mp3").exists()
     assert (output_dir / "2" / "audio.mp3").exists()
+
+
+def test_course_segment_recommendation_and_apply(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "segment-task"
+    output_dir = temp_dir / task_id
+    output_dir.mkdir()
+    preview_path = output_dir / "preview.json"
+    preview_path.write_text(json.dumps({
+        "pages": [
+            {"page_number": 1, "title": "绪论", "script": "一" * 260},
+            {"page_number": 2, "title": "绪论", "script": "二" * 260},
+            {"page_number": 3, "title": "实操", "script": "三" * 260},
+        ]
+    }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "STATE_FILE", temp_dir / "state.json")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "awaiting_confirmation",
+            "output_dir": str(output_dir),
+        }
+    })
+    client = web_app.app.test_client()
+
+    recommendation = client.post(
+        f"/api/course-segments/{task_id}/recommend",
+        json={"target_minutes": 1, "priority": "duration"},
+    )
+    assert recommendation.status_code == 200
+    assert recommendation.get_json()["segments"][0]["start_page"] == 1
+
+    response = client.post(
+        f"/api/course-segments/{task_id}",
+        json={
+            "segments": [
+                {"title": "第一课", "start_page": 1, "end_page": 2},
+                {"title": "第二课", "start_page": 3, "end_page": 3},
+            ]
+        },
+    )
+    payload = response.get_json()
+    saved_preview = json.loads(preview_path.read_text(encoding="utf-8"))
+
+    assert response.status_code == 200
+    assert payload["segments"][0]["title"] == "第一课"
+    assert saved_preview["lesson_segments"][1]["start_page"] == 3
+    assert saved_preview["pages"][0]["lesson_segment"]["end_page"] == 2
+    assert web_app.tasks[task_id]["lesson_segments"][0]["title"] == "第一课"
+
+
+def test_course_segment_apply_rejects_gaps(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "segment-gap-task"
+    output_dir = temp_dir / task_id
+    output_dir.mkdir()
+    (output_dir / "preview.json").write_text(json.dumps({
+        "pages": [
+            {"page_number": 1, "script": "第一页"},
+            {"page_number": 2, "script": "第二页"},
+        ]
+    }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "STATE_FILE", temp_dir / "state.json")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "awaiting_confirmation",
+            "output_dir": str(output_dir),
+        }
+    })
+
+    response = web_app.app.test_client().post(
+        f"/api/course-segments/{task_id}",
+        json={"segments": [{"title": "只覆盖第一页", "start_page": 1, "end_page": 1}]},
+    )
+
+    assert response.status_code == 400
+    assert "覆盖全部页面" in response.get_json()["error"]
 
 
 def test_index_contains_editable_course_preview():
@@ -538,6 +828,9 @@ def test_index_contains_editable_course_preview():
     assert 'id="refinement-level"' in html
     assert 'id="custom-voice"' in html
     assert 'id="ppt-footer-text"' in html
+    assert 'id="visual-theme"' in html
+    assert 'id="smart-cut-recommend-btn"' in html
+    assert 'id="smart-cut-apply-btn"' in html
 
 
 def test_voice_catalog_is_filtered_by_engine():
@@ -581,3 +874,33 @@ def test_voice_preview_generates_and_reuses_cached_audio(monkeypatch, temp_dir):
     assert generated == [
         ("volcengine", "zh_female_cancan_mars_bigtts"),
     ]
+
+
+def test_script_preview_uses_real_text_and_cache(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    preview_folder = temp_dir / "script-previews"
+    preview_folder.mkdir()
+    generated = []
+
+    def fake_synthesize(engine, voice, text, output_path):
+        generated.append((engine, voice, text))
+        output_path.write_bytes(b"script-audio")
+
+    monkeypatch.setattr(web_app, "VOICE_PREVIEW_FOLDER", preview_folder)
+    monkeypatch.setattr(web_app, "_synthesize_script_preview", fake_synthesize)
+    client = web_app.app.test_client()
+    payload = {
+        "engine": "edge-tts",
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "text": "这是当前页面的真实讲稿。" * 40,
+    }
+
+    first = client.post("/api/script-preview", json=payload)
+    second = client.post("/api/script-preview", json=payload)
+
+    assert first.status_code == 200
+    assert first.data == b"script-audio"
+    assert second.status_code == 200
+    assert len(generated) == 1
+    assert len(generated[0][2]) == 300
