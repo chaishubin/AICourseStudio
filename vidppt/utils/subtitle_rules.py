@@ -65,7 +65,7 @@ def subtitle_chunks(text: str) -> list[str]:
 
 def wrap_subtitle(text: str) -> str:
     """把单条字幕整理为最多两行，便于 SRT 与烧录样式稳定显示。"""
-    text = _compact_subtitle_text(text)
+    text = _compact_subtitle_text(text, trim_breaks=False)
     if not text:
         return ""
     if _subtitle_len(text) <= MAX_CHARS_PER_LINE:
@@ -84,13 +84,15 @@ def normalize_subtitle_text(text: str) -> str:
     return _ensure_terminal_punctuation(normalized)
 
 
-def _compact_subtitle_text(text: str) -> str:
+def _compact_subtitle_text(text: str, *, trim_breaks: bool = True) -> str:
     normalized = re.sub(r"\s+", "", str(text or "")).strip()
     if not normalized:
         return ""
     normalized = _normalize_punctuation(normalized)
     normalized = _remove_repeated_punctuation(normalized)
-    return normalized.strip(BREAK_PUNCTUATION)
+    if trim_breaks:
+        return normalized.strip(BREAK_PUNCTUATION)
+    return normalized
 
 
 def _normalize_punctuation(text: str) -> str:
@@ -232,7 +234,7 @@ def _split_after_connectors(text: str) -> list[str]:
 
 
 def _split_long_phrase(text: str) -> list[str]:
-    phrase = _compact_subtitle_text(text)
+    phrase = _compact_subtitle_text(text, trim_breaks=False)
     chunks: list[str] = []
     while _subtitle_len(phrase) > MAX_SUBTITLE_CHARS:
         split_at = _best_split_index(phrase, MAX_SUBTITLE_CHARS)
@@ -268,4 +270,9 @@ def _rebalance_short_chunks(chunks: list[str]) -> list[str]:
 
 
 def _subtitle_len(text: str) -> int:
-    return len(_compact_subtitle_text(text))
+    normalized = re.sub(r"\s+", "", str(text or "")).strip()
+    if not normalized:
+        return 0
+    normalized = _normalize_punctuation(normalized)
+    normalized = _remove_repeated_punctuation(normalized)
+    return len(normalized)

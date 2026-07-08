@@ -57,9 +57,24 @@ class CoursePipeline:
         if media_config and media_config.enable_video and not media_config.enable_tts:
             raise ValueError("教案生成视频时不能关闭 TTS；如只需 PPT，请同时使用 --no-tts --no-video")
 
+        reserve_subtitle_area = bool(
+            media_config and media_config.burn_subtitles
+        )
         document = read_source_document(input_path)
-        course = self.builder.build(document)
+        course = self.builder.build(
+            document,
+            reserve_subtitle_area=reserve_subtitle_area,
+        )
         course.metadata["footer_text"] = self.footer_text
+        if reserve_subtitle_area:
+            course.metadata["subtitle_safe_area"] = {
+                "x": media_config.subtitle_x,
+                "y": media_config.subtitle_y,
+                "width": media_config.subtitle_width,
+                "height": media_config.subtitle_height,
+                "canvas_width": media_config.video_width,
+                "canvas_height": media_config.video_height,
+            }
         if self.visual_theme != "auto":
             course.metadata["visual_theme"] = self.visual_theme
             course.metadata["theme_source"] = "manual"

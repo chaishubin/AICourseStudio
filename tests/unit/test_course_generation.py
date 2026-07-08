@@ -10,7 +10,11 @@ from vidppt.core.models import ProcessConfig
 from vidppt.generation.course_builder import CourseBuilder
 from vidppt.ingestion.models import SourceDocument, SourceSection
 from vidppt.renderers.subtitles import SubtitleRenderer
-from vidppt.utils.subtitle_rules import normalize_subtitle_text, subtitle_chunks
+from vidppt.utils.subtitle_rules import (
+    normalize_subtitle_text,
+    subtitle_chunks,
+    wrap_subtitle,
+)
 
 
 def test_draft_builder_creates_editable_slides(temp_dir):
@@ -75,6 +79,37 @@ def test_llm_builder_accepts_json_code_fence(temp_dir):
     assert course.sections[0].script == "欢迎学习。"
     assert course.metadata["design_spec"]["theme"] == "technology"
     assert course.metadata["design_spec"]["visual_language"] == "网络节点与数据流"
+
+
+def test_llm_builder_adds_subtitle_safe_area_instruction(temp_dir):
+    class FakeLLM:
+        system_prompt = ""
+
+        def summarize(self, text, **kwargs):
+            self.system_prompt = kwargs["system_prompt"]
+            return """
+            {
+              "title": "AI 课程",
+              "slides": [{
+                "title": "封面",
+                "layout": "cover",
+                "bullets": [],
+                "script": "欢迎学习。"
+              }]
+            }
+            """
+
+    llm = FakeLLM()
+    source = SourceDocument(
+        title="原始标题",
+        source_path=temp_dir / "lesson.docx",
+        sections=[SourceSection(title="正文", paragraphs=["内容"])],
+    )
+
+    CourseBuilder(llm).build(source, reserve_subtitle_area=True)
+
+    assert "视频会烧录字幕" in llm.system_prompt
+    assert "底部约 15%" in llm.system_prompt
 
 
 def test_course_new_fields_round_trip():
@@ -208,6 +243,19 @@ def test_subtitle_chunks_use_normalized_punctuation_for_breaks():
     assert "第一，明确目标；" in chunks[0]
     assert "检查结果？" in "".join(chunks)
     assert chunks[-1].endswith("。")
+
+
+def test_subtitle_wrapping_preserves_trailing_text_after_soft_break():
+    script = (
+        "这是一个很长的字幕内容，用来验证如果超过两行十四个字以后，"
+        "后面的几个字会不会被截断。"
+    )
+    rendered = "".join(
+        wrap_subtitle(chunk).replace("\n", "")
+        for chunk in subtitle_chunks(script)
+    )
+
+    assert rendered == normalize_subtitle_text(script)
 
 
 def test_course_pipeline_rejects_video_without_tts(temp_dir):
@@ -451,3 +499,30 @@ def test_manual_theme_overrides_content_and_auto_layouts_vary():
     assert course.metadata["visual_theme"] == "culture"
     assert renderer._resolve_layout(course.sections[1], 2) == "process"
     assert renderer._resolve_layout(course.sections[2], 3) == "framework"
+
+
+def test_pptx_renderer_converts_subtitle_area_to_content_bounds():
+    from vidppt.core.course import Course, CourseSection
+    from vidppt.renderers.pptx_renderer import PPTXRenderer
+
+    course = Course(
+        title="带字幕课程",
+        metadata={
+            "subtitle_safe_area": {
+                "x": 96,
+                "y": 900,
+                "width": 1728,
+                "height": 110,
+                "canvas_width": 1920,
+                "canvas_height": 1080,
+            }
+        },
+        sections=[CourseSection(id="1", title="正文", bullets=["要点"])],
+    )
+    renderer = PPTXRenderer()
+    renderer.subtitle_safe_area = renderer._subtitle_safe_area(course)
+
+    _, bottom = renderer._content_bounds(2.05, 6.55)
+
+    assert renderer.subtitle_safe_area["y"] == pytest.approx(6.25)
+    assert bottom == pytest.approx(6.07)

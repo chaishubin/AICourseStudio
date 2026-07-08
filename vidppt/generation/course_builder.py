@@ -40,6 +40,12 @@ COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适�
 4. 不要让所有正文页使用同一种版式，相邻页面应有合理的视觉节奏。
 """
 
+SUBTITLE_SAFE_AREA_PROMPT = """视频会烧录字幕，PPT 设计必须预留字幕安全区：
+1. 不要把正文、页脚之外的说明、图表关键标签或重要插图主体放在画面底部约 15% 区域；
+2. 正文页优先采用上中部信息布局，底部仅保留留白、弱装饰或不影响理解的背景元素；
+3. 若页面信息较多，应减少可见要点数量或拆页，避免让字幕遮盖课程内容。
+"""
+
 REFINEMENT_INSTRUCTIONS = {
     "light": "轻度精炼：尽量保留原文信息和篇幅，只修正重复、病句和不自然表达。",
     "standard": "标准精炼：保留关键知识，合并重复信息，生成清晰自然、详略适中的讲稿。",
@@ -58,15 +64,22 @@ class CourseBuilder:
             raise ValueError(f"不支持的精炼程度: {refinement_level}")
         self.refinement_level = refinement_level
 
-    def build(self, document: SourceDocument) -> Course:
+    def build(
+        self,
+        document: SourceDocument,
+        *,
+        reserve_subtitle_area: bool = False,
+    ) -> Course:
         if self.llm_engine:
+            prompt_parts = [
+                COURSE_PROMPT,
+                REFINEMENT_INSTRUCTIONS[self.refinement_level],
+            ]
+            if reserve_subtitle_area:
+                prompt_parts.append(SUBTITLE_SAFE_AREA_PROMPT)
             raw = self.llm_engine.summarize(
                 document.full_text,
-                system_prompt=(
-                    COURSE_PROMPT
-                    + "\n"
-                    + REFINEMENT_INSTRUCTIONS[self.refinement_level]
-                ),
+                system_prompt="\n".join(prompt_parts),
                 temperature=0.3,
             )
             return self._from_llm_json(raw, document)

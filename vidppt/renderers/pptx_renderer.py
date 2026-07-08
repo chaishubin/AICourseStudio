@@ -44,6 +44,8 @@ class PPTXRenderer:
         "title_and_content", "two_column", "comparison", "process",
         "timeline", "framework", "key_point", "card_grid",
     }
+    SLIDE_WIDTH = 13.333
+    SLIDE_HEIGHT = 7.5
 
     def render(self, course: Course, output_path: Path) -> Path:
         from pptx import Presentation
@@ -55,6 +57,7 @@ class PPTXRenderer:
         presentation.core_properties.title = course.title
         presentation.core_properties.subject = course.description
         self._apply_course_theme(course)
+        self.subtitle_safe_area = self._subtitle_safe_area(course)
         self.footer_text = str(
             course.metadata.get("footer_text", "AI COURSE STUDIO")
         ).strip()[:40]
@@ -190,19 +193,25 @@ class PPTXRenderer:
         accent = self.TEAL if index % 2 else self.BLUE
         illustration = self._illustration_path(page)
         if self.DESIGN_STYLE == "executive":
+            content_top, content_bottom = self._content_bounds(0.9, 6.75)
             self._shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 2.75, 7.5, self.NAVY)
             self._shape(slide, MSO_SHAPE.RECTANGLE, 2.75, 0, 0.09, 7.5, self.ORANGE)
             self._text(slide, page.section_title or "课程内容", 0.45, 0.8, 1.8, 0.4, 12, self.ORANGE, bold=True)
             self._text(slide, page.title, 0.45, 1.55, 1.9, 3.8, 25, self.WHITE, bold=True)
             if illustration:
-                self._picture(slide, illustration, 9.25, 1.0, 3.45, 5.65)
+                self._picture(
+                    slide, illustration, 9.25, content_top + 0.1, 3.45,
+                    max(1.2, content_bottom - content_top - 0.2),
+                )
             self._render_content_cards(
-                slide, page, 3.25, 0.9, 5.65 if illustration else 9.25,
-                5.85, accent, columns=1 if illustration else 2,
+                slide, page, 3.25, content_top, 5.65 if illustration else 9.25,
+                content_bottom - content_top, accent,
+                columns=1 if illustration else 2,
             )
             self._footer(slide, index, total)
             return
         if self.DESIGN_STYLE in {"editorial", "organic"}:
+            content_top, content_bottom = self._content_bounds(2.15, 6.6)
             self._shape(
                 slide, MSO_SHAPE.RECTANGLE, 0, 0, 13.333, 0.16,
                 self.ORANGE if self.DESIGN_STYLE == "editorial" else self.TEAL,
@@ -210,10 +219,13 @@ class PPTXRenderer:
             self._text(slide, page.section_title or "课程内容", 0.78, 0.6, 2.5, 0.3, 11, accent, bold=True)
             self._text(slide, page.title, 0.78, 1.03, 11.5, 0.8, 29, self.INK, bold=True)
             if illustration:
-                self._picture(slide, illustration, 8.85, 2.15, 3.68, 4.45)
+                self._picture(
+                    slide, illustration, 8.85, content_top, 3.68,
+                    max(1.2, content_bottom - content_top),
+                )
             self._render_content_cards(
-                slide, page, 0.78, 2.15, 7.72 if illustration else 11.75,
-                4.45, accent,
+                slide, page, 0.78, content_top, 7.72 if illustration else 11.75,
+                content_bottom - content_top, accent,
                 columns=1 if illustration else (2 if self.DESIGN_STYLE == "editorial" else 3),
             )
             self._footer(slide, index, total)
@@ -228,16 +240,23 @@ class PPTXRenderer:
         self._text(slide, page.title, 0.75, 0.72, 9.7, 0.82, 27, self.INK, bold=True)
         self._shape(slide, MSO_SHAPE.RECTANGLE, 0.78, 1.72, 0.85, 0.07, self.ORANGE)
 
+        content_top, content_bottom = self._content_bounds(2.05, 6.55)
         if illustration:
-            self._picture(slide, illustration, 8.65, 2.05, 3.85, 3.9)
-            self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 8.65, 6.05, 3.85, 0.52, self.WHITE)
-            self._text(slide, "课程概念插图", 8.9, 6.18, 3.3, 0.2, 10, self.MUTED, bold=True)
+            image_height = max(1.2, min(3.9, content_bottom - content_top - 0.65))
+            self._picture(slide, illustration, 8.65, content_top, 3.85, image_height)
+            caption_y = content_top + image_height + 0.1
+            if caption_y + 0.52 <= content_bottom:
+                self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 8.65, caption_y, 3.85, 0.52, self.WHITE)
+                self._text(slide, "课程概念插图", 8.9, caption_y + 0.13, 3.3, 0.2, 10, self.MUTED, bold=True)
 
         bullets = page.bullets[:5 if illustration else 6] or [page.title]
         bullet_width = 6.8 if illustration else 10.6
-        top = 2.05
+        top = content_top
+        step = 0.78
+        if len(bullets) > 1:
+            step = min(step, max(0.54, (content_bottom - top - 0.58) / (len(bullets) - 1)))
         for bullet_index, bullet in enumerate(bullets, 1):
-            y = top + (bullet_index - 1) * 0.78
+            y = top + (bullet_index - 1) * step
             self._shape(slide, MSO_SHAPE.OVAL, 0.82, y + 0.08, 0.35, 0.35, accent)
             self._text(
                 slide, str(bullet_index), 0.82, y + 0.1, 0.35, 0.24,
@@ -258,13 +277,15 @@ class PPTXRenderer:
         groups = (bullets[:midpoint], bullets[midpoint:] or ["补充说明"])
         labels = ("方案 A", "方案 B")
         colors = (self.BLUE, self.TEAL)
+        _, content_bottom = self._content_bounds(2.0, 6.45)
+        card_height = max(2.6, content_bottom - 2.0)
         for column, items in enumerate(groups):
             x = 0.78 + column * 6.05
-            self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 2.0, 5.55, 4.45, self.WHITE)
+            self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 2.0, 5.55, card_height, self.WHITE)
             self._shape(slide, MSO_SHAPE.RECTANGLE, x, 2.0, 5.55, 0.68, colors[column])
             self._text(slide, labels[column], x + 0.3, 2.18, 4.8, 0.25, 14, self.WHITE, bold=True)
             for item_index, item in enumerate(items[:3], 1):
-                y = 2.95 + (item_index - 1) * 1.0
+                y = 2.95 + (item_index - 1) * min(1.0, max(0.78, (card_height - 1.4) / 2))
                 self._shape(slide, MSO_SHAPE.OVAL, x + 0.34, y + 0.08, 0.3, 0.3, colors[column])
                 self._text(slide, item, x + 0.82, y, 4.35, 0.7, 17, self.INK, bold=True)
         self._footer(slide, index, total)
@@ -300,8 +321,10 @@ class PPTXRenderer:
         bullets = page.bullets[:6] or [page.title]
         columns = 3 if len(bullets) >= 5 else 2
         rows = (len(bullets) + columns - 1) // columns
+        _, content_bottom = self._content_bounds(2.0, 6.55)
         card_width = (11.65 - 0.28 * (columns - 1)) / columns
-        card_height = min(1.85, (4.55 - 0.28 * (rows - 1)) / rows)
+        content_height = max(2.5, content_bottom - 2.0)
+        card_height = min(1.85, (content_height - 0.28 * (rows - 1)) / rows)
         for item_index, item in enumerate(bullets):
             col, row = item_index % columns, item_index // columns
             x = 0.82 + col * (card_width + 0.28)
@@ -354,6 +377,55 @@ class PPTXRenderer:
         if len(page.bullets) <= 1:
             return "key_point"
         return ("two_column", "card_grid", "title_and_content")[(index - 1) % 3]
+
+    def _content_bounds(
+        self,
+        default_top: float,
+        default_bottom: float,
+        gap: float = 0.18,
+    ) -> tuple[float, float]:
+        """Return the usable vertical content band after reserving subtitles."""
+        top, bottom = default_top, default_bottom
+        area = getattr(self, "subtitle_safe_area", None)
+        if not area:
+            return top, bottom
+
+        area_top = area["y"]
+        area_bottom = area["y"] + area["height"]
+        if area_top >= self.SLIDE_HEIGHT * 0.45:
+            bottom = min(bottom, area_top - gap)
+        elif area_bottom <= self.SLIDE_HEIGHT * 0.55:
+            top = max(top, area_bottom + gap)
+
+        if bottom - top < 2.0:
+            if area_top >= self.SLIDE_HEIGHT * 0.45:
+                top = max(0.75, bottom - 2.0)
+            else:
+                bottom = min(6.75, top + 2.0)
+        return top, bottom
+
+    @classmethod
+    def _subtitle_safe_area(cls, course: Course) -> dict | None:
+        value = course.metadata.get("subtitle_safe_area")
+        if not isinstance(value, dict):
+            return None
+        try:
+            canvas_width = float(value.get("canvas_width") or 1920)
+            canvas_height = float(value.get("canvas_height") or 1080)
+            x = float(value["x"])
+            y = float(value["y"])
+            width = float(value["width"])
+            height = float(value["height"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if canvas_width <= 0 or canvas_height <= 0 or width <= 0 or height <= 0:
+            return None
+        return {
+            "x": x / canvas_width * cls.SLIDE_WIDTH,
+            "y": y / canvas_height * cls.SLIDE_HEIGHT,
+            "width": width / canvas_width * cls.SLIDE_WIDTH,
+            "height": height / canvas_height * cls.SLIDE_HEIGHT,
+        }
 
     def _render_content_cards(
         self, slide, page: CourseSection, x: float, y: float,

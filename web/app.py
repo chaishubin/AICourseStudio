@@ -1859,7 +1859,7 @@ def run_course_generation(
             logo_path=Path(school_logo_path) if school_logo_path else None,
             visual_theme=visual_theme,
         ).run(
-            Path(file_path), output_dir
+            Path(file_path), output_dir, media_config=config
         )
 
         from vidppt.processors.ppt_processor import PPTProcessor
