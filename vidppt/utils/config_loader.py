@@ -147,10 +147,10 @@ class ConfigLoader:
         # 验证 LLM 引擎
         if "llm_engine" in config:
             llm_engine = config["llm_engine"]
-            if llm_engine not in ["qwen", "minimax"]:
+            if llm_engine not in ["qwen", "openai"]:
                 raise ValueError(
                     f"不支持的 LLM 引擎: {llm_engine}。"
-                    f"支持的引擎: qwen, minimax"
+                    f"支持的引擎: qwen, openai"
                 )
 
         # 验证 LLM 模式

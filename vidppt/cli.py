@@ -62,7 +62,7 @@ MiniMax TTS 示例:
 LLM 文本摘要示例:
    %(prog)s input.pptx --llm                    # 启用逐页摘要
    %(prog)s input.pptx --llm --llm-mode whole-document  # 整文档摘要
-   %(prog)s input.pptx --llm --llm-model MiniMax-Text-01  # 指定模型
+   %(prog)s input.pptx --llm --llm-engine openai --llm-model gpt-4o-mini  # 使用 ChatGPT
    %(prog)s input.pptx --llm --llm-temperature 0.5       # 降低随机性
 
 千问 + 火山引擎示例:
@@ -246,7 +246,7 @@ LLM 文本摘要示例:
     parser.add_argument(
         "--llm-engine",
         default="qwen",
-        choices=["qwen", "minimax"],
+        choices=["qwen", "openai"],
         help="LLM 引擎（默认: qwen）",
     )
     parser.add_argument(
@@ -446,10 +446,10 @@ LLM 文本摘要示例:
                 from .engines.llm.qwen_llm_engine import QwenLLMEngine
 
                 llm_engine = QwenLLMEngine(**config.llm_options)
-            elif config.llm_engine == "minimax":
-                from .engines.llm.minimax_llm_engine import MiniMaxLLMEngine
+            elif config.llm_engine == "openai":
+                from .engines.llm.openai_llm_engine import OpenAILLMEngine
 
-                llm_engine = MiniMaxLLMEngine(**config.llm_options)
+                llm_engine = OpenAILLMEngine(**config.llm_options)
             else:
                 logger.error(f"不支持的课程生成 LLM: {config.llm_engine}")
                 sys.exit(1)

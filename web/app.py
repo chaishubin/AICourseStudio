@@ -311,6 +311,7 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'task_id': task_id,
         'status': task.get('status', 'unknown'),
         'original_name': task.get('original_name', ''),
+        'course_name': task.get('course_name', ''),
         'file_path': task.get('file_path', ''),
         'stage': task.get('stage'),
         'percentage': task.get('percentage', 0),
@@ -841,6 +842,22 @@ load_state()
 def allowed_file(filename):
     """检查文件扩展名是否允许"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _safe_filename_stem(value: str) -> str:
+    """保留中文等可读字符，同时去掉路径分隔符和常见非法文件名字符。"""
+    text = str(value or '').strip()
+    text = re.sub(r'[\\/:*?"<>|：\x00-\x1f]+', '_', text)
+    text = re.sub(r'\s+', ' ', text).strip(' ._')
+    return text[:120]
+
+
+def _normalize_course_name(value: str | None, fallback_name: str) -> str:
+    explicit = _safe_filename_stem(value or '')
+    if explicit:
+        return explicit
+    fallback_basename = str(fallback_name or '').replace('\\', '/').rsplit('/', 1)[-1]
+    return _safe_filename_stem(Path(fallback_basename).stem) or 'course'
 
 
 @app.before_request
@@ -1385,9 +1402,9 @@ def run_course_generation(
             if llm_engine == 'qwen':
                 from vidppt.engines.llm.qwen_llm_engine import QwenLLMEngine
                 llm_provider = QwenLLMEngine()
-            elif llm_engine == 'minimax':
-                from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
-                llm_provider = MiniMaxLLMEngine()
+            elif llm_engine == 'openai':
+                from vidppt.engines.llm.openai_llm_engine import OpenAILLMEngine
+                llm_provider = OpenAILLMEngine()
             else:
                 raise ValueError(f"不支持的文本模型: {llm_engine}")
 
@@ -1912,7 +1929,7 @@ def run_media_generation(task_id: str):
                 duration,
             ))
 
-        stem = Path(task['file_path']).stem
+        stem = _safe_filename_stem(task.get('course_name')) or Path(task['file_path']).stem
         subtitles = SubtitleRenderer().render_course(
             timed_pages, config.output_dir / f'{stem}.srt'
         )
@@ -1998,7 +2015,11 @@ def run_media_generation(task_id: str):
                         'lesson_segment': segment,
                     },
                 )
-                segment_stem = f"{index:02d}_pages_{start_page}_{end_page}"
+                segment_title = _safe_filename_stem(segment.get('title', ''))
+                segment_stem = (
+                    f"{stem}_{index:02d}_{segment_title}"
+                    if segment_title else f"{stem}_{index:02d}_pages_{start_page}_{end_page}"
+                )
                 segment_subtitles = SubtitleRenderer().render_course(
                     segment_timed_pages, segment_dir / f'{segment_stem}.srt'
                 )
@@ -2133,6 +2154,10 @@ def convert_ppt():
     data = request.get_json()
     file_path = data.get('file_path')
     original_name = data.get('original_name') or Path(file_path or '').name
+    course_name = _normalize_course_name(
+        data.get('course_name'),
+        original_name or Path(file_path or '').name,
+    )
     tts_engine = data.get('tts_engine', 'edge-tts')
     voice = data.get('voice', 'zh-CN-XiaoxiaoNeural')
     tts_rate = '+0%'
@@ -2224,6 +2249,7 @@ def convert_ppt():
         'file_path': file_path,
         'output_dir': str(output_dir),
         'original_name': original_name,
+        'course_name': course_name,
         'batch_id': batch_id,
         'strategy_source': strategy_source,
         'owner_username': user['username'],
@@ -2246,7 +2272,7 @@ def convert_ppt():
         },
     }
     save_state(task_id)
-    log_operation('create_task', task_id=task_id, target_name=original_name)
+    log_operation('create_task', task_id=task_id, target_name=course_name or original_name)
 
     suffix = Path(file_path).suffix.lower()
     if suffix in {'.docx', '.pdf'}:
@@ -3111,6 +3137,7 @@ def get_active_task():
                 'message': task.get('message', ''),
                 'video_path': task.get('video_path'),
                 'original_name': task.get('original_name', ''),
+                'course_name': task.get('course_name', ''),
                 'file_path': task.get('file_path', ''),
                 'error': task.get('error'),
                 'started_at': task.get('started_at'),
@@ -3131,6 +3158,7 @@ def get_active_task():
             'message': t.get('message', ''),
             'video_path': t.get('video_path'),
             'original_name': t.get('original_name', ''),
+            'course_name': t.get('course_name', ''),
             'file_path': t.get('file_path', ''),
             'error': t.get('error'),
             'started_at': t.get('started_at'),
@@ -3238,8 +3266,14 @@ def get_frame():
 
 
 def _artifact_download_name(task: dict | None, file_path: str) -> str:
-    """使用上传时的原始主文件名，并保留产物自身扩展名。"""
+    """使用课程名命名视频，其他产物沿用上传时的原始主文件名。"""
     artifact = Path(file_path)
+    if artifact.suffix.lower() == '.mp4':
+        if artifact.parent.name == 'segments':
+            return artifact.name
+        course_name = _safe_filename_stem((task or {}).get('course_name', ''))
+        if course_name:
+            return f"{course_name}{artifact.suffix}"
     original_name = (task or {}).get('original_name', '')
     original_basename = str(original_name).replace('\\', '/').rsplit('/', 1)[-1]
     stem = Path(original_basename).stem.strip() if original_basename else ''

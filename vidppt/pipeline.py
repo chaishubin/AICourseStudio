@@ -10,7 +10,6 @@ from loguru import logger
 from .core.models import ProcessConfig, DocumentContent
 from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
-from .engines.llm.minimax_llm_engine import MiniMaxLLMEngine
 from .utils.video_composer import VideoComposer
 from .utils.audio_cache import AudioCacheManager
 from .utils.progress import ProgressTracker, ProcessStage
@@ -88,24 +87,14 @@ class Pipeline:
 
     def _create_llm_engine(self):
         """根据配置创建 LLM 引擎"""
-        if self.config.llm_engine == "minimax":
-            llm_opts = self.config.llm_options
-            return MiniMaxLLMEngine(
-                api_key=llm_opts.get("api_key"),
-                api_url=llm_opts.get("api_url", MiniMaxLLMEngine.DEFAULT_API_URL),
-                model=llm_opts.get("model", MiniMaxLLMEngine.DEFAULT_MODEL),
-                system_prompt=llm_opts.get(
-                    "system_prompt", MiniMaxLLMEngine.DEFAULT_SYSTEM_PROMPT
-                ),
-                temperature=llm_opts.get("temperature", MiniMaxLLMEngine.DEFAULT_TEMPERATURE),
-                max_tokens=llm_opts.get("max_tokens", MiniMaxLLMEngine.DEFAULT_MAX_TOKENS),
-                timeout=llm_opts.get("timeout", MiniMaxLLMEngine.DEFAULT_TIMEOUT),
-                max_retries=llm_opts.get("max_retries", MiniMaxLLMEngine.DEFAULT_MAX_RETRIES),
-            )
-        elif self.config.llm_engine == "qwen":
+        if self.config.llm_engine == "qwen":
             from .engines.llm.qwen_llm_engine import QwenLLMEngine
 
             return QwenLLMEngine(**self.config.llm_options)
+        elif self.config.llm_engine == "openai":
+            from .engines.llm.openai_llm_engine import OpenAILLMEngine
+
+            return OpenAILLMEngine(**self.config.llm_options)
         else:
             raise ValueError(f"不支持的 LLM 引擎: {self.config.llm_engine}")
 

@@ -5,7 +5,7 @@
 class AICourseStudioApp {
     constructor() {
         this.state = {
-            files: [],  // [{file, filePath, fileName, taskId, status, percentage, stage, message, videoPath, error}]
+            files: [],  // [{file, filePath, fileName, courseName, taskId, status, percentage, stage, message, videoPath, error}]
             isUploading: false,
             isConverting: false,
             activeBatchId: null,
@@ -178,6 +178,19 @@ class AICourseStudioApp {
     getItemByTaskId(taskId) {
         const idx = this.state.files.findIndex(f => f.taskId === taskId);
         return idx >= 0 ? { index: idx, item: this.state.files[idx] } : null;
+    }
+
+    defaultCourseName(fileName) {
+        return String(fileName || '')
+            .replace(/[\\/]+/g, '/')
+            .split('/')
+            .pop()
+            .replace(/\.[^.]+$/, '')
+            .trim() || 'course';
+    }
+
+    courseDisplayName(item) {
+        return (item?.courseName || this.defaultCourseName(item?.fileName || '')).trim();
     }
 
     updateItem(index, patch) {
@@ -1130,6 +1143,7 @@ class AICourseStudioApp {
             file,
             filePath: null,
             fileName: file.name,
+            courseName: this.defaultCourseName(file.name),
             sourceType: ['.docx', '.pdf'].includes(ext) ? 'lesson-plan' : 'presentation',
             taskId: null,
             status: 'uploading',
@@ -1213,6 +1227,13 @@ class AICourseStudioApp {
                     <polyline points="14 2 14 8 20 8"/>
                 </svg>
                 <span class="file-list-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                <label class="file-course-name">
+                    <span>课程名称</span>
+                    <input type="text" class="course-name-input"
+                           value="${this._escAttr(this.courseDisplayName(item))}"
+                           ${item.status === 'pending' ? '' : 'disabled'}
+                           maxlength="120">
+                </label>
                 <span class="file-route-badge ${item.sourceType === 'lesson-plan' ? 'lesson-plan' : 'presentation'}">
                     ${item.sourceType === 'lesson-plan' ? 'AI 设计' : '保留原稿'}
                 </span>
@@ -1243,6 +1264,19 @@ class AICourseStudioApp {
                     item.selected = false;
                     this.renderFileList();
                     this.showStatus('success', `已为“${item.fileName}”保存单独策略`);
+                });
+            }
+            const courseNameInput = row.querySelector('.course-name-input');
+            if (courseNameInput) {
+                courseNameInput.addEventListener('input', (event) => {
+                    item.courseName = event.target.value;
+                });
+                courseNameInput.addEventListener('blur', (event) => {
+                    const name = event.target.value.trim() || this.defaultCourseName(item.fileName);
+                    item.courseName = name;
+                    event.target.value = name;
+                    this.renderResultsGrid();
+                    this.renderAssetTable();
                 });
             }
             container.appendChild(row);
@@ -1544,7 +1578,7 @@ class AICourseStudioApp {
             }
             return `
                 <tr>
-                    <td><strong>${this._esc(item.fileName || '未知文件')}</strong><small>${this._esc(item.taskId || '')}</small></td>
+                    <td><strong>${this._esc(this.courseDisplayName(item) || '未知课程')}</strong><small>${this._esc(item.fileName || item.taskId || '')}</small></td>
                     <td>${this._esc(item.ownerUsername || '-')}</td>
                     <td><span class="status-pill status-${this._escAttr(item.status || 'unknown')}">${this._esc(this._fileStatusText(item))}</span></td>
                     <td>${Math.round(item.percentage || 0)}%</td>
@@ -1703,6 +1737,7 @@ class AICourseStudioApp {
                     body: JSON.stringify({
                         file_path: item.filePath,
                         original_name: item.fileName,
+                        course_name: this.courseDisplayName(item),
                         batch_id: batchId,
                         strategy_source: item.strategySource || 'batch',
                         ...strategy
@@ -2108,7 +2143,7 @@ class AICourseStudioApp {
                         <div class="result-placeholder"><p>等待确认逐页讲稿</p></div>
                     </div>
                     <div class="result-card-footer">
-                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(this.courseDisplayName(item))}</span>
                     </div>
                     <button class="result-card-download preview-open-btn" data-index="${index}">编辑讲稿</button>
                 `;
@@ -2132,7 +2167,7 @@ class AICourseStudioApp {
                             <video src="/api/video?path=${encodeURIComponent(item.videoPath)}" controls preload="metadata"></video>
                         </div>
                         <div class="result-card-footer">
-                            <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                            <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(this.courseDisplayName(item))}</span>
                             <button class="result-card-download" data-task-id="${this._esc(item.taskId)}">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -2167,7 +2202,7 @@ class AICourseStudioApp {
                         <div class="result-placeholder"><p>课程文件已生成</p></div>
                     </div>
                     <div class="result-card-footer">
-                        <span class="result-card-name">${this._esc(item.fileName)}</span>
+                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(this.courseDisplayName(item))}</span>
                     </div>
                     ${this._artifactLinks(item)}
                     ${this._retryStageActions(item)}
@@ -2205,7 +2240,7 @@ class AICourseStudioApp {
                         </div>
                     </div>
                     <div class="result-card-footer">
-                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(item.fileName)}</span>
+                        <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(this.courseDisplayName(item))}</span>
                         ${['processing', 'queued'].includes(item.status) && item.taskId
                             ? `<button class="result-card-stop" data-task-id="${item.taskId}">停止</button>`
                             : ''}
@@ -2234,6 +2269,7 @@ class AICourseStudioApp {
     _resultArtifactKey(item) {
         return [
             item.fileName,
+            item.courseName,
             item.courseJsonPath,
             item.presentationPath,
             item.subtitlesPath,
@@ -2339,6 +2375,7 @@ class AICourseStudioApp {
                 body: JSON.stringify({
                     file_path: item.filePath,
                     original_name: item.fileName,
+                    course_name: this.courseDisplayName(item),
                     batch_id: globalThis.crypto?.randomUUID?.() || `retry-${Date.now()}`,
                     strategy_source: item.strategySource || 'batch',
                     ...(item.strategy || {})
@@ -2464,7 +2501,7 @@ class AICourseStudioApp {
                 + '&path=' + encodeURIComponent(item.videoPath);
             const a = document.createElement('a');
             a.href = downloadUrl;
-            a.download = item.fileName.replace(/\.(ppt|pptx)$/i, '.mp4');
+            a.download = `${this.courseDisplayName(item)}.mp4`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -2574,6 +2611,7 @@ class AICourseStudioApp {
                     file: null,
                     filePath: t.file_path || null,
                     fileName: t.original_name || '未知文件',
+                    courseName: t.course_name || this.defaultCourseName(t.original_name || ''),
                     sourceType: /\.(docx|pdf)$/i.test(t.original_name || '') ? 'lesson-plan' : 'presentation',
                     taskId: t.task_id,
                     status: this._taskStatus(t.status),
@@ -2635,6 +2673,7 @@ class AICourseStudioApp {
                     stagePercentage: task.stage_percentage || 0,
                     message: task.message || '',
                     videoPath: task.video_path || null,
+                    courseName: task.course_name || found.item.courseName,
                     error: task.error || null,
                     queuePosition: task.queue_position || null,
                     strategy: task.strategy || found.item.strategy,

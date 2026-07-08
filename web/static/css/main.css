@@ -1201,7 +1201,7 @@ body {
 }
 
 .file-list-name {
-    flex: 1;
+    flex: 0 1 180px;
     min-width: 0;
     font-size: 13px;
     font-weight: 500;
@@ -1209,6 +1209,38 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.file-course-name {
+    flex: 1 1 220px;
+    min-width: 180px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.file-course-name span {
+    flex-shrink: 0;
+    color: var(--color-text-3);
+    font-size: 11px;
+}
+
+.file-course-name input {
+    width: 100%;
+    min-width: 0;
+    height: 30px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 13px;
+    padding: 0 9px;
+}
+
+.file-course-name input:disabled {
+    background: transparent;
+    border-color: transparent;
+    padding-left: 0;
 }
 
 .file-list-status {

@@ -75,6 +75,7 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
         json={
             "file_path": str(source),
             "original_name": "lesson.docx",
+            "course_name": "自定义课程名",
             "tts_engine": "volcengine",
             "voice": "zh_female_cancan_mars_bigtts",
             "llm_enabled": True,
@@ -93,6 +94,7 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
     assert enqueue[0][0][0] is web_app.run_course_generation
     assert enqueue[0][0][-1] == "technology"
     task_id = response.get_json()["task_id"]
+    assert web_app.tasks[task_id]["course_name"] == "自定义课程名"
     assert web_app.tasks[task_id]["strategy"]["burn_subtitles"] is False
     assert web_app.tasks[task_id]["strategy"]["subtitle_y"] == 940
     assert web_app.tasks[task_id]["strategy"]["subtitle_font_size"] == 48
@@ -293,6 +295,31 @@ def test_artifact_downloads_use_original_upload_name(monkeypatch, temp_dir):
         assert response.status_code == 200
         disposition = response.headers["Content-Disposition"]
         assert f"filename*=UTF-8''%E8%AF%BE%E7%A8%8B%E8%AE%BE%E8%AE%A1{extension}" in disposition
+
+
+def test_video_download_prefers_course_name(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "course-name-download-task"
+    video = temp_dir / "internal-uuid.mp4"
+    video.write_bytes(b".mp4")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "original_name": "../../上传文件.pptx",
+            "course_name": "第一讲：课程导入",
+            "video_path": str(video),
+        }
+    })
+    client = web_app.app.test_client()
+
+    response = client.get(
+        "/api/download",
+        query_string={"task_id": task_id, "path": str(video)},
+    )
+
+    assert response.status_code == 200
+    disposition = response.headers["Content-Disposition"]
+    assert "filename*=UTF-8''%E7%AC%AC%E4%B8%80%E8%AE%B2_%E8%AF%BE%E7%A8%8B%E5%AF%BC%E5%85%A5.mp4" in disposition
 
 
 def test_preview_can_be_cancelled_and_removed_from_state(monkeypatch, temp_dir):

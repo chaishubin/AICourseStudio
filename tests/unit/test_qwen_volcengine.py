@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from vidppt.engines.llm.qwen_llm_engine import QwenLLMEngine
+from vidppt.engines.llm.openai_llm_engine import OpenAILLMEngine
 from vidppt.engines.tts.volcengine_tts_engine import VolcengineTTSEngine
 
 
@@ -35,6 +36,35 @@ def test_qwen_uses_openai_compatible_payload():
     request = client.post.call_args
     assert request.kwargs["headers"]["Authorization"] == "Bearer test"
     assert request.kwargs["json"]["model"] == "qwen-plus"
+    assert request.kwargs["json"]["messages"][0]["content"] == "生成课程"
+
+
+def test_openai_requires_api_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        OpenAILLMEngine()
+
+
+def test_openai_uses_chatgpt_payload():
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "choices": [{"message": {"content": "生成结果"}}]
+    }
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.post.return_value = response
+
+    with patch("httpx.Client", return_value=client):
+        engine = OpenAILLMEngine(api_key="test", model="gpt-test")
+        result = engine.summarize("教案内容", system_prompt="生成课程")
+
+    assert result == "生成结果"
+    request = client.post.call_args
+    assert request.args[0] == "https://api.openai.com/v1/chat/completions"
+    assert request.kwargs["headers"]["Authorization"] == "Bearer test"
+    assert request.kwargs["json"]["model"] == "gpt-test"
     assert request.kwargs["json"]["messages"][0]["content"] == "生成课程"
 
 

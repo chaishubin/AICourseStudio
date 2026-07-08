@@ -39,15 +39,15 @@ class TestPipelineInit:
             output_dir=temp_dir / "output",
             tts_engine="edge-tts",
             llm_enabled=True,
-            llm_engine="minimax",
+            llm_engine="openai",
             llm_options={"api_key": "test-key"},
         )
 
         pipeline = Pipeline(config)
 
         assert pipeline.llm_engine is not None
-        from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
-        assert isinstance(pipeline.llm_engine, MiniMaxLLMEngine)
+        from vidppt.engines.llm.openai_llm_engine import OpenAILLMEngine
+        assert isinstance(pipeline.llm_engine, OpenAILLMEngine)
 
     def test_create_edge_tts_engine(self, temp_dir):
         """测试创建 Edge TTS 引擎"""
@@ -443,7 +443,7 @@ class TestPipelineSummarizeContent:
             input_path=temp_dir / "test.pptx",
             output_dir=temp_dir / "output",
             llm_enabled=True,
-            llm_engine="minimax",
+            llm_engine="openai",
             llm_mode="per-page",
             llm_options={"api_key": "test-key"},
         )
@@ -489,7 +489,7 @@ class TestPipelineSummarizeContent:
             input_path=temp_dir / "test.pptx",
             output_dir=temp_dir / "output",
             llm_enabled=True,
-            llm_engine="minimax",
+            llm_engine="openai",
             llm_mode="whole-document",
             llm_options={"api_key": "test-key"},
         )
@@ -532,7 +532,7 @@ class TestPipelineSummarizeContent:
             input_path=temp_dir / "test.pptx",
             output_dir=temp_dir / "output",
             llm_enabled=True,
-            llm_engine="minimax",
+            llm_engine="openai",
             llm_mode="per-page",
             llm_options={"api_key": "test-key"},
         )
@@ -563,7 +563,7 @@ class TestPipelineSummarizeContent:
             input_path=test_file,
             output_dir=temp_dir / "output",
             llm_enabled=True,
-            llm_engine="minimax",
+            llm_engine="openai",
             llm_mode="per-page",
             llm_options={"api_key": "test-key"},
             enable_tts=True,
