@@ -24,12 +24,12 @@ class APILLMEngine(LLMEngine):
         """对单段文本进行摘要/改写"""
         raise NotImplementedError(
             "API LLM Engine 需要根据具体的 API 服务商实现。\n"
-            "参考 MiniMaxLLMEngine 或其他具体实现类。"
+            "参考 QwenLLMEngine、OpenAILLMEngine 或其他具体实现类。"
         )
 
     def summarize_document(self, pages: list[str], **kwargs) -> str:
         """对整个文档统一摘要"""
         raise NotImplementedError(
             "API LLM Engine 需要根据具体的 API 服务商实现。\n"
-            "参考 MiniMaxLLMEngine 或其他具体实现类。"
+            "参考 QwenLLMEngine、OpenAILLMEngine 或其他具体实现类。"
         )

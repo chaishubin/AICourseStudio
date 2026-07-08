@@ -5,6 +5,21 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "5000:5000"
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_LLM_MODEL: ${OPENAI_LLM_MODEL:-}
+      OPENAI_REVIEW_MODEL: ${OPENAI_REVIEW_MODEL:-}
+      VOLCENGINE_TTS_APPID: ${VOLCENGINE_TTS_APPID:-}
+      VOLCENGINE_TTS_ACCESS_TOKEN: ${VOLCENGINE_TTS_ACCESS_TOKEN:-}
+      VIDPPT_AUTH_USERNAME: ${VIDPPT_AUTH_USERNAME:-admin}
+      VIDPPT_AUTH_PASSWORD: ${VIDPPT_AUTH_PASSWORD:-vidppt123}
+      VIDPPT_USERS: ${VIDPPT_USERS:-}
+      VIDPPT_SECRET_KEY: ${VIDPPT_SECRET_KEY:-change-this-secret-in-production}
+      VIDPPT_CPU_LIMIT: ${VIDPPT_CPU_LIMIT:-85}
+      VIDPPT_MEMORY_LIMIT: ${VIDPPT_MEMORY_LIMIT:-80}
+      VIDPPT_MIN_DISK_GB: ${VIDPPT_MIN_DISK_GB:-2}
+      VIDPPT_RESOURCE_CHECK_INTERVAL: ${VIDPPT_RESOURCE_CHECK_INTERVAL:-5}
     volumes:
       - ../web/uploads:/app/web/uploads
       - ../web/outputs:/app/web/outputs

@@ -11,6 +11,7 @@ from loguru import logger
 from .core.models import ProcessConfig
 from .core.registry import ProcessorRegistry
 from .pipeline import Pipeline
+from .course_pipeline import CoursePipeline
 from .utils.logger import setup_logger
 from .utils.config_loader import load_config_file, ConfigLoader
 from .utils.config_converter import ConfigConverter
@@ -22,7 +23,9 @@ from .processors.pdf_processor import PDFProcessor
 
 def main():
     """主入口函数"""
-    supported_formats = ", ".join(ProcessorRegistry.list_supported_extensions())
+    supported_formats = ", ".join(
+        sorted(set(ProcessorRegistry.list_supported_extensions()) | {".docx"})
+    )
 
     parser = argparse.ArgumentParser(
         description="AI Course Studio - AI 课程生产平台\n从教案（Word/PDF）或演示文稿（PPT）经 AI 理解与知识建模，生成课程视频、幻灯片、HTML 三路输出。",
@@ -59,8 +62,13 @@ MiniMax TTS 示例:
 LLM 文本摘要示例:
    %(prog)s input.pptx --llm                    # 启用逐页摘要
    %(prog)s input.pptx --llm --llm-mode whole-document  # 整文档摘要
-   %(prog)s input.pptx --llm --llm-model MiniMax-Text-01  # 指定模型
+   %(prog)s input.pptx --llm --llm-engine openai --llm-model gpt-4o-mini  # 使用 ChatGPT
    %(prog)s input.pptx --llm --llm-temperature 0.5       # 降低随机性
+
+千问 + 火山引擎示例:
+   %(prog)s lesson.docx --llm --llm-engine qwen \\
+                     --tts-engine volcengine \\
+                     --voice zh_female_cancan_mars_bigtts
 
 可用的 TTS 声音（edge-tts）:
   zh-CN-XiaoxiaoNeural  女声·温暖（默认）
@@ -106,13 +114,13 @@ LLM 文本摘要示例:
     parser.add_argument(
         "--tts-engine",
         default="edge-tts",
-        choices=["edge-tts", "minimax"],
+        choices=["edge-tts", "minimax", "volcengine"],
         help="TTS 引擎（默认: edge-tts）",
     )
     parser.add_argument(
         "--voice",
         default="zh-CN-XiaoxiaoNeural",
-        help="TTS 声音角色（edge-tts 默认: zh-CN-XiaoxiaoNeural；minimax 请填写 voice_id，如 male-qn-qingse）",
+        help="声音 ID；火山引擎请填写 voice_type",
     )
     parser.add_argument(
         "--rate",
@@ -144,6 +152,21 @@ LLM 文本摘要示例:
         default="mp3",
         choices=["mp3", "wav"],
         help="MiniMax 音频格式（默认: mp3）",
+    )
+    parser.add_argument(
+        "--volc-appid",
+        default=None,
+        help="火山引擎 AppID（默认读取 VOLCENGINE_TTS_APPID）",
+    )
+    parser.add_argument(
+        "--volc-access-token",
+        default=None,
+        help="火山引擎 Access Token（默认读取 VOLCENGINE_TTS_ACCESS_TOKEN）",
+    )
+    parser.add_argument(
+        "--volc-cluster",
+        default="volcano_tts",
+        help="火山 TTS 业务集群（默认: volcano_tts）",
     )
 
     # 缓存配置
@@ -222,9 +245,9 @@ LLM 文本摘要示例:
     )
     parser.add_argument(
         "--llm-engine",
-        default="minimax",
-        choices=["minimax"],
-        help="LLM 引擎（默认: minimax）",
+        default="qwen",
+        choices=["qwen", "openai"],
+        help="LLM 引擎（默认: qwen）",
     )
     parser.add_argument(
         "--llm-mode",
@@ -316,7 +339,7 @@ LLM 文本摘要示例:
         cli_config["tts_engine"] = args.tts_engine
     # --voice 的含义取决于引擎：
     # edge-tts -> tts_voice（如 zh-CN-XiaoxiaoNeural）
-    # minimax  -> tts_options.voice_id（如 male-qn-qingse）
+    # minimax -> voice_id；volcengine -> voice_type
     if args.tts_engine == "minimax":
         # minimax 的 voice 通过 tts_options.voice_id 传递，tts_voice 对其无意义
         if args.voice != "zh-CN-XiaoxiaoNeural":
@@ -324,6 +347,17 @@ LLM 文本摘要示例:
             tts_options_cli = cli_config.get("tts_options", {})
             tts_options_cli["voice_id"] = args.voice
             cli_config["tts_options"] = tts_options_cli
+    elif args.tts_engine == "volcengine":
+        tts_options_cli = cli_config.get("tts_options", {})
+        if args.voice != "zh-CN-XiaoxiaoNeural":
+            tts_options_cli["voice_type"] = args.voice
+        if args.volc_appid:
+            tts_options_cli["appid"] = args.volc_appid
+        if args.volc_access_token:
+            tts_options_cli["access_token"] = args.volc_access_token
+        if args.volc_cluster != "volcano_tts":
+            tts_options_cli["cluster"] = args.volc_cluster
+        cli_config["tts_options"] = tts_options_cli
     else:
         if args.voice != "zh-CN-XiaoxiaoNeural":
             cli_config["tts_voice"] = args.voice
@@ -404,7 +438,36 @@ LLM 文本摘要示例:
         logger.error(f"配置转换失败: {e}")
         sys.exit(1)
 
-    # 创建并运行流程
+    # 路线 A：教案先生成 Course JSON 和可编辑 PPTX，再复用媒体组件。
+    if config.input_path.suffix.lower() in {".docx", ".pdf"}:
+        llm_engine = None
+        if config.llm_enabled:
+            if config.llm_engine == "qwen":
+                from .engines.llm.qwen_llm_engine import QwenLLMEngine
+
+                llm_engine = QwenLLMEngine(**config.llm_options)
+            elif config.llm_engine == "openai":
+                from .engines.llm.openai_llm_engine import OpenAILLMEngine
+
+                llm_engine = OpenAILLMEngine(**config.llm_options)
+            else:
+                logger.error(f"不支持的课程生成 LLM: {config.llm_engine}")
+                sys.exit(1)
+
+        result = CoursePipeline(llm_engine).run(
+            config.input_path,
+            config.output_dir,
+            media_config=config,
+        )
+        logger.info(f"课程模型: {result.course_json}")
+        logger.info(f"可编辑 PPT: {result.presentation}")
+        if result.subtitles:
+            logger.info(f"字幕文件: {result.subtitles}")
+        if result.video:
+            logger.info(f"课程视频: {result.video}")
+        return
+
+    # 路线 B：保留原 PPT 视觉样式并生成视频。
     pipeline = Pipeline(config)
     pipeline.run()
 

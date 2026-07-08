@@ -22,7 +22,7 @@ def isolate_state(tmp_path, monkeypatch):
 
     # 把 OUTPUT_FOLDER 和 STATE_FILE 指向临时目录
     outputs = tmp_path / "outputs"
-    outputs.mkdir()
+    outputs.mkdir(exist_ok=True)
     monkeypatch.setattr(app_module, "OUTPUT_FOLDER", outputs)
     monkeypatch.setattr(app_module, "STATE_FILE", outputs / "state.json")
 
@@ -139,18 +139,44 @@ class TestLoadState:
         assert "err1" in tasks
         assert tasks["err1"]["error"] == "转换失败"
 
-    def test_ignores_processing_task(self):
-        """正在处理的任务不应被恢复（重启后已无效）"""
+    def test_marks_processing_task_as_interrupted(self):
+        """重启后保留原任务信息，并标记为可重新提交的中断状态。"""
         from web.app import load_state, tasks, STATE_FILE
 
         STATE_FILE.write_text(json.dumps({
             "task_id": "running",
             "status": "processing",
             "percentage": 50,
+            "file_path": "/tmp/uploads/source.pptx",
+            "strategy": {"tts_engine": "edge-tts"},
         }), encoding="utf-8")
 
         load_state()
-        assert "running" not in tasks
+        assert tasks["running"]["status"] == "interrupted"
+        assert tasks["running"]["stage"] == "queue"
+        assert tasks["running"]["file_path"] == "/tmp/uploads/source.pptx"
+        assert tasks["running"]["strategy"]["tts_engine"] == "edge-tts"
+        assert "重新提交" in tasks["running"]["message"]
+
+    def test_restores_processing_task_from_preview_checkpoint(self, tmp_path):
+        from web.app import load_state, tasks, STATE_FILE
+
+        preview_path = tmp_path / "preview.json"
+        preview_path.write_text('{"pages": []}', encoding="utf-8")
+        STATE_FILE.write_text(json.dumps({
+            "task_id": "checkpoint",
+            "status": "processing",
+            "stage": "video",
+            "percentage": 86,
+            "preview_path": str(preview_path),
+        }), encoding="utf-8")
+
+        load_state()
+
+        assert tasks["checkpoint"]["status"] == "awaiting_confirmation"
+        assert tasks["checkpoint"]["stage"] == "preview"
+        assert tasks["checkpoint"]["failed_stage"] == "video"
+        assert "检查点恢复" in tasks["checkpoint"]["message"]
 
     def test_noop_if_no_state_file(self):
         from web.app import load_state, tasks

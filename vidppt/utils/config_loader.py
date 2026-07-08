@@ -103,9 +103,10 @@ class ConfigLoader:
         # 验证 TTS 引擎
         if "tts_engine" in config:
             tts_engine = config["tts_engine"]
-            if tts_engine not in ["edge-tts", "minimax"]:
+            if tts_engine not in ["edge-tts", "minimax", "volcengine"]:
                 raise ValueError(
-                    f"不支持的 TTS 引擎: {tts_engine}。支持的引擎: edge-tts, minimax"
+                    f"不支持的 TTS 引擎: {tts_engine}。"
+                    f"支持的引擎: edge-tts, minimax, volcengine"
                 )
 
         # 验证布尔值
@@ -122,7 +123,15 @@ class ConfigLoader:
                     raise ValueError(f"'{field}' 必须是布尔值（true/false）")
 
         # 验证整数值
-        int_fields = ["video_fps"]
+        int_fields = [
+            "video_width",
+            "video_height",
+            "video_fps",
+            "video_crf",
+            "video_gop_seconds",
+            "audio_sample_rate",
+            "audio_channels",
+        ]
         for field in int_fields:
             if field in config:
                 if not isinstance(config[field], int) or config[field] <= 0:
@@ -138,9 +147,10 @@ class ConfigLoader:
         # 验证 LLM 引擎
         if "llm_engine" in config:
             llm_engine = config["llm_engine"]
-            if llm_engine not in ["minimax"]:
+            if llm_engine not in ["qwen", "openai"]:
                 raise ValueError(
-                    f"不支持的 LLM 引擎: {llm_engine}。支持的引擎: minimax"
+                    f"不支持的 LLM 引擎: {llm_engine}。"
+                    f"支持的引擎: qwen, openai"
                 )
 
         # 验证 LLM 模式
@@ -216,9 +226,20 @@ class ConfigValidator:
         # 图像转换配置
         "image_converter",
         # 视频配置
+        "video_width",
+        "video_height",
         "video_fps",
         "video_codec",
+        "video_preset",
+        "video_crf",
+        "video_pixel_format",
+        "video_gop_seconds",
+        "video_profile",
         "audio_codec",
+        "audio_bitrate",
+        "audio_sample_rate",
+        "audio_channels",
+        "audio_loudness_lufs",
     }
 
     @staticmethod

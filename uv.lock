@@ -3,6 +3,68 @@ revision = 3
 requires-python = ">=3.12"
 
 [[package]]
+name = "ai-course-studio"
+version = "0.3.0"
+source = { editable = "." }
+dependencies = [
+    { name = "edge-tts" },
+    { name = "flask" },
+    { name = "loguru" },
+    { name = "moviepy" },
+    { name = "pillow" },
+    { name = "python-docx" },
+    { name = "python-pptx" },
+    { name = "spire-presentation" },
+]
+
+[package.optional-dependencies]
+api = [
+    { name = "httpx" },
+]
+dashboard = [
+    { name = "psutil" },
+]
+dev = [
+    { name = "black" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+]
+lesson-plan = [
+    { name = "pdfplumber" },
+]
+ocr = [
+    { name = "pytesseract" },
+]
+pdf = [
+    { name = "pdf2image" },
+    { name = "pdfplumber" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "edge-tts", specifier = ">=7.2.8" },
+    { name = "flask", specifier = ">=3.0.0" },
+    { name = "httpx", marker = "extra == 'api'", specifier = ">=0.25.0" },
+    { name = "loguru", specifier = ">=0.7.0" },
+    { name = "moviepy", specifier = ">=2.2.1" },
+    { name = "pdf2image", marker = "extra == 'pdf'", specifier = ">=1.16.0" },
+    { name = "pdfplumber", marker = "extra == 'lesson-plan'", specifier = ">=0.10.0" },
+    { name = "pdfplumber", marker = "extra == 'pdf'", specifier = ">=0.10.0" },
+    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "psutil", marker = "extra == 'dashboard'", specifier = ">=5.9.0" },
+    { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "python-docx", specifier = ">=1.1.0" },
+    { name = "python-pptx", specifier = ">=1.0.2" },
+    { name = "spire-presentation", specifier = ">=9.0.0" },
+]
+provides-extras = ["lesson-plan", "pdf", "ocr", "api", "dashboard", "dev"]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -1423,6 +1485,19 @@ wheels = [
 ]
 
 [[package]]
+name = "python-docx"
+version = "1.2.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "lxml" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a9/f7/eddfe33871520adab45aaa1a71f0402a2252050c14c7e3009446c8f4701c/python_docx-1.2.0.tar.gz", hash = "sha256:7bc9d7b7d8a69c9c02ca09216118c86552704edc23bac179283f2e38f86220ce", size = 5723256, upload-time = "2025-06-16T20:46:27.921Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d0/00/1e03a4989fa5795da308cd774f05b704ace555a70f9bf9d3be057b680bcf/python_docx-1.2.0-py3-none-any.whl", hash = "sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7", size = 252987, upload-time = "2025-06-16T20:46:22.506Z" },
+]
+
+[[package]]
 name = "python-dotenv"
 version = "1.2.2"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -1519,62 +1594,6 @@ sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/72/94/1a15dd82efb362
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548", size = 44614, upload-time = "2025-08-25T13:49:24.86Z" },
 ]
-
-[[package]]
-name = "vidppt"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "edge-tts" },
-    { name = "flask" },
-    { name = "loguru" },
-    { name = "moviepy" },
-    { name = "pillow" },
-    { name = "python-pptx" },
-    { name = "spire-presentation" },
-]
-
-[package.optional-dependencies]
-api = [
-    { name = "httpx" },
-]
-dashboard = [
-    { name = "psutil" },
-]
-dev = [
-    { name = "black" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-]
-ocr = [
-    { name = "pytesseract" },
-]
-pdf = [
-    { name = "pdf2image" },
-    { name = "pdfplumber" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "edge-tts", specifier = ">=7.2.8" },
-    { name = "flask", specifier = ">=3.0.0" },
-    { name = "httpx", marker = "extra == 'api'", specifier = ">=0.25.0" },
-    { name = "loguru", specifier = ">=0.7.0" },
-    { name = "moviepy", specifier = ">=2.2.1" },
-    { name = "pdf2image", marker = "extra == 'pdf'", specifier = ">=1.16.0" },
-    { name = "pdfplumber", marker = "extra == 'pdf'", specifier = ">=0.10.0" },
-    { name = "pillow", specifier = ">=10.0.0" },
-    { name = "psutil", marker = "extra == 'dashboard'", specifier = ">=5.9.0" },
-    { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "python-pptx", specifier = ">=1.0.2" },
-    { name = "spire-presentation", specifier = ">=9.0.0" },
-]
-provides-extras = ["pdf", "ocr", "api", "dashboard", "dev"]
 
 [[package]]
 name = "werkzeug"

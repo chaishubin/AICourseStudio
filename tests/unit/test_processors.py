@@ -178,6 +178,35 @@ class TestPPTProcessor:
         assert lines[2] == "    三级详情"
         assert lines[3] == "另一个一级"
 
+    def test_extract_text_combines_speaker_notes(self):
+        """有演讲者备注时，将正文和备注一起交给后续处理。"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        paragraph = Mock(text="页面要点", level=0)
+        shape = Mock(has_text_frame=True)
+        shape.text_frame.paragraphs = [paragraph]
+        slide = Mock(shapes=[shape], has_notes_slide=True)
+        slide.notes_slide.notes_text_frame.text = "补充案例与讲解提示"
+
+        text = PPTProcessor._extract_text_from_slide(slide)
+
+        assert text == (
+            "[幻灯片正文]\n页面要点\n\n"
+            "[演讲者备注]\n补充案例与讲解提示"
+        )
+
+    def test_extract_text_ignores_empty_speaker_notes(self):
+        """空备注不改变原有正文格式。"""
+        from vidppt.processors.ppt_processor import PPTProcessor
+
+        paragraph = Mock(text="页面要点", level=0)
+        shape = Mock(has_text_frame=True)
+        shape.text_frame.paragraphs = [paragraph]
+        slide = Mock(shapes=[shape], has_notes_slide=True)
+        slide.notes_slide.notes_text_frame.text = "   "
+
+        assert PPTProcessor._extract_text_from_slide(slide) == "页面要点"
+
     def test_extract_images_from_slide(self, temp_dir):
         """测试从幻灯片提取图片"""
         from vidppt.processors.ppt_processor import PPTProcessor

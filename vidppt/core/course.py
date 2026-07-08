@@ -42,6 +42,11 @@ class CourseSection:
     title: str = ""
     script: str = ""  # 讲解脚本 / 逐字稿
     knowledge_points: list[KnowledgePoint] = field(default_factory=list)
+    bullets: list[str] = field(default_factory=list)
+    layout: str = "title_and_content"
+    notes: str = ""
+    section_title: str = ""
+    image_prompt: Optional[str] = None
 
     # 视觉素材
     slide_image: Optional[Path] = None  # 幻灯片截图（路线 B 保留原设计）
@@ -62,6 +67,8 @@ class Course:
     title: str = ""
     description: str = ""
     sections: list[CourseSection] = field(default_factory=list)
+    audience: str = ""
+    learning_objectives: list[str] = field(default_factory=list)
 
     # 来源信息
     source_type: str = ""  # "lesson_plan" | "presentation"
@@ -86,6 +93,11 @@ class Course:
                     "id": s.id,
                     "title": s.title,
                     "script": s.script,
+                    "bullets": s.bullets,
+                    "layout": s.layout,
+                    "notes": s.notes,
+                    "section_title": s.section_title,
+                    "image_prompt": s.image_prompt,
                     "knowledge_points": [
                         {"id": kp.id, "title": kp.title, "content": kp.content, "order": kp.order}
                         for kp in s.knowledge_points
@@ -99,6 +111,8 @@ class Course:
             ],
             "source_type": self.source_type,
             "source_path": str(self.source_path) if self.source_path else None,
+            "audience": self.audience,
+            "learning_objectives": self.learning_objectives,
             "metadata": self.metadata,
         }
 
@@ -120,6 +134,11 @@ class Course:
                 id=s["id"],
                 title=s.get("title", ""),
                 script=s.get("script", ""),
+                bullets=s.get("bullets", []),
+                layout=s.get("layout", "title_and_content"),
+                notes=s.get("notes", ""),
+                section_title=s.get("section_title", ""),
+                image_prompt=s.get("image_prompt"),
                 knowledge_points=kps,
                 slide_image=Path(s["slide_image"]) if s.get("slide_image") else None,
                 audio=Path(s["audio"]) if s.get("audio") else None,
@@ -132,6 +151,8 @@ class Course:
             title=data.get("title", ""),
             description=data.get("description", ""),
             sections=sections,
+            audience=data.get("audience", ""),
+            learning_objectives=data.get("learning_objectives", []),
             source_type=data.get("source_type", ""),
             source_path=Path(data["source_path"]) if data.get("source_path") else None,
             metadata=data.get("metadata", {}),

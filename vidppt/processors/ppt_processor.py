@@ -313,7 +313,7 @@ class PPTProcessor(DocumentProcessor):
 
     @staticmethod
     def _extract_text_from_slide(slide) -> str:
-        """提取幻灯片中所有文本框的文字，保留层级缩进"""
+        """提取幻灯片正文和演讲者备注，供后续 LLM 与 TTS 使用。"""
         lines = []
         for shape in slide.shapes:
             if not shape.has_text_frame:
@@ -325,7 +325,28 @@ class PPTProcessor(DocumentProcessor):
                 level = para.level if para.level else 0
                 indent = "  " * level
                 lines.append(f"{indent}{text}")
-        return "\n".join(lines)
+
+        slide_text = "\n".join(lines)
+        notes_text = PPTProcessor._extract_notes_from_slide(slide)
+        if not notes_text:
+            return slide_text
+
+        parts = []
+        if slide_text:
+            parts.append(f"[幻灯片正文]\n{slide_text}")
+        parts.append(f"[演讲者备注]\n{notes_text}")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _extract_notes_from_slide(slide) -> str:
+        """提取演讲者备注；无备注或备注结构不可用时返回空字符串。"""
+        if getattr(slide, "has_notes_slide", False) is not True:
+            return ""
+        try:
+            text = slide.notes_slide.notes_text_frame.text
+        except (AttributeError, ValueError):
+            return ""
+        return text.strip() if isinstance(text, str) else ""
 
     @staticmethod
     def _extract_images_from_slide(slide, out_dir: Path) -> list[Path]:

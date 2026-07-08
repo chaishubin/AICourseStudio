@@ -123,7 +123,7 @@ class TestProcessConfig:
         assert config.tts_rate == "+0%"
         assert config.ocr_engine == "builtin"
         assert config.llm_enabled is False
-        assert config.llm_engine == "minimax"
+        assert config.llm_engine == "qwen"
         assert config.llm_mode == "per-page"
         assert config.llm_options == {}
         assert config.video_fps == 24
@@ -141,7 +141,7 @@ class TestProcessConfig:
             tts_rate="+20%",
             ocr_engine="tesseract",
             llm_enabled=True,
-            llm_engine="minimax",
+            llm_engine="openai",
             llm_mode="whole-document",
             llm_options={"model": "custom-model", "temperature": 0.5},
             video_fps=30,
@@ -156,7 +156,7 @@ class TestProcessConfig:
         assert config.tts_rate == "+20%"
         assert config.ocr_engine == "tesseract"
         assert config.llm_enabled is True
-        assert config.llm_engine == "minimax"
+        assert config.llm_engine == "openai"
         assert config.llm_mode == "whole-document"
         assert config.llm_options["model"] == "custom-model"
         assert config.llm_options["temperature"] == 0.5

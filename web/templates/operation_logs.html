@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>操作日志 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=18">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand">
+                <div class="brand-mark">AI</div>
+                <div>
+                    <strong>Course Studio</strong>
+                    <span>课程生产管理平台</span>
+                </div>
+            </div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item" href="{{ url_for('index') }}">
+                    <span class="nav-icon">▦</span><span>生产工作台</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('index') }}#upload-module">
+                    <span class="nav-icon">⇧</span><span>素材与任务</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('index') }}#course-preview-module">
+                    <span class="nav-icon">✎</span><span>内容审核</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('index') }}#results-module">
+                    <span class="nav-icon">□</span><span>课程资产</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('data_management_page') }}">
+                    <span class="nav-icon">☷</span><span>数据管理</span>
+                </a>
+                <a class="nav-item active" href="{{ url_for('operation_logs_page') }}">
+                    <span class="nav-icon">◴</span><span>操作日志</span>
+                </a>
+                {% if can_manage_accounts %}
+                <a class="nav-item" href="{{ url_for('accounts_page') }}">
+                    <span class="nav-icon">◎</span><span>账号管理</span>
+                </a>
+                {% endif %}
+                {% if can_view_debug %}
+                <a class="nav-item" href="{{ url_for('debug_page') }}">
+                    <span class="nav-icon">◇</span><span>调试工作台</span>
+                </a>
+                {% endif %}
+            </nav>
+            <div class="sidebar-meta">
+                <span class="status-dot"></span>
+                <div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div>
+            </div>
+        </aside>
+
+        <div class="admin-main">
+            <header class="admin-topbar">
+                <div>
+                    <p class="breadcrumb">AI 课程生产 / 操作日志</p>
+                    <h1>操作日志</h1>
+                </div>
+                <div class="topbar-actions">
+                    <span class="environment-badge"><span></span>{% if can_view_all_logs %}全部账号{% else %}仅本账号{% endif %}</span>
+                    <span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span>
+                    <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
+                    <form method="post" action="{{ url_for('logout') }}">
+                        <button class="logout-button" type="submit">退出登录</button>
+                    </form>
+                </div>
+            </header>
+
+            <main class="content management-page">
+                <section class="card management-card">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">审计日志</span><h3>操作记录</h3></div>
+                        <a class="btn-primary-link" href="{{ url_for('data_management_page') }}">查看课程数据</a>
+                    </div>
+                    <div class="management-table-wrap">
+                        <table class="management-table">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>账号</th>
+                                    <th>操作</th>
+                                    <th>对象</th>
+                                    <th>结果</th>
+                                </tr>
+                            </thead>
+                            <tbody id="operation-log-body"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
+    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=3"></script>
+</body>
+</html>

@@ -4,20 +4,18 @@
 测试覆盖：
 - LLMEngine 抽象接口
 - APILLMEngine 基类
-- MiniMaxLLMEngine 初始化与参数
-- MiniMaxLLMEngine summarize / summarize_pages / summarize_document
+- OpenAILLMEngine 初始化与参数
+- OpenAILLMEngine summarize / summarize_pages / summarize_document
 - 环境变量处理
 - API 调用与重试逻辑
 """
 
-import os
 import pytest
-from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 from vidppt.core.interfaces import LLMEngine
 from vidppt.engines.llm.api_llm_engine import APILLMEngine
-from vidppt.engines.llm.minimax_llm_engine import MiniMaxLLMEngine
+from vidppt.engines.llm.openai_llm_engine import OpenAILLMEngine
 
 
 class TestLLMEngineInterface:
@@ -129,23 +127,24 @@ class TestAPILLMEngine:
             engine.summarize_document(["第一页", "第二页"])
 
 
-class TestMiniMaxLLMEngineInit:
-    """测试 MiniMaxLLMEngine 初始化"""
+class TestOpenAILLMEngineInit:
+    """测试 OpenAILLMEngine 初始化"""
 
-    def test_engine_initialization_with_explicit_key(self):
+    def test_engine_initialization_with_explicit_key(self, monkeypatch):
         """测试显式传入 api_key"""
-        engine = MiniMaxLLMEngine(api_key="sk-cp-testkey")
-        assert engine.api_key == "sk-cp-testkey"
-        assert engine.model == MiniMaxLLMEngine.DEFAULT_MODEL
-        assert engine.api_url == MiniMaxLLMEngine.DEFAULT_API_URL
-        assert engine.temperature == MiniMaxLLMEngine.DEFAULT_TEMPERATURE
-        assert engine.max_tokens == MiniMaxLLMEngine.DEFAULT_MAX_TOKENS
-        assert engine.timeout == MiniMaxLLMEngine.DEFAULT_TIMEOUT
-        assert engine.max_retries == MiniMaxLLMEngine.DEFAULT_MAX_RETRIES
+        monkeypatch.delenv("OPENAI_LLM_MODEL", raising=False)
+        engine = OpenAILLMEngine(api_key="sk-testkey")
+        assert engine.api_key == "sk-testkey"
+        assert engine.model == OpenAILLMEngine.DEFAULT_MODEL
+        assert engine.api_url == OpenAILLMEngine.DEFAULT_API_URL
+        assert engine.temperature == OpenAILLMEngine.DEFAULT_TEMPERATURE
+        assert engine.max_tokens == OpenAILLMEngine.DEFAULT_MAX_TOKENS
+        assert engine.timeout == OpenAILLMEngine.DEFAULT_TIMEOUT
+        assert engine.max_retries == OpenAILLMEngine.DEFAULT_MAX_RETRIES
 
     def test_engine_custom_config(self):
         """测试自定义配置"""
-        engine = MiniMaxLLMEngine(
+        engine = OpenAILLMEngine(
             api_key="test-key",
             model="custom-model",
             system_prompt="自定义提示词",
@@ -162,45 +161,45 @@ class TestMiniMaxLLMEngineInit:
         assert engine.max_retries == 5
 
 
-class TestMiniMaxEnvironmentVariable:
-    """测试 MiniMax LLM 环境变量处理"""
+class TestOpenAIEnvironmentVariable:
+    """测试 OpenAI LLM 环境变量处理"""
 
     def test_api_key_from_environment_variable(self, monkeypatch):
-        """测试从 MINIMAX_API 环境变量读取 api_key"""
-        monkeypatch.setenv("MINIMAX_API", "env-api-key")
-        engine = MiniMaxLLMEngine(api_key=None)
+        """测试从 OPENAI_API_KEY 环境变量读取 api_key"""
+        monkeypatch.setenv("OPENAI_API_KEY", "env-api-key")
+        engine = OpenAILLMEngine(api_key=None)
         assert engine.api_key == "env-api-key"
 
     def test_explicit_key_overrides_env(self, monkeypatch):
         """测试显式 api_key 优先于环境变量"""
-        monkeypatch.setenv("MINIMAX_API", "env-api-key")
-        engine = MiniMaxLLMEngine(api_key="explicit-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "env-api-key")
+        engine = OpenAILLMEngine(api_key="explicit-key")
         assert engine.api_key == "explicit-key"
 
     def test_missing_env_variable_raises(self, monkeypatch):
-        """测试缺少环境变量抛出 AssertionError"""
-        monkeypatch.delenv("MINIMAX_API", raising=False)
-        with pytest.raises(AssertionError, match="MiniMax API key 未设置"):
-            MiniMaxLLMEngine(api_key=None)
+        """测试缺少环境变量抛出 ValueError"""
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+            OpenAILLMEngine(api_key=None)
 
     def test_empty_env_variable_raises(self, monkeypatch):
-        """测试空环境变量抛出 AssertionError"""
-        monkeypatch.setenv("MINIMAX_API", "")
-        with pytest.raises(AssertionError, match="MiniMax API key 未设置"):
-            MiniMaxLLMEngine(api_key=None)
+        """测试空环境变量抛出 ValueError"""
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+        with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+            OpenAILLMEngine(api_key=None)
 
     def test_empty_string_api_key_raises(self):
-        """测试空字符串 api_key 抛出 AssertionError"""
-        with pytest.raises(AssertionError, match="MiniMax API key 不能为空字符串"):
-            MiniMaxLLMEngine(api_key="")
+        """测试空字符串 api_key 抛出 ValueError"""
+        with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+            OpenAILLMEngine(api_key="")
 
 
-class TestMiniMaxCallApi:
-    """测试 MiniMaxLLMEngine._call_api"""
+class TestOpenAICallApi:
+    """测试 OpenAILLMEngine._call_api"""
 
     def test_call_api_success(self):
         """测试成功调用 API"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
         mock_httpx, mock_client, _ = self._make_mock_httpx()
 
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
@@ -212,7 +211,7 @@ class TestMiniMaxCallApi:
 
     def test_call_api_empty_content_raises(self):
         """测试 API 返回空内容抛出 ValueError"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -223,12 +222,12 @@ class TestMiniMaxCallApi:
         mock_client.post.return_value = mock_response
 
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
-            with pytest.raises(ValueError, match="API 返回的内容为空"):
+            with pytest.raises(ValueError, match="OpenAI 返回内容为空"):
                 engine._call_api([{"role": "user", "content": "原始文本"}])
 
     def test_call_api_missing_choices_raises(self):
-        """测试 API 返回空 choices 列表抛出 IndexError"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        """测试 API 返回空 choices 列表抛出 ValueError"""
+        engine = OpenAILLMEngine(api_key="test-key")
 
         mock_response = MagicMock()
         mock_response.json.return_value = {"choices": []}
@@ -237,12 +236,12 @@ class TestMiniMaxCallApi:
         mock_client.post.return_value = mock_response
 
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
-            with pytest.raises(IndexError):
+            with pytest.raises(ValueError, match="OpenAI 返回内容为空"):
                 engine._call_api([{"role": "user", "content": "原始文本"}])
 
     def test_call_api_builds_correct_payload(self):
         """测试 _call_api 构建正确的请求参数"""
-        engine = MiniMaxLLMEngine(
+        engine = OpenAILLMEngine(
             api_key="test-key",
             model="test-model",
             temperature=0.5,
@@ -287,12 +286,12 @@ class TestMiniMaxCallApi:
         return mock_httpx, mock_client, mock_response
 
 
-class TestMiniMaxSummarize:
-    """测试 MiniMaxLLMEngine.summarize"""
+class TestOpenAISummarize:
+    """测试 OpenAILLMEngine.summarize"""
 
     def test_summarize_builds_correct_messages(self):
         """测试 summarize 构建正确的消息格式"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="改写结果") as mock_call:
             result = engine.summarize("原始PPT文本")
@@ -306,7 +305,7 @@ class TestMiniMaxSummarize:
 
     def test_summarize_with_custom_system_prompt(self):
         """测试自定义系统提示词"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="结果") as mock_call:
             engine.summarize("文本", system_prompt="自定义提示")
@@ -316,7 +315,7 @@ class TestMiniMaxSummarize:
 
     def test_summarize_with_kwargs_override(self):
         """测试 kwargs 覆盖默认参数"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="结果") as mock_call:
             engine.summarize("文本", temperature=0.1, max_tokens=512)
@@ -327,12 +326,12 @@ class TestMiniMaxSummarize:
             assert call_kwargs.get("max_tokens") == 512
 
 
-class TestMiniMaxSummarizePages:
-    """测试 MiniMaxLLMEngine.summarize_pages"""
+class TestOpenAISummarizePages:
+    """测试 OpenAILLMEngine.summarize_pages"""
 
     def test_summarize_pages_sequential(self):
         """测试逐页摘要"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "summarize", side_effect=["摘要1", "摘要2", "摘要3"]) as mock_s:
             results = engine.summarize_pages(["第一页", "第二页", "第三页"])
@@ -341,12 +340,12 @@ class TestMiniMaxSummarizePages:
             assert mock_s.call_count == 3
 
 
-class TestMiniMaxSummarizeDocument:
-    """测试 MiniMaxLLMEngine.summarize_document"""
+class TestOpenAISummarizeDocument:
+    """测试 OpenAILLMEngine.summarize_document"""
 
     def test_summarize_document_concatenates_pages(self):
         """测试整文档摘要拼接所有页"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="整文档摘要") as mock_call:
             result = engine.summarize_document(["第一页内容", "第二页内容", "第三页内容"])
@@ -362,32 +361,32 @@ class TestMiniMaxSummarizeDocument:
 
     def test_summarize_document_appends_instruction(self):
         """测试整文档摘要追加指令到 system_prompt"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="摘要") as mock_call:
             engine.summarize_document(["内容"])
 
             system_content = mock_call.call_args[0][0][0]["content"]
-            assert "统一摘要改写" in system_content
+            assert "统一分析和改写" in system_content
 
     def test_summarize_document_with_custom_system_prompt(self):
         """测试整文档摘要使用自定义系统提示词"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="摘要") as mock_call:
             engine.summarize_document(["内容"], system_prompt="自定义提示")
 
             system_content = mock_call.call_args[0][0][0]["content"]
             assert "自定义提示" in system_content
-            assert "统一摘要改写" in system_content
+            assert "统一分析和改写" in system_content
 
 
-class TestMiniMaxLLMIntegration:
-    """测试 MiniMax LLM 集成场景"""
+class TestOpenAILLMIntegration:
+    """测试 OpenAI LLM 集成场景"""
 
     def test_full_per_page_workflow(self):
         """测试逐页摘要完整工作流"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         pages = [
             "• 要点1\n• 要点2",
@@ -400,7 +399,7 @@ class TestMiniMaxLLMIntegration:
 
     def test_full_whole_document_workflow(self):
         """测试整文档摘要完整工作流"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         with patch.object(engine, "_call_api", return_value="整文档摘要文本"):
             result = engine.summarize_document(["第一页", "第二页"])
@@ -408,7 +407,7 @@ class TestMiniMaxLLMIntegration:
 
     def test_httpx_not_installed(self, monkeypatch):
         """测试 httpx 未安装时抛出 ImportError"""
-        engine = MiniMaxLLMEngine(api_key="test-key")
+        engine = OpenAILLMEngine(api_key="test-key")
 
         # 模拟 import httpx 失败
         original_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
@@ -419,5 +418,5 @@ class TestMiniMaxLLMIntegration:
             return original_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
-            with pytest.raises(ImportError, match="httpx 未安装"):
+            with pytest.raises(ImportError, match="OpenAI 调用需要 httpx"):
                 engine._call_api([{"role": "user", "content": "test"}])
