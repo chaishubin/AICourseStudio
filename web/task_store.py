@@ -63,6 +63,21 @@ class TaskStore:
                 CREATE INDEX IF NOT EXISTS idx_operation_logs_created
                 ON operation_logs(created_at DESC)
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    display_name TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_accounts_role_active
+                ON accounts(role, active)
+            """)
 
     def upsert(self, task_id: str, task: dict):
         now = time.time()
@@ -187,3 +202,118 @@ class TaskStore:
             }
             for row in rows
         ]
+
+    def ensure_account(self, account: dict):
+        now = time.time()
+        username = str(account.get("username") or "").strip()
+        if not username:
+            raise ValueError("username is required")
+        with self._lock, self._connect() as connection:
+            existing = connection.execute(
+                "SELECT username FROM accounts WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if existing:
+                return
+            connection.execute("""
+                INSERT INTO accounts (
+                    username, password_hash, role, display_name,
+                    active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                username,
+                account["password_hash"],
+                account.get("role") or "user",
+                account.get("display_name") or username,
+                1 if account.get("active", True) else 0,
+                now,
+                now,
+            ))
+
+    def create_account(self, account: dict):
+        now = time.time()
+        username = str(account.get("username") or "").strip()
+        if not username:
+            raise ValueError("username is required")
+        with self._lock, self._connect() as connection:
+            connection.execute("""
+                INSERT INTO accounts (
+                    username, password_hash, role, display_name,
+                    active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                username,
+                account["password_hash"],
+                account.get("role") or "user",
+                account.get("display_name") or username,
+                1 if account.get("active", True) else 0,
+                now,
+                now,
+            ))
+
+    def update_account(self, username: str, updates: dict):
+        allowed = {
+            "password_hash",
+            "role",
+            "display_name",
+            "active",
+        }
+        assignments = []
+        params = []
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            assignments.append(f"{key} = ?")
+            params.append(1 if key == "active" and value else 0 if key == "active" else value)
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        params.append(time.time())
+        params.append(username)
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                f"UPDATE accounts SET {', '.join(assignments)} WHERE username = ?",
+                params,
+            )
+
+    def get_account(self, username: str) -> dict | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute("""
+                SELECT username, password_hash, role, display_name,
+                       active, created_at, updated_at
+                FROM accounts
+                WHERE username = ?
+            """, (username,)).fetchone()
+        return self._account_row(row) if row else None
+
+    def list_accounts(self, include_inactive: bool = True) -> list[dict]:
+        where = "" if include_inactive else "WHERE active = 1"
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(f"""
+                SELECT username, password_hash, role, display_name,
+                       active, created_at, updated_at
+                FROM accounts
+                {where}
+                ORDER BY active DESC, role ASC, username ASC
+            """).fetchall()
+        return [self._account_row(row) for row in rows]
+
+    def count_active_super_admins(self) -> int:
+        with self._lock, self._connect() as connection:
+            row = connection.execute("""
+                SELECT COUNT(*) AS count
+                FROM accounts
+                WHERE role = 'super_admin' AND active = 1
+            """).fetchone()
+        return int(row["count"] or 0)
+
+    def _account_row(self, row) -> dict:
+        return {
+            "username": row["username"],
+            "password_hash": row["password_hash"],
+            "role": row["role"],
+            "display_name": row["display_name"],
+            "active": bool(row["active"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }

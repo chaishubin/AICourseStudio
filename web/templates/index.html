@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=19">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=20">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -36,6 +36,14 @@
                 <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
                     <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
+                {% if is_super_admin %}
+                <a class="nav-item" href="{{ url_for('accounts_page') }}">
+                    <span class="nav-icon">◎</span><span>账号管理</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('debug_page') }}">
+                    <span class="nav-icon">◇</span><span>调试工作台</span>
+                </a>
+                {% endif %}
             </nav>
             <div class="sidebar-meta">
                 <span class="status-dot"></span>
@@ -239,6 +247,92 @@
                                 <span style="font-size:13px;color:var(--color-text-3)">烧录到视频</span>
                             </div>
                             <small class="field-hint">始终生成 UTF-8 SRT；开启后按课程草稿中的字幕位置和样式烧录</small>
+                        </div>
+                        <div class="option-group video-tuning-group">
+                            <div class="video-tuning-heading">
+                                <label>视频合成参数</label>
+                                <button class="advanced-toggle" id="video-advanced-toggle" type="button"
+                                        aria-expanded="false">展开完整参数</button>
+                            </div>
+                            <div class="video-tuning-grid">
+                                <label for="video-resolution">分辨率
+                                    <select id="video-resolution" class="select-input">
+                                        <option value="1920x1080" selected>1920x1080 正式网课</option>
+                                        <option value="1280x720">1280x720 更快预览</option>
+                                        <option value="854x480">854x480 快速检查</option>
+                                    </select>
+                                </label>
+                                <label for="video-fps">帧率
+                                    <select id="video-fps" class="select-input">
+                                        <option value="24" selected>24 FPS</option>
+                                        <option value="30">30 FPS</option>
+                                    </select>
+                                </label>
+                                <label for="video-preset">编码速度
+                                    <select id="video-preset" class="select-input">
+                                        <option value="ultrafast">ultrafast 最快预览</option>
+                                        <option value="superfast">superfast</option>
+                                        <option value="veryfast" selected>veryfast 当前默认</option>
+                                        <option value="faster">faster</option>
+                                        <option value="fast">fast</option>
+                                        <option value="medium">medium 更小体积</option>
+                                    </select>
+                                </label>
+                                <label for="video-crf">画质 CRF
+                                    <input id="video-crf" class="select-input" type="number"
+                                           min="18" max="32" step="1" value="21">
+                                </label>
+                            </div>
+                            <small class="field-hint">更快预览优先降低分辨率、使用更快 preset、适度增大 CRF；正式网课建议保留当前默认。</small>
+                            <div class="video-advanced-options" id="video-advanced-options" hidden>
+                                <div class="video-tuning-grid">
+                                    <label for="video-codec">视频编码
+                                        <select id="video-codec" class="select-input">
+                                            <option value="libx264" selected>H.264 / libx264</option>
+                                        </select>
+                                    </label>
+                                    <label for="video-pixel-format">像素格式
+                                        <select id="video-pixel-format" class="select-input">
+                                            <option value="yuv420p" selected>yuv420p</option>
+                                        </select>
+                                    </label>
+                                    <label for="video-profile">H.264 Profile
+                                        <select id="video-profile" class="select-input">
+                                            <option value="high" selected>High</option>
+                                            <option value="main">Main</option>
+                                            <option value="baseline">Baseline</option>
+                                        </select>
+                                    </label>
+                                    <label for="video-gop-seconds">GOP 秒数
+                                        <input id="video-gop-seconds" class="select-input" type="number"
+                                               min="1" max="6" step="1" value="2">
+                                    </label>
+                                    <label for="audio-bitrate">音频码率
+                                        <select id="audio-bitrate" class="select-input">
+                                            <option value="96k">96k</option>
+                                            <option value="128k" selected>128k 当前默认</option>
+                                            <option value="160k">160k</option>
+                                            <option value="192k">192k</option>
+                                        </select>
+                                    </label>
+                                    <label for="audio-sample-rate">采样率
+                                        <select id="audio-sample-rate" class="select-input">
+                                            <option value="44100">44.1 kHz</option>
+                                            <option value="48000" selected>48 kHz</option>
+                                        </select>
+                                    </label>
+                                    <label for="audio-channels">声道
+                                        <select id="audio-channels" class="select-input">
+                                            <option value="1" selected>单声道</option>
+                                            <option value="2">立体声</option>
+                                        </select>
+                                    </label>
+                                    <label for="audio-loudness-lufs">响度目标 LUFS
+                                        <input id="audio-loudness-lufs" class="select-input" type="number"
+                                               min="-24" max="-12" step="0.5" value="-16">
+                                    </label>
+                                </div>
+                            </div>
                         </div>
                         <div class="option-group toggle-group advanced-option" hidden>
                             <label>AI 内容生成</label>
@@ -577,7 +671,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=23"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=26"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

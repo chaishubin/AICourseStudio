@@ -85,6 +85,20 @@ class AICourseStudioApp {
                 subtitleOutlineWidth: document.getElementById('subtitle-outline-width'),
                 subtitleOutlineColor: document.getElementById('subtitle-outline-color'),
                 renderEngine: document.getElementById('render-engine'),
+                videoAdvancedToggle: document.getElementById('video-advanced-toggle'),
+                videoAdvancedOptions: document.getElementById('video-advanced-options'),
+                videoResolution: document.getElementById('video-resolution'),
+                videoFps: document.getElementById('video-fps'),
+                videoPreset: document.getElementById('video-preset'),
+                videoCrf: document.getElementById('video-crf'),
+                videoCodec: document.getElementById('video-codec'),
+                videoPixelFormat: document.getElementById('video-pixel-format'),
+                videoProfile: document.getElementById('video-profile'),
+                videoGopSeconds: document.getElementById('video-gop-seconds'),
+                audioBitrate: document.getElementById('audio-bitrate'),
+                audioSampleRate: document.getElementById('audio-sample-rate'),
+                audioChannels: document.getElementById('audio-channels'),
+                audioLoudnessLufs: document.getElementById('audio-loudness-lufs'),
 
                 llmEnabled: document.getElementById('llm-enabled'),
                 llmEngine: document.getElementById('llm-engine'),
@@ -201,6 +215,10 @@ class AICourseStudioApp {
         return (item?.courseName || this.defaultCourseName(item?.fileName || '')).trim();
     }
 
+    shouldShowInUploadList(item) {
+        return item?.status !== 'completed';
+    }
+
     updateItem(index, patch) {
         const item = this.state.files[index];
         const changed = Object.entries(patch).some(([key, value]) =>
@@ -267,6 +285,18 @@ class AICourseStudioApp {
             this.elements.subtitleOutlineWidth,
             this.elements.subtitleOutlineColor,
             this.elements.renderEngine,
+            this.elements.videoResolution,
+            this.elements.videoFps,
+            this.elements.videoPreset,
+            this.elements.videoCrf,
+            this.elements.videoCodec,
+            this.elements.videoPixelFormat,
+            this.elements.videoProfile,
+            this.elements.videoGopSeconds,
+            this.elements.audioBitrate,
+            this.elements.audioSampleRate,
+            this.elements.audioChannels,
+            this.elements.audioLoudnessLufs,
             this.elements.llmEnabled,
             this.elements.llmEngine,
             this.elements.llmMode,
@@ -723,13 +753,27 @@ class AICourseStudioApp {
             subtitleBackgroundColor: 'subtitle_background_color',
             subtitleBackgroundOpacity: 'subtitle_background_opacity',
             subtitleOutlineWidth: 'subtitle_outline_width',
-            subtitleOutlineColor: 'subtitle_outline_color'
+            subtitleOutlineColor: 'subtitle_outline_color',
+            videoFps: 'video_fps',
+            videoPreset: 'video_preset',
+            videoCrf: 'video_crf',
+            videoCodec: 'video_codec',
+            videoPixelFormat: 'video_pixel_format',
+            videoProfile: 'video_profile',
+            videoGopSeconds: 'video_gop_seconds',
+            audioBitrate: 'audio_bitrate',
+            audioSampleRate: 'audio_sample_rate',
+            audioChannels: 'audio_channels',
+            audioLoudnessLufs: 'audio_loudness_lufs'
         };
         Object.entries(values).forEach(([elementName, key]) => {
             if (strategy[key] !== undefined && this.elements[elementName]) {
                 this.elements[elementName].value = strategy[key];
             }
         });
+        if (strategy.video_width && strategy.video_height && this.elements.videoResolution) {
+            this.elements.videoResolution.value = `${strategy.video_width}x${strategy.video_height}`;
+        }
         this.setSubtitleFontValue(strategy.subtitle_font_name);
 
         if (strategy.llm_enabled !== undefined) {
@@ -873,6 +917,14 @@ class AICourseStudioApp {
                 element.hidden = expanded;
             });
             if (!expanded) this.toggleLLMMode();
+        });
+        this.elements.videoAdvancedToggle?.addEventListener('click', () => {
+            const expanded = this.elements.videoAdvancedToggle.getAttribute('aria-expanded') === 'true';
+            this.elements.videoAdvancedToggle.setAttribute('aria-expanded', String(!expanded));
+            this.elements.videoAdvancedToggle.textContent = expanded ? '展开完整参数' : '收起完整参数';
+            if (this.elements.videoAdvancedOptions) {
+                this.elements.videoAdvancedOptions.hidden = expanded;
+            }
         });
 
     }
@@ -1228,6 +1280,8 @@ class AICourseStudioApp {
         container.innerHTML = '';
 
         this.state.files.forEach((item, index) => {
+            if (!this.shouldShowInUploadList(item)) return;
+
             const row = document.createElement('div');
             row.className = `file-list-item status-${item.status}`;
 
@@ -1262,7 +1316,7 @@ class AICourseStudioApp {
                     </span>
                     <button type="button" class="file-strategy-button"
                             title="把当前生成策略只应用到此文件">仅配置此项</button>` : ''}
-                ${showMiniProgress ? `<div class="mini-progress-bar"><div class="mini-progress-fill" style="width:${item.percentage}%"></div></div>` : ''}
+                ${showMiniProgress ? `<div class="mini-progress-bar"><div class="mini-progress-fill" style="width:${this._displayProgressValue(item)}%"></div></div>` : ''}
                 <button class="file-list-remove" data-index="${index}" title="移除">&times;</button>
             `;
 
@@ -1399,6 +1453,7 @@ class AICourseStudioApp {
 
     collectCurrentStrategy() {
         const customVoice = this.elements.customVoice.value.trim();
+        const videoOptions = this.collectVideoOptions();
         return {
             tts_engine: this.elements.ttsEngine.value,
             voice: customVoice || this.elements.voiceSelect.value,
@@ -1430,7 +1485,29 @@ class AICourseStudioApp {
             illustrations_enabled: this.elements.illustrationsEnabled.checked,
             max_illustrations: Number(this.elements.maxIllustrations.value),
             ppt_footer_text: this.elements.pptFooterText.value.trim(),
-            school_logo_path: this.state.logoPath
+            school_logo_path: this.state.logoPath,
+            ...videoOptions
+        };
+    }
+
+    collectVideoOptions() {
+        const [width, height] = String(this.elements.videoResolution?.value || '1920x1080')
+            .split('x')
+            .map(value => Number(value));
+        return {
+            video_width: width || 1920,
+            video_height: height || 1080,
+            video_fps: Number(this.elements.videoFps?.value) || 24,
+            video_codec: this.elements.videoCodec?.value || 'libx264',
+            video_preset: this.elements.videoPreset?.value || 'veryfast',
+            video_crf: Number(this.elements.videoCrf?.value) || 21,
+            video_pixel_format: this.elements.videoPixelFormat?.value || 'yuv420p',
+            video_gop_seconds: Number(this.elements.videoGopSeconds?.value) || 2,
+            video_profile: this.elements.videoProfile?.value || 'high',
+            audio_bitrate: this.elements.audioBitrate?.value || '128k',
+            audio_sample_rate: Number(this.elements.audioSampleRate?.value) || 48000,
+            audio_channels: Number(this.elements.audioChannels?.value) || 1,
+            audio_loudness_lufs: Number(this.elements.audioLoudnessLufs?.value) || -16
         };
     }
 
@@ -1714,7 +1791,7 @@ class AICourseStudioApp {
             case 'awaiting_confirmation': return '等待确认讲稿';
             case 'processing': {
                 const stageName = this.stageNames[item.stage] || item.stage || '';
-                return `${stageName} ${Math.round(item.percentage)}%`;
+                return `${stageName} ${Math.round(this._displayProgressValue(item))}%`;
             }
             case 'completed': return '已完成';
             case 'error': return '失败';
@@ -1901,6 +1978,8 @@ class AICourseStudioApp {
                                 stage: data.stage,
                                 percentage,
                                 stagePercentage: Number(data.stage_percentage ?? 0),
+                                stageCurrent: data.current ?? null,
+                                stageTotal: data.total ?? null,
                                 message,
                                 completedStages
                             });
@@ -1917,6 +1996,8 @@ class AICourseStudioApp {
                         this.updateItem(index, {
                             percentage,
                             stagePercentage,
+                            stageCurrent: data.current ?? item.stageCurrent ?? null,
+                            stageTotal: data.total ?? item.stageTotal ?? null,
                             stage: data.stage || item.stage,
                             message
                         });
@@ -2075,6 +2156,16 @@ class AICourseStudioApp {
                         this.renderResultsGrid();
                         this.updateBatchSummary();
                     } else {
+                        this.updateItem(found.index, {
+                            stage: d.stage || found.item.stage,
+                            percentage: d.percentage ?? found.item.percentage,
+                            stagePercentage: d.stage_percentage ?? found.item.stagePercentage,
+                            stageCurrent: d.stage_current ?? found.item.stageCurrent ?? null,
+                            stageTotal: d.stage_total ?? found.item.stageTotal ?? null,
+                            message: d.message || found.item.message,
+                            stageStartedAt: d.stage_started_at || found.item.stageStartedAt,
+                            updatedAt: d.updated_at || found.item.updatedAt
+                        });
                         this.startProgressStream(taskId, renderOnly, retryCount + 1);
                     }
                 })
@@ -2093,9 +2184,7 @@ class AICourseStudioApp {
         const stagePercentage = Math.max(
             0, Math.min(100, Number(item.stagePercentage) || 0)
         );
-        const displayedPercentage = item.stage === 'video'
-            ? stagePercentage
-            : percentage;
+        const displayedPercentage = this._displayProgressValue(item);
         const message = item.message
             || (item.status === 'queued' ? '排队中...' : `${this.stageNames[item.stage] || '准备'}中...`);
         const now = Date.now() / 1000;
@@ -2103,21 +2192,20 @@ class AICourseStudioApp {
         const stageElapsed = item.stageStartedAt
             ? Math.max(0, now - item.stageStartedAt)
             : null;
-        const progressForEta = item.stage === 'video'
-            ? stagePercentage
-            : percentage;
-        const elapsedForEta = item.stage === 'video'
-            ? stageElapsed
-            : elapsed;
-        const remaining = elapsedForEta && progressForEta >= 3
-            ? Math.max(
-                0,
-                elapsedForEta * (100 - progressForEta) / progressForEta
-            )
-            : null;
+        const remaining = this._estimateRemainingSeconds(item, {
+            percentage,
+            stagePercentage,
+            elapsed,
+            stageElapsed
+        });
+        const timingRemaining = remaining === null
+            ? null
+            : Number.isFinite(remaining)
+                ? `预计剩余 ${this.formatDuration(remaining)}`
+                : '预计剩余 估算中';
         const timing = [
             elapsed !== null ? `已耗时 ${this.formatDuration(elapsed)}` : null,
-            remaining !== null ? `预计剩余 ${this.formatDuration(remaining)}` : null,
+            timingRemaining,
             item.queuePosition ? `队列第 ${item.queuePosition} 位` : null,
             item.updatedAt ? `更新于 ${new Date(item.updatedAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` : null
         ].filter(Boolean).join(' · ');
@@ -2147,6 +2235,42 @@ class AICourseStudioApp {
                 <div class="card-progress-steps">${steps}</div>
             </div>
         `;
+    }
+
+    _displayProgressValue(item) {
+        const percentage = Math.max(0, Math.min(100, Number(item?.percentage) || 0));
+        const stagePercentage = Math.max(
+            0, Math.min(100, Number(item?.stagePercentage) || 0)
+        );
+        return item?.stage === 'video' ? stagePercentage : percentage;
+    }
+
+    _estimateRemainingSeconds(item, { percentage, stagePercentage, elapsed, stageElapsed }) {
+        if (!['processing', 'queued'].includes(item?.status)) return null;
+        if (item.status === 'queued') return null;
+
+        if (item.stage === 'video') {
+            if (!stageElapsed || stagePercentage < 3) return Number.POSITIVE_INFINITY;
+            return Math.max(0, stageElapsed * (100 - stagePercentage) / stagePercentage);
+        }
+
+        if (item.stage === 'render') {
+            const stageCurrent = Number(item.stageCurrent);
+            const stageTotal = Number(item.stageTotal);
+            const hasMeasuredStageProgress = (
+                Number.isFinite(stageCurrent)
+                && Number.isFinite(stageTotal)
+                && stageTotal > 0
+                && stageCurrent > 0
+                && stageCurrent < stageTotal
+            );
+            if (!hasMeasuredStageProgress) return Number.POSITIVE_INFINITY;
+            if (!stageElapsed) return Number.POSITIVE_INFINITY;
+            return Math.max(0, stageElapsed * (stageTotal - stageCurrent) / stageCurrent);
+        }
+
+        if (!elapsed || percentage < 3) return Number.POSITIVE_INFINITY;
+        return Math.max(0, elapsed * (100 - percentage) / percentage);
     }
 
     formatDuration(seconds) {
@@ -2711,6 +2835,8 @@ class AICourseStudioApp {
                     status: this._taskStatus(t.status),
                     percentage: t.percentage || 0,
                     stagePercentage: t.stage_percentage || 0,
+                    stageCurrent: t.stage_current ?? null,
+                    stageTotal: t.stage_total ?? null,
                     stage: t.stage,
                     message: t.message || '',
                     videoPath: t.video_path || null,
@@ -2765,6 +2891,8 @@ class AICourseStudioApp {
                     stage: task.stage || null,
                     percentage: task.percentage || 0,
                     stagePercentage: task.stage_percentage || 0,
+                    stageCurrent: task.stage_current ?? found.item.stageCurrent ?? null,
+                    stageTotal: task.stage_total ?? found.item.stageTotal ?? null,
                     message: task.message || '',
                     videoPath: task.video_path || null,
                     courseName: task.course_name || found.item.courseName,
@@ -3607,8 +3735,22 @@ class AICourseStudioApp {
     }
 
     estimatePreviewScriptSeconds(text) {
-        const length = String(text || '').trim().length;
-        return Math.max(15, Math.round(length / 4));
+        const normalized = String(text || '').replace(/\s+/g, '');
+        if (!normalized) return 3;
+        const cjkChars = (normalized.match(/[\u3400-\u9fff]/g) || []).length;
+        const latinTokens = normalized.match(/[A-Za-z0-9]+/g) || [];
+        const latinChars = latinTokens.reduce((sum, token) => sum + token.length, 0);
+        const otherChars = Math.max(0, normalized.length - cjkChars - latinChars);
+        const strongPauses = (normalized.match(/[。！？!?；;]/g) || []).length * 0.45;
+        const softPauses = (normalized.match(/[，、,：:]/g) || []).length * 0.22;
+        const seconds = (
+            cjkChars / 4.2
+            + latinTokens.length / 2.6
+            + otherChars / 5
+            + strongPauses
+            + softPauses
+        );
+        return Math.max(4, Math.round(seconds));
     }
 
     formatCourseDuration(seconds) {
@@ -3903,6 +4045,7 @@ class AICourseStudioApp {
                     tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
                     tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
                     burn_subtitles: this.elements.burnSubtitles.checked,
+                    ...this.collectVideoOptions(),
                     ...this.collectSubtitleOptions()
                 })
             });

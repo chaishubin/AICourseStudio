@@ -255,11 +255,14 @@ class CoursePipeline:
 
     @staticmethod
     def _subtitle_filter(subtitle_name: str, config: ProcessConfig) -> str:
-        x = max(0, int(config.subtitle_x))
-        y = max(0, int(config.subtitle_y))
-        width = max(1, int(config.subtitle_width))
-        height = max(1, int(config.subtitle_height))
-        font_size = max(12, int(config.subtitle_font_size))
+        scale_x = max(0.01, float(config.video_width) / 1920)
+        scale_y = max(0.01, float(config.video_height) / 1080)
+        font_scale = min(scale_x, scale_y)
+        x = max(0, round(int(config.subtitle_x) * scale_x))
+        y = max(0, round(int(config.subtitle_y) * scale_y))
+        width = max(1, round(int(config.subtitle_width) * scale_x))
+        height = max(1, round(int(config.subtitle_height) * scale_y))
+        font_size = max(12, round(int(config.subtitle_font_size) * font_scale))
         opacity = min(1.0, max(0.0, float(config.subtitle_background_opacity)))
         font_name = CoursePipeline._sanitize_ass_value(config.subtitle_font_name)
         primary = CoursePipeline._hex_to_ass_color(config.subtitle_color)
@@ -267,13 +270,14 @@ class CoursePipeline:
         background = CoursePipeline._hex_to_ffmpeg_color(
             config.subtitle_background_color
         )
-        outline_width = max(0.0, float(config.subtitle_outline_width))
+        outline_width = max(0.0, float(config.subtitle_outline_width) * font_scale)
         margin_v = max(0, config.video_height - y - height + 6)
         margin_r = max(0, config.video_width - x - width)
         return (
             f"drawbox=x={x}:y={y}:w={width}:h={height}:"
             f"color={background}@{opacity:.2f}:t=fill,"
             f"subtitles=filename='{subtitle_name}':"
+            f"original_size={config.video_width}x{config.video_height}:"
             f"force_style='FontName={font_name},"
             f"FontSize={font_size},PrimaryColour={primary},"
             f"OutlineColour={outline},BorderStyle=1,"

@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>操作日志 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=18">
+    <title>账号管理 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=23">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -33,17 +33,15 @@
                 <a class="nav-item" href="{{ url_for('data_management_page') }}">
                     <span class="nav-icon">☷</span><span>数据管理</span>
                 </a>
-                <a class="nav-item active" href="{{ url_for('operation_logs_page') }}">
+                <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
                     <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
-                {% if is_super_admin %}
-                <a class="nav-item" href="{{ url_for('accounts_page') }}">
+                <a class="nav-item active" href="{{ url_for('accounts_page') }}">
                     <span class="nav-icon">◎</span><span>账号管理</span>
                 </a>
                 <a class="nav-item" href="{{ url_for('debug_page') }}">
                     <span class="nav-icon">◇</span><span>调试工作台</span>
                 </a>
-                {% endif %}
             </nav>
             <div class="sidebar-meta">
                 <span class="status-dot"></span>
@@ -54,12 +52,12 @@
         <div class="admin-main">
             <header class="admin-topbar">
                 <div>
-                    <p class="breadcrumb">AI 课程生产 / 操作日志</p>
-                    <h1>操作日志</h1>
+                    <p class="breadcrumb">AI 课程生产 / 账号管理</p>
+                    <h1>账号管理</h1>
                 </div>
                 <div class="topbar-actions">
-                    <span class="environment-badge"><span></span>{% if is_super_admin %}全部账号{% else %}仅本账号{% endif %}</span>
-                    <span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span>
+                    <span class="environment-badge"><span></span>超级管理员</span>
+                    <span class="admin-user-name">{{ current_user }} · 超级管理员</span>
                     <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
                     <form method="post" action="{{ url_for('logout') }}">
                         <button class="logout-button" type="submit">退出登录</button>
@@ -70,21 +68,57 @@
             <main class="content management-page">
                 <section class="card management-card">
                     <div class="section-heading">
-                        <div><span class="section-kicker">审计日志</span><h3>操作记录</h3></div>
-                        <a class="btn-primary-link" href="{{ url_for('data_management_page') }}">查看课程数据</a>
+                        <div><span class="section-kicker">账号管理</span><h3>创建账号</h3></div>
+                    </div>
+                    <form class="account-form" id="account-form">
+                        <input type="hidden" id="account-edit-username">
+                        <label>
+                            <span>账号</span>
+                            <input class="select-input" id="account-username" name="username" autocomplete="off" required>
+                        </label>
+                        <label>
+                            <span>显示名称</span>
+                            <input class="select-input" id="account-display-name" name="display_name" autocomplete="off">
+                        </label>
+                        <label>
+                            <span>角色</span>
+                            <select class="select-input" id="account-role" name="role">
+                                <option value="user">普通账号</option>
+                                <option value="super_admin">超级管理员</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>密码</span>
+                            <input class="select-input" id="account-password" name="password" type="password" autocomplete="new-password" placeholder="新建必填，编辑留空则不修改">
+                        </label>
+                        <label class="account-active-field">
+                            <input id="account-active" name="active" type="checkbox" checked>
+                            <span>启用账号</span>
+                        </label>
+                        <div class="account-form-actions">
+                            <button class="btn-primary-link" id="account-submit" type="submit">创建账号</button>
+                            <button class="btn-secondary" id="account-reset" type="button">取消编辑</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="card management-card">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">账号列表</span><h3>账号与权限</h3></div>
                     </div>
                     <div class="management-table-wrap">
                         <table class="management-table">
                             <thead>
                                 <tr>
-                                    <th>时间</th>
                                     <th>账号</th>
+                                    <th>显示名称</th>
+                                    <th>角色</th>
+                                    <th>状态</th>
+                                    <th>更新时间</th>
                                     <th>操作</th>
-                                    <th>对象</th>
-                                    <th>结果</th>
                                 </tr>
                             </thead>
-                            <tbody id="operation-log-body"></tbody>
+                            <tbody id="account-table-body"></tbody>
                         </table>
                     </div>
                 </section>
@@ -93,7 +127,10 @@
         </div>
     </div>
 
+    <script>
+      window.currentUsername = {{ current_username | tojson }};
+    </script>
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=3"></script>
+    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=4"></script>
 </body>
 </html>

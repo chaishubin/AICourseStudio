@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>调试工作台 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=22">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand">
+                <div class="brand-mark">AI</div>
+                <div>
+                    <strong>Course Studio</strong>
+                    <span>课程生产管理平台</span>
+                </div>
+            </div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item" href="{{ url_for('index') }}">
+                    <span class="nav-icon">▦</span><span>生产工作台</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('index') }}#upload-module">
+                    <span class="nav-icon">⇧</span><span>素材与任务</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('index') }}#course-preview-module">
+                    <span class="nav-icon">✎</span><span>内容审核</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('index') }}#results-module">
+                    <span class="nav-icon">□</span><span>课程资产</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('data_management_page') }}">
+                    <span class="nav-icon">☷</span><span>数据管理</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
+                    <span class="nav-icon">◴</span><span>操作日志</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('accounts_page') }}">
+                    <span class="nav-icon">◎</span><span>账号管理</span>
+                </a>
+                <a class="nav-item active" href="{{ url_for('debug_page') }}">
+                    <span class="nav-icon">◇</span><span>调试工作台</span>
+                </a>
+            </nav>
+            <div class="sidebar-meta">
+                <span class="status-dot"></span>
+                <div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div>
+            </div>
+        </aside>
+
+        <div class="admin-main">
+            <header class="admin-topbar">
+                <div>
+                    <p class="breadcrumb">AI 课程生产 / 调试工作台</p>
+                    <h1>调试工作台</h1>
+                </div>
+                <div class="topbar-actions">
+                    <span class="environment-badge"><span></span>只读诊断</span>
+                    <span class="admin-user-name">{{ current_user }} · 超级管理员</span>
+                    <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
+                    <form method="post" action="{{ url_for('logout') }}">
+                        <button class="logout-button" type="submit">退出登录</button>
+                    </form>
+                </div>
+            </header>
+
+            <main class="content management-page debug-page">
+                <section class="metrics-grid debug-metrics" aria-label="调试概览">
+                    <article class="metric-card">
+                        <span class="metric-icon blue">▤</span>
+                        <div><span>全部任务</span><strong id="debug-total">0</strong></div>
+                        <small>当前内存状态</small>
+                    </article>
+                    <article class="metric-card">
+                        <span class="metric-icon amber">◷</span>
+                        <div><span>排队任务</span><strong id="debug-queued">0</strong></div>
+                        <small>转换队列长度 <b id="debug-queue-size">0</b></small>
+                    </article>
+                    <article class="metric-card">
+                        <span class="metric-icon violet">✓</span>
+                        <div><span>待审核</span><strong id="debug-review">0</strong></div>
+                        <small>确认页检查点</small>
+                    </article>
+                    <article class="metric-card">
+                        <span class="metric-icon green">◆</span>
+                        <div><span>活跃进度流</span><strong id="debug-progress-queues">0</strong></div>
+                        <small>SSE 队列数量</small>
+                    </article>
+                </section>
+
+                <section class="card management-card">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">任务快照</span><h3>任务状态与产物路径</h3></div>
+                        <button id="debug-refresh-btn" class="btn-secondary" type="button">刷新</button>
+                    </div>
+                    <div class="management-table-wrap">
+                        <table class="management-table debug-task-table">
+                            <thead>
+                                <tr>
+                                    <th>任务</th>
+                                    <th>状态</th>
+                                    <th>阶段</th>
+                                    <th>进度</th>
+                                    <th>输出</th>
+                                    <th>更新时间</th>
+                                </tr>
+                            </thead>
+                            <tbody id="debug-task-body"></tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="debug-grid">
+                    <article class="card debug-panel">
+                        <div class="section-heading">
+                            <div><span class="section-kicker">单任务详情</span><h3 id="debug-detail-title">选择一个任务查看详情</h3></div>
+                        </div>
+                        <div id="debug-task-detail" class="debug-empty">从上方任务列表点击任意一行。</div>
+                    </article>
+                    <article class="card debug-panel">
+                        <div class="section-heading">
+                            <div><span class="section-kicker">运行环境</span><h3>路径、工具与配置</h3></div>
+                        </div>
+                        <div id="debug-environment" class="debug-kv-list"></div>
+                    </article>
+                </section>
+
+                <section class="card management-card debug-log-card">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">最近日志</span><h3>浏览器可见操作记录</h3></div>
+                        <label class="debug-search">
+                            <span>过滤</span>
+                            <input id="debug-log-search" class="select-input" type="search" placeholder="task_id / 操作 / 账号">
+                        </label>
+                    </div>
+                    <div id="debug-log-note" class="debug-note"></div>
+                    <div class="management-table-wrap">
+                        <table class="management-table">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>账号</th>
+                                    <th>操作</th>
+                                    <th>对象</th>
+                                    <th>结果</th>
+                                </tr>
+                            </thead>
+                            <tbody id="debug-log-body"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
+    <script src="{{ url_for('static', filename='js/debug.js') }}?v=1"></script>
+</body>
+</html>

@@ -286,3 +286,92 @@ def test_operation_logs_are_filtered_for_regular_user(monkeypatch, temp_dir):
     logs = response.get_json()['logs']
     assert len(logs) == 1
     assert logs[0]['actor'] == 'teacher'
+
+
+def test_super_admin_can_crud_accounts(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    store = TaskStore(temp_dir / 'tasks.db')
+    store.create_account({
+        'username': 'admin',
+        'password_hash': 'hash',
+        'role': 'super_admin',
+        'display_name': 'Admin',
+        'active': True,
+    })
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'task_store', store)
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'admin'
+        sess['role'] = 'super_admin'
+
+    created = client.post('/api/accounts', json={
+        'username': 'teacher',
+        'password': 'secret1',
+        'display_name': 'Teacher',
+        'role': 'user',
+        'active': True,
+    })
+    assert created.status_code == 200
+    assert store.get_account('teacher')['password_hash'] != 'secret1'
+
+    updated = client.patch('/api/accounts/teacher', json={
+        'display_name': 'Teacher A',
+        'role': 'super_admin',
+        'active': True,
+    })
+    assert updated.status_code == 200
+    assert updated.get_json()['account']['role'] == 'super_admin'
+
+    deleted = client.delete('/api/accounts/teacher')
+    assert deleted.status_code == 200
+    assert store.get_account('teacher')['active'] is False
+
+
+def test_regular_user_cannot_access_account_crud(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'task_store', TaskStore(temp_dir / 'tasks.db'))
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+
+    response = client.get('/api/accounts')
+
+    assert response.status_code == 403
+
+
+def test_super_admin_cannot_disable_self(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    store = TaskStore(temp_dir / 'tasks.db')
+    store.create_account({
+        'username': 'admin',
+        'password_hash': 'hash',
+        'role': 'super_admin',
+        'display_name': 'Admin',
+        'active': True,
+    })
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'task_store', store)
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'admin'
+        sess['role'] = 'super_admin'
+
+    response = client.patch('/api/accounts/admin', json={
+        'display_name': 'Admin',
+        'role': 'super_admin',
+        'active': False,
+    })
+
+    assert response.status_code == 400

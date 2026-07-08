@@ -35,6 +35,7 @@ from flask import (
     session,
 )
 from werkzeug.utils import secure_filename
+from werkzeug.security import check_password_hash, generate_password_hash
 from loguru import logger
 try:
     from task_store import TaskStore
@@ -192,6 +193,58 @@ task_store = TaskStore(TASK_DB_FILE)
 QUALITY_MODES = {'economy', 'balanced', 'premium'}
 
 
+def _normalize_role(role: str) -> str:
+    return role if role in {USER_ROLE, SUPER_ADMIN_ROLE} else USER_ROLE
+
+
+def _seed_configured_accounts():
+    for username, account in ACCOUNTS.items():
+        try:
+            task_store.ensure_account({
+                'username': username,
+                'password_hash': generate_password_hash(account['password']),
+                'role': _normalize_role(account.get('role', USER_ROLE)),
+                'display_name': account.get('display_name') or username,
+                'active': True,
+            })
+        except Exception as exc:
+            logger.warning(f'初始化账号失败 {username}: {exc}')
+
+
+def _account_for_login(username: str) -> dict | None:
+    try:
+        account = task_store.get_account(username)
+    except Exception as exc:
+        logger.warning(f'读取账号失败 {username}: {exc}')
+        account = None
+    if account:
+        return account if account.get('active') else None
+    fallback = ACCOUNTS.get(username)
+    if not fallback:
+        return None
+    return {
+        'username': username,
+        'password': fallback['password'],
+        'role': fallback.get('role', USER_ROLE),
+        'display_name': fallback.get('display_name') or username,
+        'active': True,
+    }
+
+
+def _public_account(account: dict) -> dict:
+    return {
+        'username': account['username'],
+        'role': _normalize_role(account.get('role', USER_ROLE)),
+        'display_name': account.get('display_name') or account['username'],
+        'active': bool(account.get('active')),
+        'created_at': account.get('created_at'),
+        'updated_at': account.get('updated_at'),
+    }
+
+
+_seed_configured_accounts()
+
+
 def current_user_context() -> dict:
     """返回当前请求用户；测试关闭登录时视为超级管理员。"""
     if app.config.get('LOGIN_DISABLED'):
@@ -201,10 +254,17 @@ def current_user_context() -> dict:
             'display_name': AUTH_USERNAME,
         }
     username = session.get('username') or AUTH_USERNAME
+    role = session.get('role')
+    display_name = session.get('display_name')
+    if not role or not display_name:
+        account = _account_for_login(username)
+        if account:
+            role = account.get('role', role)
+            display_name = account.get('display_name', display_name)
     return {
         'username': username,
-        'role': session.get('role') or ACCOUNTS.get(username, {}).get('role', USER_ROLE),
-        'display_name': session.get('display_name') or ACCOUNTS.get(username, {}).get('display_name', username),
+        'role': _normalize_role(role or ACCOUNTS.get(username, {}).get('role', USER_ROLE)),
+        'display_name': display_name or ACCOUNTS.get(username, {}).get('display_name', username),
     }
 
 
@@ -331,6 +391,8 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'stage': task.get('stage'),
         'percentage': task.get('percentage', 0),
         'stage_percentage': task.get('stage_percentage', 0),
+        'stage_current': task.get('stage_current'),
+        'stage_total': task.get('stage_total'),
         'message': task.get('message', ''),
         'video_path': task.get('video_path'),
         'course_json_path': task.get('course_json_path'),
@@ -353,6 +415,145 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'updated_at': task.get('updated_at'),
         'completed_at': task.get('completed_at'),
     }
+
+
+SENSITIVE_DEBUG_KEYS = {
+    'api_key',
+    'apikey',
+    'access_key',
+    'access_token',
+    'secret',
+    'secret_key',
+    'password',
+    'token',
+    'authorization',
+}
+
+
+def _require_super_admin():
+    """调试工作台只允许超级管理员访问。"""
+    if not is_super_admin():
+        if request.path.startswith('/api/'):
+            return jsonify({'error': '仅超级管理员可访问调试信息'}), 403
+        return redirect(url_for('index'))
+    return None
+
+
+def _redact_debug_value(value):
+    """递归移除调试输出中的敏感凭据。"""
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if any(token in key_text for token in SENSITIVE_DEBUG_KEYS):
+                redacted[key] = '已隐藏' if item else ''
+            else:
+                redacted[key] = _redact_debug_value(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_debug_value(item) for item in value]
+    return value
+
+
+def _path_info(path_value) -> dict:
+    """返回文件或目录的只读状态信息。"""
+    if not path_value:
+        return {'path': '', 'exists': False}
+    path = Path(path_value)
+    info = {
+        'path': str(path),
+        'exists': path.exists(),
+        'is_file': path.is_file(),
+        'is_dir': path.is_dir(),
+    }
+    if info['exists']:
+        try:
+            stat = path.stat()
+            info.update({
+                'size': stat.st_size,
+                'mtime': stat.st_mtime,
+            })
+        except OSError as exc:
+            info['error'] = str(exc)
+    return info
+
+
+def _read_json_artifact(path_value, max_bytes: int = 1024 * 1024) -> dict:
+    """安全读取小型 JSON 调试产物，过大文件只返回元数据。"""
+    info = _path_info(path_value)
+    if not info.get('exists') or not info.get('is_file'):
+        return {'info': info, 'data': None}
+    if info.get('size', 0) > max_bytes:
+        return {'info': info, 'data': None, 'error': '文件过大，调试页未直接展开'}
+    try:
+        data = json.loads(Path(path_value).read_text(encoding='utf-8'))
+    except Exception as exc:
+        return {'info': info, 'data': None, 'error': str(exc)}
+    return {'info': info, 'data': _redact_debug_value(data)}
+
+
+def _debug_output_files(task: dict, limit: int = 240) -> list[dict]:
+    """列出任务输出目录下的产物，不修改任何文件。"""
+    output_dir = task.get('output_dir')
+    if not output_dir:
+        return []
+    root = Path(output_dir)
+    if not root.exists() or not root.is_dir():
+        return []
+    files = []
+    try:
+        iterator = sorted(
+            (path for path in root.rglob('*') if path.is_file()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
+    for path in iterator[:limit]:
+        try:
+            stat = path.stat()
+            relative = path.relative_to(root)
+        except OSError:
+            continue
+        files.append({
+            'name': str(relative),
+            'path': str(path),
+            'suffix': path.suffix.lower(),
+            'size': stat.st_size,
+            'mtime': stat.st_mtime,
+        })
+    return files
+
+
+def _debug_queue_positions(source_tasks: dict[str, dict] | None = None) -> dict[str, int]:
+    source_tasks = source_tasks or tasks
+    queued_ids = [
+        task_id
+        for task_id, task in sorted(
+            source_tasks.items(),
+            key=lambda item: item[1].get('queue_order', float('inf')),
+        )
+        if task.get('status') == 'queued'
+    ]
+    return {task_id: index + 1 for index, task_id in enumerate(queued_ids)}
+
+
+def _debug_tool_status() -> list[dict]:
+    names = ['ffmpeg', 'ffprobe', 'soffice', 'libreoffice', 'fc-list', 'fc-match']
+    return [{'name': name, 'path': shutil.which(name), 'available': bool(shutil.which(name))} for name in names]
+
+
+def _debug_env_status() -> list[dict]:
+    keys = [
+        'DASHSCOPE_API_KEY',
+        'VOLCENGINE_TTS_APPID',
+        'VOLCENGINE_TTS_ACCESS_TOKEN',
+        'MINIMAX_API_KEY',
+        'VIDPPT_USERS',
+        'VIDPPT_DASHBOARD',
+        'VIDPPT_TASK_DB',
+    ]
+    return [{'name': key, 'configured': bool(os.environ.get(key))} for key in keys]
 
 
 class ConversionQueue:
@@ -556,6 +757,88 @@ def _subtitle_options(data: dict) -> dict:
         'subtitle_background_opacity': opacity,
         'subtitle_outline_width': outline_width,
         'subtitle_outline_color': color('subtitle_outline_color', '#000000'),
+    }
+
+
+def _video_options(data: dict) -> dict:
+    """校验视频合成参数，默认值与 ProcessConfig 保持一致。"""
+    def integer(name, default, min_value, max_value):
+        value = int(data.get(name, default))
+        if value < min_value or value > max_value:
+            raise ValueError(f'{name} 必须在 {min_value} 到 {max_value} 之间')
+        return value
+
+    def floating(name, default, min_value, max_value):
+        value = float(data.get(name, default))
+        if value < min_value or value > max_value:
+            raise ValueError(f'{name} 必须在 {min_value} 到 {max_value} 之间')
+        return value
+
+    width = integer('video_width', 1920, 320, 3840)
+    height = integer('video_height', 1080, 240, 2160)
+    if (width, height) not in {(1920, 1080), (1280, 720), (854, 480)}:
+        raise ValueError('不支持的视频分辨率')
+
+    fps = integer('video_fps', 24, 12, 60)
+    if fps not in {24, 30}:
+        raise ValueError('不支持的视频帧率')
+
+    codec = str(data.get('video_codec', 'libx264')).strip()
+    if codec != 'libx264':
+        raise ValueError('不支持的视频编码器')
+
+    preset = str(data.get('video_preset', 'veryfast')).strip()
+    allowed_presets = {
+        'ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'
+    }
+    if preset not in allowed_presets:
+        raise ValueError('不支持的视频编码速度')
+
+    pixel_format = str(data.get('video_pixel_format', 'yuv420p')).strip()
+    if pixel_format != 'yuv420p':
+        raise ValueError('不支持的视频像素格式')
+
+    profile = str(data.get('video_profile', 'high')).strip()
+    if profile not in {'baseline', 'main', 'high'}:
+        raise ValueError('不支持的 H.264 Profile')
+
+    audio_bitrate = str(data.get('audio_bitrate', '128k')).strip()
+    if audio_bitrate not in {'96k', '128k', '160k', '192k'}:
+        raise ValueError('不支持的音频码率')
+
+    sample_rate = integer('audio_sample_rate', 48000, 8000, 96000)
+    if sample_rate not in {44100, 48000}:
+        raise ValueError('不支持的音频采样率')
+
+    channels = integer('audio_channels', 1, 1, 2)
+
+    return {
+        'video_width': width,
+        'video_height': height,
+        'video_fps': fps,
+        'video_codec': codec,
+        'video_preset': preset,
+        'video_crf': integer('video_crf', 21, 18, 32),
+        'video_pixel_format': pixel_format,
+        'video_gop_seconds': integer('video_gop_seconds', 2, 1, 6),
+        'video_profile': profile,
+        'audio_bitrate': audio_bitrate,
+        'audio_sample_rate': sample_rate,
+        'audio_channels': channels,
+        'audio_loudness_lufs': floating('audio_loudness_lufs', -16.0, -24.0, -12.0),
+    }
+
+
+def _media_config_options(options: dict) -> dict:
+    allowed = {
+        'video_width', 'video_height', 'video_fps', 'video_codec',
+        'video_preset', 'video_crf', 'video_pixel_format',
+        'video_gop_seconds', 'video_profile', 'audio_bitrate',
+        'audio_sample_rate', 'audio_channels', 'audio_loudness_lufs',
+    }
+    return {
+        key: value for key, value in (options or {}).items()
+        if key.startswith('subtitle_') or key in allowed
     }
 
 
@@ -881,8 +1164,17 @@ def require_login():
     """保护工作台与业务 API，仅放行登录页和静态资源。"""
     if app.config.get('LOGIN_DISABLED'):
         return None
-    if request.endpoint in {'login', 'static'} or session.get('authenticated'):
+    if request.endpoint in {'login', 'static'}:
         return None
+    if session.get('authenticated'):
+        username = session.get('username', '')
+        try:
+            account = task_store.get_account(username)
+        except Exception:
+            account = None
+        if account is None or account.get('active'):
+            return None
+        session.clear()
     if request.path.startswith('/api/'):
         return jsonify({'error': '请先登录', 'code': 'authentication_required'}), 401
     return redirect(url_for('login', next=request.full_path if request.query_string else request.path))
@@ -898,16 +1190,18 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        account = ACCOUNTS.get(username)
-        password_ok = bool(account) and secrets.compare_digest(
-            password,
-            account['password'],
-        )
+        account = _account_for_login(username)
+        password_ok = False
+        if account:
+            if account.get('password_hash'):
+                password_ok = check_password_hash(account['password_hash'], password)
+            else:
+                password_ok = secrets.compare_digest(password, account.get('password', ''))
         if password_ok:
             session.clear()
             session['authenticated'] = True
             session['username'] = username
-            session['role'] = account['role']
+            session['role'] = _normalize_role(account.get('role', USER_ROLE))
             session['display_name'] = account.get('display_name') or username
             log_operation('login', target_name=username)
             next_url = request.form.get('next', '')
@@ -964,6 +1258,38 @@ def operation_logs_page():
         current_username=user['username'],
         current_role=user['role'],
         is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+    )
+
+
+@app.route('/accounts')
+def accounts_page():
+    """渲染账号管理页面。"""
+    admin_error = _require_super_admin()
+    if admin_error:
+        return admin_error
+    user = current_user_context()
+    return render_template(
+        'accounts.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=True,
+    )
+
+
+@app.route('/debug')
+def debug_page():
+    """渲染只读调试工作台。"""
+    blocked = _require_super_admin()
+    if blocked:
+        return blocked
+    user = current_user_context()
+    return render_template(
+        'debug.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=True,
     )
 
 
@@ -1259,10 +1585,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             tts_options=tts_options,
             render_engine=render_engine,
             burn_subtitles=media_options.get('burn_subtitles', True),
-            **{
-                key: value for key, value in media_options.items()
-                if key.startswith('subtitle_')
-            },
+            **_media_config_options(media_options),
             llm_enabled=llm_enabled,
             llm_engine=llm_engine,
         )
@@ -1434,10 +1757,7 @@ def run_course_generation(
             tts_options=tts_options,
             render_engine=render_engine,
             burn_subtitles=media_options.get('burn_subtitles', True),
-            **{
-                key: value for key, value in media_options.items()
-                if key.startswith('subtitle_')
-            },
+            **_media_config_options(media_options),
             enable_tts=False,
             enable_video=False,
         )
@@ -1701,7 +2021,28 @@ def _estimate_page_duration(page: dict) -> float:
     if duration > 0:
         return duration
     text = str(page.get('script') or page.get('original_script') or '')
-    return max(15.0, len(text.strip()) / 4.0)
+    return _estimate_script_duration(text)
+
+
+def _estimate_script_duration(text: str) -> float:
+    """按中文 TTS 语速和标点停顿估算讲稿时长，单位秒。"""
+    normalized = re.sub(r'\s+', '', str(text or ''))
+    if not normalized:
+        return 3.0
+    cjk_chars = len(re.findall(r'[\u3400-\u9fff]', normalized))
+    latin_tokens = re.findall(r'[A-Za-z0-9]+', normalized)
+    latin_chars = sum(len(token) for token in latin_tokens)
+    other_chars = max(0, len(normalized) - cjk_chars - latin_chars)
+    strong_pauses = len(re.findall(r'[。！？!?；;]', normalized)) * 0.45
+    soft_pauses = len(re.findall(r'[，、,：:]', normalized)) * 0.22
+    seconds = (
+        cjk_chars / 4.2
+        + len(latin_tokens) / 2.6
+        + other_chars / 5.0
+        + strong_pauses
+        + soft_pauses
+    )
+    return max(4.0, seconds)
 
 
 def _duration_estimate_payload(preview: dict) -> dict:
@@ -1981,10 +2322,7 @@ def run_media_generation(task_id: str):
             tts_options=options.get('tts_options', {}),
             render_engine=options.get('render_engine', 'spire'),
             burn_subtitles=options.get('burn_subtitles', True),
-            **{
-                key: value for key, value in options.items()
-                if key.startswith('subtitle_')
-            },
+            **_media_config_options(options),
             enable_tts=True,
             enable_video=True,
         )
@@ -2027,6 +2365,23 @@ def run_media_generation(task_id: str):
                 ),
                 duration,
             ))
+
+        durations_by_page = {
+            int(page.page_number): round(float(duration), 2)
+            for page, (_, duration) in zip(content.pages, timed_pages)
+        }
+        for page in preview.get('pages', []):
+            try:
+                page_number = int(page.get('page_number'))
+            except (TypeError, ValueError):
+                continue
+            if page_number in durations_by_page:
+                page['duration'] = durations_by_page[page_number]
+                page['estimated_seconds'] = durations_by_page[page_number]
+        duration_estimate = _duration_estimate_payload(preview)
+        preview['duration_estimate'] = duration_estimate
+        preview['lesson_segments'] = duration_estimate['segments']
+        _persist_preview(task_id, preview)
 
         stem = _safe_filename_stem(task.get('course_name')) or Path(task['file_path']).stem
         subtitles = SubtitleRenderer().render_course(
@@ -2282,6 +2637,7 @@ def convert_ppt():
     burn_subtitles = bool(data.get('burn_subtitles', True))
     try:
         subtitle_options = _subtitle_options(data)
+        video_options = _video_options(data)
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
     batch_id = str(data.get('batch_id') or uuid.uuid4().hex)
@@ -2340,6 +2696,7 @@ def convert_ppt():
         'school_logo_path': school_logo_path,
         'visual_theme': visual_theme,
         'burn_subtitles': burn_subtitles,
+        **video_options,
         **subtitle_options,
     }
     user = current_user_context()
@@ -2371,6 +2728,7 @@ def convert_ppt():
             'tts_rate': tts_rate,
             'render_engine': render_engine,
             'burn_subtitles': burn_subtitles,
+            **video_options,
             **subtitle_options,
         },
     }
@@ -2751,6 +3109,7 @@ def continue_course(task_id):
     burn_subtitles = bool(data.get('burn_subtitles', True))
     try:
         subtitle_options = _subtitle_options(data)
+        video_options = _video_options(data)
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -2788,6 +3147,7 @@ def continue_course(task_id):
                 ),
                 'tts_rate': tts_rate,
                 'burn_subtitles': burn_subtitles,
+                **video_options,
                 **subtitle_options,
             }
 
@@ -3193,7 +3553,12 @@ def get_status(task_id):
         'stage': task.get('stage'),
         'percentage': task.get('percentage', 0),
         'stage_percentage': task.get('stage_percentage', 0),
+        'stage_current': task.get('stage_current'),
+        'stage_total': task.get('stage_total'),
         'message': task.get('message', ''),
+        'started_at': task.get('started_at'),
+        'stage_started_at': task.get('stage_started_at'),
+        'updated_at': task.get('updated_at'),
         'batch_id': task.get('batch_id'),
         'strategy_source': task.get('strategy_source', 'batch'),
         'owner_username': _task_owner(task),
@@ -3304,6 +3669,255 @@ def get_operation_logs():
         'logs': logs,
         'current_user': current_user_context(),
         'is_super_admin': is_super_admin(),
+    })
+
+
+def _account_payload(data: dict, *, creating: bool) -> tuple[dict | None, str | None]:
+    username = str(data.get('username') or '').strip()
+    display_name = str(data.get('display_name') or username).strip()
+    role = _normalize_role(str(data.get('role') or USER_ROLE).strip())
+    password = str(data.get('password') or '')
+    active = bool(data.get('active', True))
+    if creating:
+        if not re.fullmatch(r'[A-Za-z0-9_.@-]{3,40}', username):
+            return None, '账号名必须为 3-40 位字母、数字、点、下划线、@ 或横线'
+        if len(password) < 6:
+            return None, '密码至少需要 6 位'
+    elif password and len(password) < 6:
+        return None, '密码至少需要 6 位'
+    if not display_name:
+        display_name = username
+    payload = {
+        'username': username,
+        'display_name': display_name[:80],
+        'role': role,
+        'active': active,
+    }
+    if password:
+        payload['password_hash'] = generate_password_hash(password)
+    return payload, None
+
+
+@app.route('/api/accounts')
+def list_accounts():
+    admin_error = _require_super_admin()
+    if admin_error:
+        return admin_error
+    try:
+        accounts = [
+            _public_account(account)
+            for account in task_store.list_accounts(include_inactive=True)
+        ]
+    except Exception as exc:
+        logger.exception(f'读取账号列表失败: {exc}')
+        return jsonify({'error': '读取账号列表失败'}), 500
+    return jsonify({
+        'accounts': accounts,
+        'current_user': current_user_context(),
+    })
+
+
+@app.route('/api/accounts', methods=['POST'])
+def create_account():
+    admin_error = _require_super_admin()
+    if admin_error:
+        return admin_error
+    data = request.get_json(silent=True) or {}
+    payload, error = _account_payload(data, creating=True)
+    if error:
+        return jsonify({'error': error}), 400
+    try:
+        task_store.create_account(payload)
+    except Exception as exc:
+        logger.exception(f'创建账号失败: {exc}')
+        return jsonify({'error': '账号已存在或创建失败'}), 400
+    log_operation('create_account', target_name=payload['username'])
+    return jsonify({'success': True, 'account': _public_account({
+        **payload,
+        'created_at': time.time(),
+        'updated_at': time.time(),
+    })})
+
+
+@app.route('/api/accounts/<username>', methods=['PATCH'])
+def update_account(username):
+    admin_error = _require_super_admin()
+    if admin_error:
+        return admin_error
+    data = request.get_json(silent=True) or {}
+    existing = task_store.get_account(username)
+    if not existing:
+        return jsonify({'error': '账号不存在'}), 404
+    payload, error = _account_payload({**existing, **data, 'username': username}, creating=False)
+    if error:
+        return jsonify({'error': error}), 400
+    current_username = current_user_context()['username']
+    if username == current_username:
+        if payload.get('role') != SUPER_ADMIN_ROLE:
+            return jsonify({'error': '不能将当前登录账号降级'}), 400
+        if not payload.get('active', True):
+            return jsonify({'error': '不能停用当前登录账号'}), 400
+    if (
+        existing.get('role') == SUPER_ADMIN_ROLE
+        and existing.get('active')
+        and (payload.get('role') != SUPER_ADMIN_ROLE or not payload.get('active', True))
+        and task_store.count_active_super_admins() <= 1
+    ):
+        return jsonify({'error': '至少需要保留一个启用的超级管理员'}), 400
+    updates = {
+        'display_name': payload['display_name'],
+        'role': payload['role'],
+        'active': payload['active'],
+    }
+    if payload.get('password_hash'):
+        updates['password_hash'] = payload['password_hash']
+    try:
+        task_store.update_account(username, updates)
+    except Exception as exc:
+        logger.exception(f'更新账号失败: {exc}')
+        return jsonify({'error': '更新账号失败'}), 500
+    log_operation('update_account', target_name=username)
+    updated = task_store.get_account(username)
+    return jsonify({'success': True, 'account': _public_account(updated)})
+
+
+@app.route('/api/accounts/<username>', methods=['DELETE'])
+def delete_account(username):
+    admin_error = _require_super_admin()
+    if admin_error:
+        return admin_error
+    existing = task_store.get_account(username)
+    if not existing:
+        return jsonify({'error': '账号不存在'}), 404
+    if username == current_user_context()['username']:
+        return jsonify({'error': '不能删除当前登录账号'}), 400
+    if (
+        existing.get('role') == SUPER_ADMIN_ROLE
+        and existing.get('active')
+        and task_store.count_active_super_admins() <= 1
+    ):
+        return jsonify({'error': '至少需要保留一个启用的超级管理员'}), 400
+    try:
+        task_store.update_account(username, {'active': False})
+    except Exception as exc:
+        logger.exception(f'停用账号失败: {exc}')
+        return jsonify({'error': '停用账号失败'}), 500
+    log_operation('delete_account', target_name=username)
+    return jsonify({'success': True, 'message': '账号已停用'})
+
+
+@app.route('/api/debug/overview')
+def debug_overview():
+    """返回调试工作台总览，只读且仅超级管理员可见。"""
+    blocked = _require_super_admin()
+    if blocked:
+        return blocked
+    queue_positions = _debug_queue_positions()
+    all_tasks = [
+        task_summary(task_id, task, queue_positions)
+        for task_id, task in tasks.items()
+    ]
+    all_tasks = sorted(
+        all_tasks,
+        key=lambda task: task.get('created_at') or 0,
+        reverse=True,
+    )
+    counts: dict[str, int] = {}
+    for task in all_tasks:
+        status = task.get('status') or 'unknown'
+        counts[status] = counts.get(status, 0) + 1
+    return jsonify({
+        'tasks': _redact_debug_value(all_tasks),
+        'counts': counts,
+        'queue_size': conversion_queue.size(),
+        'progress_queue_count': len(progress_queues),
+        'cancellation_event_count': len(cancellation_events),
+        'paths': {
+            'upload_folder': _path_info(UPLOAD_FOLDER),
+            'output_folder': _path_info(OUTPUT_FOLDER),
+            'state_file': _path_info(STATE_FILE),
+            'task_db_file': _path_info(TASK_DB_FILE),
+            'voice_preview_folder': _path_info(VOICE_PREVIEW_FOLDER),
+        },
+        'environment': {
+            'dashboard_enabled': DASHBOARD_ENABLED,
+            'login_disabled': bool(app.config.get('LOGIN_DISABLED')),
+            'resource_limits': {
+                'cpu_percent': RESOURCE_CPU_LIMIT,
+                'memory_percent': RESOURCE_MEMORY_LIMIT,
+                'min_disk_gb': RESOURCE_MIN_DISK_GB,
+                'check_interval_seconds': RESOURCE_CHECK_INTERVAL,
+            },
+            'env_status': _debug_env_status(),
+            'tools': _debug_tool_status(),
+        },
+    })
+
+
+@app.route('/api/debug/tasks/<task_id>')
+def debug_task_detail(task_id):
+    """返回单任务只读调试详情。"""
+    blocked = _require_super_admin()
+    if blocked:
+        return blocked
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    output_dir = task.get('output_dir')
+    artifact_paths = {
+        'source_file': task.get('file_path'),
+        'output_dir': output_dir,
+        'preview_json': task.get('preview_path') or (str(Path(output_dir) / 'preview.json') if output_dir else None),
+        'course_json': task.get('course_json_path') or (str(Path(output_dir) / 'course.json') if output_dir else None),
+        'presentation': task.get('presentation_path'),
+        'subtitles': task.get('subtitles_path'),
+        'video': task.get('video_path'),
+    }
+    state_entry = next(
+        (item for item in _read_state_file() if item.get('task_id') == task_id),
+        None,
+    )
+    return jsonify({
+        'task_id': task_id,
+        'task': _redact_debug_value(task),
+        'paths': {key: _path_info(value) for key, value in artifact_paths.items()},
+        'json_artifacts': {
+            'state_entry': _redact_debug_value(state_entry),
+            'preview_json': _read_json_artifact(artifact_paths['preview_json']),
+            'course_json': _read_json_artifact(artifact_paths['course_json']),
+        },
+        'output_files': _debug_output_files(task),
+        'progress_queue_present': task_id in progress_queues,
+        'cancellation_event_present': task_id in cancellation_events,
+    })
+
+
+@app.route('/api/debug/logs')
+def debug_logs():
+    """返回浏览器可读的最近操作记录；运行 stdout 日志仍以 Docker logs 为准。"""
+    blocked = _require_super_admin()
+    if blocked:
+        return blocked
+    try:
+        limit = int(request.args.get('limit', 200))
+    except (TypeError, ValueError):
+        limit = 200
+    keyword = (request.args.get('q') or '').strip().lower()
+    try:
+        logs = task_store.list_operation_logs(limit=limit)
+    except Exception as exc:
+        logger.exception(f'读取调试日志失败: {exc}')
+        return jsonify({'error': '读取调试日志失败'}), 500
+    if keyword:
+        logs = [
+            log for log in logs
+            if keyword in ' '.join(str(log.get(key) or '') for key in (
+                'actor', 'role', 'action', 'task_id', 'target_name', 'message',
+            )).lower()
+        ]
+    return jsonify({
+        'logs': logs,
+        'note': '此处显示应用操作日志；容器 stdout/stderr 仍通过 docker logs 查看，避免调试页直接控制 Docker。',
     })
 
 

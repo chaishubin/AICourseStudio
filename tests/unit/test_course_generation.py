@@ -250,6 +250,7 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     assert "subtitles=filename='course.srt'" in command[command.index("-vf") + 1]
     subtitle_filter = command[command.index("-vf") + 1]
     assert "drawbox=x=96:y=900:w=1728:h=110" in subtitle_filter
+    assert "original_size=1920x1080" in subtitle_filter
     assert "color=0x111111@0.55" in subtitle_filter
     assert "FontSize=46" in subtitle_filter
     assert "PrimaryColour=&H00FFFFFF" in subtitle_filter
@@ -262,6 +263,33 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     assert command[command.index("-g") + 1] == "48"
     assert command[command.index("-movflags") + 1] == "+faststart"
     assert run.call_args.kwargs["cwd"] == temp_dir
+
+
+def test_course_pipeline_scales_subtitle_design_units_for_video_resolution(temp_dir):
+    from vidppt.course_pipeline import CoursePipeline
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=1280,
+        video_height=720,
+        subtitle_x=96,
+        subtitle_y=900,
+        subtitle_width=1728,
+        subtitle_height=110,
+        subtitle_font_size=46,
+        subtitle_outline_width=3,
+    )
+
+    subtitle_filter = CoursePipeline._subtitle_filter("course.srt", config)
+
+    assert "drawbox=x=64:y=600:w=1152:h=73" in subtitle_filter
+    assert "original_size=1280x720" in subtitle_filter
+    assert "FontSize=31" in subtitle_filter
+    assert "Outline=2" in subtitle_filter
+    assert "MarginL=64" in subtitle_filter
+    assert "MarginR=64" in subtitle_filter
+    assert "MarginV=53" in subtitle_filter
 
 
 def test_moviepy_progress_uses_video_frames_not_audio_chunks():

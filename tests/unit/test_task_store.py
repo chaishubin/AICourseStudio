@@ -65,6 +65,33 @@ def test_task_store_records_operation_logs(temp_dir):
     assert len(all_logs) == 2
 
 
+def test_task_store_manages_accounts(temp_dir):
+    store = TaskStore(temp_dir / "tasks.db")
+    store.create_account({
+        "username": "teacher",
+        "password_hash": "hash",
+        "role": "user",
+        "display_name": "Teacher",
+        "active": True,
+    })
+
+    account = store.get_account("teacher")
+    assert account["display_name"] == "Teacher"
+    assert account["active"] is True
+
+    store.update_account("teacher", {
+        "display_name": "Teacher A",
+        "role": "super_admin",
+        "active": False,
+    })
+
+    updated = store.get_account("teacher")
+    assert updated["display_name"] == "Teacher A"
+    assert updated["role"] == "super_admin"
+    assert updated["active"] is False
+    assert store.list_accounts()[0]["username"] == "teacher"
+
+
 def test_delete_route_removes_database_record_and_files(monkeypatch, temp_dir):
     import web.app as web_app
 

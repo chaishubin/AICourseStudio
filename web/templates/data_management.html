@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>数据管理 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=20">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=21">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -36,6 +36,14 @@
                 <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
                     <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
+                {% if is_super_admin %}
+                <a class="nav-item" href="{{ url_for('accounts_page') }}">
+                    <span class="nav-icon">◎</span><span>账号管理</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('debug_page') }}">
+                    <span class="nav-icon">◇</span><span>调试工作台</span>
+                </a>
+                {% endif %}
             </nav>
             <div class="sidebar-meta">
                 <span class="status-dot"></span>
@@ -109,6 +117,6 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=5"></script>
+    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=6"></script>
 </body>
 </html>

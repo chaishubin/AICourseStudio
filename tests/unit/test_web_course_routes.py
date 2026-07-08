@@ -87,6 +87,12 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
             "subtitle_height": 80,
             "subtitle_font_size": 48,
             "subtitle_background_opacity": 0.5,
+            "video_width": 1280,
+            "video_height": 720,
+            "video_fps": 24,
+            "video_preset": "ultrafast",
+            "video_crf": 28,
+            "audio_bitrate": "96k",
         },
     )
 
@@ -100,8 +106,13 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
     assert web_app.tasks[task_id]["strategy"]["quality_mode"] == "balanced"
     assert web_app.tasks[task_id]["strategy"]["subtitle_y"] == 940
     assert web_app.tasks[task_id]["strategy"]["subtitle_font_size"] == 48
+    assert web_app.tasks[task_id]["strategy"]["video_width"] == 1280
+    assert web_app.tasks[task_id]["strategy"]["video_preset"] == "ultrafast"
+    assert web_app.tasks[task_id]["strategy"]["video_crf"] == 28
     assert web_app.tasks[task_id]["media_options"]["burn_subtitles"] is False
     assert web_app.tasks[task_id]["media_options"]["subtitle_height"] == 80
+    assert web_app.tasks[task_id]["media_options"]["video_height"] == 720
+    assert web_app.tasks[task_id]["media_options"]["audio_bitrate"] == "96k"
     assert (
         web_app.tasks[task_id]["media_options"]["subtitle_background_opacity"]
         == 0.5
@@ -163,8 +174,8 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     )
     assert "&v=" in preview_image_url
     preview_payload = preview_response.get_json()
-    assert preview_payload["duration_estimate"]["total_seconds"] == 15.0
-    assert preview_payload["pages"][0]["estimated_seconds"] == 15.0
+    assert preview_payload["duration_estimate"]["total_seconds"] == 4.0
+    assert preview_payload["pages"][0]["estimated_seconds"] == 4.0
 
     image_response = client.get(preview_image_url)
     assert image_response.status_code == 200
@@ -191,11 +202,25 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert save_response.status_code == 200
     saved = json.loads((output_dir / "preview.json").read_text(encoding="utf-8"))
     assert saved["pages"][0]["script"] == "修改后的讲稿"
-    assert save_response.get_json()["duration_estimate"]["total_seconds"] == 15.0
+    assert save_response.get_json()["duration_estimate"]["total_seconds"] == 4.0
 
-    continue_response = client.post(f"/api/course-continue/{task_id}", json={})
+    continue_response = client.post(
+        f"/api/course-continue/{task_id}",
+        json={
+            "tts_engine": "edge-tts",
+            "voice": "zh-CN-XiaoxiaoNeural",
+            "video_width": 1280,
+            "video_height": 720,
+            "video_preset": "superfast",
+            "video_crf": 26,
+            "audio_loudness_lufs": -18,
+        },
+    )
     assert continue_response.status_code == 200
     assert web_app.tasks[task_id]["status"] == "pending"
+    assert web_app.tasks[task_id]["media_options"]["video_width"] == 1280
+    assert web_app.tasks[task_id]["media_options"]["video_preset"] == "superfast"
+    assert web_app.tasks[task_id]["media_options"]["audio_loudness_lufs"] == -18
     assert isinstance(web_app.progress_queues[task_id], Queue)
     assert enqueued[0][0] == (web_app.run_media_generation, task_id)
 
@@ -795,6 +820,9 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     assert captured_scripts == ["用户确认后的讲稿"]
     assert web_app.tasks[task_id]["status"] == "completed"
     assert Path(web_app.tasks[task_id]["video_path"]).exists()
+    saved_preview = json.loads((output_dir / "preview.json").read_text(encoding="utf-8"))
+    assert saved_preview["pages"][0]["duration"] == 2.0
+    assert saved_preview["duration_estimate"]["total_seconds"] == 2.0
     video_progress = [
         event["percentage"]
         for event in list(web_app.progress_queues[task_id].queue)
@@ -1052,9 +1080,9 @@ def test_course_segment_recommendation_and_apply(monkeypatch, temp_dir):
 
     assert response.status_code == 200
     assert payload["segments"][0]["title"] == "第一课"
-    assert payload["segments"][0]["estimated_seconds"] == 130.0
+    assert payload["segments"][0]["estimated_seconds"] == 123.8
     assert saved_preview["lesson_segments"][1]["start_page"] == 3
-    assert saved_preview["lesson_segments"][1]["estimated_minutes"] == 1.1
+    assert saved_preview["lesson_segments"][1]["estimated_minutes"] == 1.0
     assert saved_preview["pages"][0]["lesson_segment"]["end_page"] == 2
     assert web_app.tasks[task_id]["lesson_segments"][0]["title"] == "第一课"
 
@@ -1138,15 +1166,94 @@ def test_management_pages_are_separate_from_course_workspace():
     client = web_app.app.test_client()
     data_page = client.get("/data-management").get_data(as_text=True)
     logs_page = client.get("/operation-logs-page").get_data(as_text=True)
+    debug_page = client.get("/debug").get_data(as_text=True)
 
     assert 'id="asset-table-body"' in data_page
     assert 'id="operation-log-body"' not in data_page
     assert 'id="upload-area"' not in data_page
     assert 'js/admin_pages.js' in data_page
+    assert '/static/css/main.css?v=21' in data_page
+    assert '/static/js/admin_pages.js?v=6' in data_page
     assert 'id="operation-log-body"' in logs_page
     assert 'id="asset-table-body"' not in logs_page
     assert 'id="upload-area"' not in logs_page
     assert 'js/admin_pages.js' in logs_page
+    assert 'id="debug-task-body"' in debug_page
+    assert 'id="debug-task-detail"' in debug_page
+    assert 'id="upload-area"' not in debug_page
+    assert 'js/debug.js' in debug_page
+
+
+def test_accounts_page_is_separate_admin_page():
+    import web.app as web_app
+
+    html = web_app.app.test_client().get("/accounts").get_data(as_text=True)
+
+    assert 'id="account-form"' in html
+    assert 'id="account-table-body"' in html
+    assert 'id="upload-area"' not in html
+    assert 'js/admin_pages.js' in html
+
+
+def test_debug_api_overview_redacts_sensitive_values(monkeypatch):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, 'tasks', {
+        'debug-task': {
+            'status': 'completed',
+            'original_name': 'course.pptx',
+            'owner_username': 'admin',
+            'created_at': 1000,
+            'strategy': {
+                'llm_engine': 'qwen',
+                'api_key': 'secret-value',
+                'nested': {'access_token': 'token-value'},
+            },
+        },
+    })
+
+    response = web_app.app.test_client().get('/api/debug/overview')
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    strategy = payload['tasks'][0]['strategy']
+    assert strategy['api_key'] == '已隐藏'
+    assert strategy['nested']['access_token'] == '已隐藏'
+    assert payload['environment']['env_status']
+
+
+def test_debug_task_detail_reads_artifacts(monkeypatch, temp_dir):
+    import json
+    import web.app as web_app
+
+    output_dir = temp_dir / 'debug-task'
+    output_dir.mkdir()
+    preview = output_dir / 'preview.json'
+    course = output_dir / 'course.json'
+    video = output_dir / 'video.mp4'
+    preview.write_text(json.dumps({'task_id': 'debug-task', 'pages': []}), encoding='utf-8')
+    course.write_text(json.dumps({'title': '测试课程'}), encoding='utf-8')
+    video.write_bytes(b'video')
+    monkeypatch.setattr(web_app, 'tasks', {
+        'debug-task': {
+            'status': 'completed',
+            'original_name': 'course.pptx',
+            'owner_username': 'admin',
+            'output_dir': str(output_dir),
+            'preview_path': str(preview),
+            'course_json_path': str(course),
+            'video_path': str(video),
+        },
+    })
+
+    response = web_app.app.test_client().get('/api/debug/tasks/debug-task')
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload['paths']['preview_json']['exists'] is True
+    assert payload['json_artifacts']['preview_json']['data']['task_id'] == 'debug-task'
+    assert payload['json_artifacts']['course_json']['data']['title'] == '测试课程'
+    assert [item['name'] for item in payload['output_files']]
 
 
 def test_subtitle_font_catalog_endpoint(monkeypatch):
