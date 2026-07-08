@@ -1173,7 +1173,7 @@ def test_management_pages_are_separate_from_course_workspace():
     assert 'id="upload-area"' not in data_page
     assert 'js/admin_pages.js' in data_page
     assert '/static/css/main.css?v=21' in data_page
-    assert '/static/js/admin_pages.js?v=6' in data_page
+    assert '/static/js/admin_pages.js?v=7' in data_page
     assert 'id="operation-log-body"' in logs_page
     assert 'id="asset-table-body"' not in logs_page
     assert 'id="upload-area"' not in logs_page

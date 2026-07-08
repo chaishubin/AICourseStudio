@@ -426,6 +426,95 @@ def _task_created_at(task: dict) -> float | None:
     )
 
 
+def _positive_float(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number > 0:
+        return number
+    return None
+
+
+def _preview_duration_seconds(task: dict) -> float | None:
+    preview_path = task.get('preview_path')
+    if not preview_path:
+        output_dir = task.get('output_dir')
+        if output_dir:
+            preview_path = str(Path(output_dir) / 'preview.json')
+    if not preview_path:
+        return None
+    path = Path(preview_path)
+    if not path.is_file():
+        return None
+    try:
+        preview = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    duration_estimate = preview.get('duration_estimate')
+    if isinstance(duration_estimate, dict):
+        duration = _positive_float(duration_estimate.get('total_seconds'))
+        if duration:
+            return round(duration, 2)
+    total = 0.0
+    for page in preview.get('pages', []):
+        if not isinstance(page, dict):
+            continue
+        duration = _positive_float(page.get('duration'))
+        if duration:
+            total += duration
+    return round(total, 2) if total > 0 else None
+
+
+def _video_duration_seconds(video_path: str | None) -> float | None:
+    if not video_path:
+        return None
+    path = Path(video_path)
+    if not path.is_file():
+        return None
+    ffprobe = shutil.which('ffprobe')
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    duration = _positive_float(result.stdout.strip())
+    return round(duration, 2) if duration else None
+
+
+def _task_course_duration_seconds(task: dict) -> float | None:
+    if task.get('status') != 'completed':
+        return None
+    return (
+        _positive_float(task.get('course_duration_seconds'))
+        or _positive_float(task.get('video_duration_seconds'))
+        or _preview_duration_seconds(task)
+    )
+
+
+def _task_generation_duration_seconds(task: dict, created_at: float | None) -> float | None:
+    completed_at = _positive_float(task.get('completed_at'))
+    if not completed_at or not created_at:
+        return None
+    duration = completed_at - created_at
+    return round(duration, 2) if duration >= 0 else None
+
+
 def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> dict:
     source_path = task.get('file_path', '')
     created_at = _task_created_at(task)
@@ -462,6 +551,8 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'stage_timings': task.get('stage_timings', {}),
         'updated_at': task.get('updated_at'),
         'completed_at': task.get('completed_at'),
+        'course_duration_seconds': _task_course_duration_seconds(task),
+        'generation_duration_seconds': _task_generation_duration_seconds(task, created_at),
     }
 
 
@@ -1551,6 +1642,11 @@ class WebProgressTracker:
     def complete(self, video_path: str = None, **artifacts):
         """标记完成"""
         self._complete_current_stage()
+        if 'course_duration_seconds' not in artifacts:
+            artifacts['course_duration_seconds'] = (
+                _video_duration_seconds(video_path)
+                or _preview_duration_seconds(tasks.get(self.task_id, {}))
+            )
         self._update_task(
             status='completed',
             stage='complete',

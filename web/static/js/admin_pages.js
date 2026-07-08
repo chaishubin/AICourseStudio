@@ -70,7 +70,7 @@ class AdminDataPages {
             this.renderAssetTable(data.tasks || [], this.assetPaginationState.total || 0);
             this.renderAssetPagination();
         } catch (error) {
-            this.assetTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">${this.escape(error.message)}</td></tr>`;
+            this.assetTableBody.innerHTML = `<tr><td colspan="9" class="table-empty">${this.escape(error.message)}</td></tr>`;
             if (this.assetPagination) this.assetPagination.hidden = true;
         }
     }
@@ -78,7 +78,7 @@ class AdminDataPages {
     renderAssetTable(tasks, totalCount = tasks.length) {
         if (!tasks.length) {
             const message = totalCount ? '没有符合筛选条件的课程数据' : '暂无课程数据';
-            this.assetTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">${message}</td></tr>`;
+            this.assetTableBody.innerHTML = `<tr><td colspan="9" class="table-empty">${message}</td></tr>`;
             return;
         }
         this.assetTableBody.innerHTML = tasks.map(task => {
@@ -121,6 +121,8 @@ class AdminDataPages {
                     <td>${this.escape(task.owner_username || task.created_by || '-')}</td>
                     <td><span class="status-pill status-${this.escapeAttr(task.status || 'unknown')}">${this.escape(this.statusText(task))}</span></td>
                     <td>${Math.round(task.percentage || 0)}%</td>
+                    <td>${this.formatDuration(task.course_duration_seconds)}</td>
+                    <td>${this.formatDuration(task.generation_duration_seconds)}</td>
                     <td>${this.formatTime(task.created_at)}</td>
                     <td>${this.formatTime(task.updated_at || task.completed_at || task.started_at || task.created_at)}</td>
                     <td class="table-actions">${actions.join('') || '-'}</td>
@@ -448,6 +450,22 @@ class AdminDataPages {
             hour: '2-digit',
             minute: '2-digit'
         });
+    }
+
+    formatDuration(value) {
+        const seconds = Number(value);
+        if (!Number.isFinite(seconds) || seconds <= 0) return '-';
+        const totalSeconds = Math.round(seconds);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const remainingSeconds = totalSeconds % 60;
+        if (hours > 0) {
+            return `${hours}时${String(minutes).padStart(2, '0')}分${String(remainingSeconds).padStart(2, '0')}秒`;
+        }
+        if (minutes > 0) {
+            return `${minutes}分${String(remainingSeconds).padStart(2, '0')}秒`;
+        }
+        return `${remainingSeconds}秒`;
     }
 
     escape(value) {

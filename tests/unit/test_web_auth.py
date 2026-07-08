@@ -237,6 +237,43 @@ def test_tasks_supports_pagination_and_filters(monkeypatch):
     ]
 
 
+def test_tasks_include_course_and_generation_durations(monkeypatch, temp_dir):
+    import json
+    import web.app as app_module
+
+    output_dir = temp_dir / 'duration-task'
+    output_dir.mkdir()
+    (output_dir / 'preview.json').write_text(json.dumps({
+        'pages': [
+            {'page_number': 1, 'duration': 62.4},
+            {'page_number': 2, 'duration': 63.0},
+        ],
+    }), encoding='utf-8')
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'tasks', {
+        'duration-task': {
+            'status': 'completed',
+            'original_name': 'duration.pptx',
+            'owner_username': 'teacher',
+            'output_dir': str(output_dir),
+            'created_at': 1000,
+            'completed_at': 1185,
+        },
+    })
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+
+    response = client.get('/api/tasks')
+
+    assert response.status_code == 200
+    task = response.get_json()['tasks'][0]
+    assert task['course_duration_seconds'] == 125.4
+    assert task['generation_duration_seconds'] == 185
+
+
 def test_regular_user_cannot_download_other_users_file(monkeypatch, temp_dir):
     import web.app as app_module
 
