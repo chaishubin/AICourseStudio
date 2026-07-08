@@ -44,6 +44,229 @@ body {
     overflow-x: hidden;
 }
 
+/* ── App notifications and dialogs ───────────────────── */
+.vidppt-toast-root {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(360px, calc(100vw - 32px));
+    pointer-events: none;
+}
+
+.vidppt-toast {
+    display: grid;
+    grid-template-columns: 28px 1fr 28px;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-xs);
+    background: rgba(29, 29, 31, 0.96);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.36);
+    color: var(--color-text);
+    transform: translateY(-8px);
+    opacity: 0;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    pointer-events: auto;
+}
+
+.vidppt-toast.visible {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.vidppt-toast.leaving {
+    transform: translateY(-6px);
+    opacity: 0;
+}
+
+.vidppt-toast-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--color-text);
+    background: rgba(41, 151, 255, 0.16);
+}
+
+.vidppt-toast-success .vidppt-toast-icon { background: rgba(48, 209, 88, 0.18); color: var(--color-success); }
+.vidppt-toast-error .vidppt-toast-icon { background: rgba(255, 69, 58, 0.18); color: var(--color-error); }
+.vidppt-toast-warning .vidppt-toast-icon { background: rgba(255, 159, 10, 0.18); color: #ff9f0a; }
+
+.vidppt-toast-message {
+    min-width: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.vidppt-toast-close {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 50%;
+    color: var(--color-text-2);
+    background: transparent;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.vidppt-toast-close:hover {
+    color: var(--color-text);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.vidppt-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.58);
+    opacity: 0;
+    transition: opacity 0.18s ease;
+}
+
+.vidppt-modal-overlay.visible {
+    opacity: 1;
+}
+
+.vidppt-modal {
+    width: min(460px, 100%);
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    gap: 14px;
+    padding: 20px;
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+    transform: translateY(8px) scale(0.98);
+    transition: transform 0.18s ease;
+}
+
+.vidppt-modal-overlay.visible .vidppt-modal {
+    transform: translateY(0) scale(1);
+}
+
+.vidppt-modal-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    background: rgba(41, 151, 255, 0.14);
+    color: var(--color-accent);
+}
+
+.vidppt-modal-icon-success { background: rgba(48, 209, 88, 0.16); color: var(--color-success); }
+.vidppt-modal-icon-error { background: rgba(255, 69, 58, 0.16); color: var(--color-error); }
+.vidppt-modal-icon-warning { background: rgba(255, 159, 10, 0.16); color: #ff9f0a; }
+
+.vidppt-modal-content {
+    min-width: 0;
+}
+
+.vidppt-modal-content h2 {
+    font-size: 18px;
+    line-height: 1.3;
+    margin-bottom: 8px;
+    color: var(--color-text);
+}
+
+.vidppt-modal-message {
+    white-space: pre-line;
+    color: var(--color-text-2);
+    font-size: 14px;
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.vidppt-modal-input {
+    width: 100%;
+    margin-top: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-xs);
+    color: var(--color-text);
+    background: var(--color-surface-2);
+    font: inherit;
+    outline: none;
+}
+
+.vidppt-modal-input:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px rgba(41, 151, 255, 0.16);
+}
+
+.vidppt-modal-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.vidppt-modal-button {
+    min-width: 84px;
+    min-height: 36px;
+    border: 0;
+    border-radius: var(--radius-xs);
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.vidppt-modal-button.secondary {
+    color: var(--color-text);
+    background: var(--color-surface-2);
+}
+
+.vidppt-modal-button.primary {
+    color: #fff;
+    background: var(--color-accent);
+}
+
+.vidppt-modal-button.danger {
+    background: var(--color-error);
+}
+
+@media (max-width: 640px) {
+    .vidppt-toast-root {
+        top: 12px;
+        right: 12px;
+        left: 12px;
+        width: auto;
+    }
+
+    .vidppt-modal {
+        grid-template-columns: 1fr;
+    }
+
+    .vidppt-modal-actions {
+        flex-direction: column-reverse;
+    }
+
+    .vidppt-modal-button {
+        width: 100%;
+    }
+}
+
 .page {
     min-height: 100vh;
     display: flex;

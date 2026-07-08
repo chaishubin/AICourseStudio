@@ -28,8 +28,14 @@ class AdminDataPages {
         }
         this.assetTableBody.innerHTML = tasks.map(task => {
             const actions = [];
-            if (task.status === 'awaiting_confirmation') {
-                actions.push(`<a class="table-action" href="/#course-preview-module">预览审核</a>`);
+            const reviewUrl = this.reviewUrl(task.task_id);
+            if (task.status === 'awaiting_confirmation' && reviewUrl) {
+                actions.push(`<a class="table-action" href="${reviewUrl}">预览审核</a>`);
+            } else if (task.status === 'completed' && task.video_path) {
+                const videoUrl = `/api/video?path=${encodeURIComponent(task.video_path)}`;
+                actions.push(`<a class="table-action" href="${videoUrl}" target="_blank" rel="noopener">预览</a>`);
+            } else if (task.preview_path && reviewUrl) {
+                actions.push(`<a class="table-action" href="${reviewUrl}">预览</a>`);
             }
             if (task.status === 'completed' && task.video_path) {
                 const url = `/api/download?task_id=${encodeURIComponent(task.task_id)}&path=${encodeURIComponent(task.video_path)}`;
@@ -54,17 +60,28 @@ class AdminDataPages {
         });
     }
 
+    reviewUrl(taskId) {
+        if (!taskId) return '';
+        return `/?preview_task=${encodeURIComponent(taskId)}#course-preview-module`;
+    }
+
     async deleteTask(taskId, button) {
-        if (!window.confirm('确定物理删除该课程产物吗？该操作无法恢复。')) return;
+        const confirmed = await window.VidPPTUI.confirm('确定物理删除该课程产物吗？该操作无法恢复。', {
+            title: '删除课程产物',
+            confirmText: '永久删除',
+            danger: true
+        });
+        if (!confirmed) return;
         button.disabled = true;
         try {
             const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '删除失败');
             await this.loadAssets();
+            window.VidPPTUI.toast(data.message || '课程产物已删除', { type: 'success' });
         } catch (error) {
             button.disabled = false;
-            window.alert(error.message);
+            await window.VidPPTUI.alert(error.message, { type: 'error' });
         }
     }
 

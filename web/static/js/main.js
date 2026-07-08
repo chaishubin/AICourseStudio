@@ -169,7 +169,7 @@ class AICourseStudioApp {
         this.restoreCurrentStrategy();
         this.loadStrategyTemplates();
         this.loadVoices({ preferredVoice: this.pendingVoiceSelection });
-        this.restoreTasks();
+        this.restoreTasks().then(() => this.openRequestedPreviewTask());
         this.loadOperationLogs();
         this.taskRefreshTimer = setInterval(() => this.reconcileTasks(), 5000);
     }
@@ -208,6 +208,20 @@ class AICourseStudioApp {
 
     _taskStatus(status) {
         return ['pending', 'processing'].includes(status) ? 'processing' : status;
+    }
+
+    requestedPreviewTaskId() {
+        try {
+            return new URLSearchParams(window.location.search).get('preview_task') || '';
+        } catch {
+            return '';
+        }
+    }
+
+    async openRequestedPreviewTask() {
+        const taskId = this.requestedPreviewTaskId();
+        if (!taskId) return;
+        await this.loadCoursePreview(taskId);
     }
 
     // ── Strategy draft persistence ─────────────────────
@@ -838,7 +852,7 @@ class AICourseStudioApp {
         const allowedExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
         const ext = '.' + file.name.split('.').pop().toLowerCase();
         if (!allowedExtensions.includes(ext)) {
-            alert('Logo 仅支持 PNG、JPG 或 WebP 图片');
+            window.VidPPTUI.alert('Logo 仅支持 PNG、JPG 或 WebP 图片', { type: 'warning' });
             return;
         }
         const formData = new FormData();
@@ -861,7 +875,7 @@ class AICourseStudioApp {
         } catch (error) {
             this.state.logoPath = null;
             this.elements.schoolLogoHint.textContent = error.message;
-            alert(error.message);
+            await window.VidPPTUI.alert(error.message, { type: 'error' });
         } finally {
             this.elements.schoolLogoButton.disabled = false;
         }
@@ -1102,12 +1116,12 @@ class AICourseStudioApp {
         const allowedExtensions = ['.docx', '.pdf', '.ppt', '.pptx'];
         const ext = '.' + file.name.split('.').pop().toLowerCase();
         if (!allowedExtensions.includes(ext)) {
-            alert('不支持的文件类型，请上传 Word、PDF 或 PowerPoint 文件');
+            window.VidPPTUI.alert('不支持的文件类型，请上传 Word、PDF 或 PowerPoint 文件', { type: 'warning' });
             return;
         }
 
         if (file.size === 0) {
-            alert('文件为空，请选择有效的课程文件');
+            window.VidPPTUI.alert('文件为空，请选择有效的课程文件', { type: 'warning' });
             return;
         }
 
@@ -1305,7 +1319,7 @@ class AICourseStudioApp {
         const voiceName = this.elements.customVoice.value.trim()
             || this.elements.voiceSelect.selectedOptions[0]?.textContent
             || '默认音色';
-        return window.confirm([
+        return window.VidPPTUI.confirm([
             `即将提交 ${pending.length} 个课程任务`,
             '',
             ...routeLines,
@@ -1315,7 +1329,10 @@ class AICourseStudioApp {
             lessonPlans ? `视觉方案：${this.elements.visualTheme.selectedOptions[0]?.textContent}` : '',
             '',
             '确认开始生成课程草稿？'
-        ].filter(Boolean).join('\n'));
+        ].filter(Boolean).join('\n'), {
+            title: '开始生成课程草稿',
+            confirmText: '开始生成'
+        });
     }
 
     _syncSelectAll() {
@@ -1441,8 +1458,11 @@ class AICourseStudioApp {
         this.showStatus('success', `已应用“${name}”生产模板`);
     }
 
-    saveStrategyTemplate() {
-        const name = window.prompt('请输入模板名称');
+    async saveStrategyTemplate() {
+        const name = await window.VidPPTUI.prompt('请输入模板名称', {
+            title: '保存生产模板',
+            placeholder: '例如：高校理论课标准配置'
+        });
         if (!name?.trim()) return;
         const trimmedName = name.trim().slice(0, 30);
         this.personalStrategyTemplates[trimmedName] = this.collectCurrentStrategy();
@@ -1456,10 +1476,15 @@ class AICourseStudioApp {
         this.showStatus('success', `已保存模板“${trimmedName}”`);
     }
 
-    deleteStrategyTemplate() {
+    async deleteStrategyTemplate() {
         const name = this.elements.strategyTemplateSelect.value;
         if (!this.personalStrategyTemplates[name]) return;
-        if (!window.confirm(`删除个人模板“${name}”？`)) return;
+        const confirmed = await window.VidPPTUI.confirm(`删除个人模板“${name}”？`, {
+            title: '删除生产模板',
+            confirmText: '删除',
+            danger: true
+        });
+        if (!confirmed) return;
         delete this.personalStrategyTemplates[name];
         localStorage.setItem(
             'courseStrategyTemplates',
@@ -1652,7 +1677,7 @@ class AICourseStudioApp {
     async handleConvert() {
         const pending = this.state.files.filter(f => f.status === 'pending' && f.filePath);
         if (pending.length === 0) return;
-        if (!this.confirmProduction(pending)) return;
+        if (!await this.confirmProduction(pending)) return;
 
         this.state.isConverting = true;
         this.elements.convertBtn.disabled = true;
@@ -2261,8 +2286,13 @@ class AICourseStudioApp {
             !item?.taskId
             || !['completed', 'error', 'interrupted', 'awaiting_confirmation'].includes(item.status)
         ) return;
-        const confirmed = window.confirm(
-            `确定物理删除“${item.fileName}”吗？\n\n该任务生成的 PPT、视频、字幕、音频和中间文件都将永久删除，且无法恢复。`
+        const confirmed = await window.VidPPTUI.confirm(
+            `确定物理删除“${item.fileName}”吗？\n\n该任务生成的 PPT、视频、字幕、音频和中间文件都将永久删除，且无法恢复。`,
+            {
+                title: '删除课程产物',
+                confirmText: '永久删除',
+                danger: true
+            }
         );
         if (!confirmed) return;
 
@@ -2352,7 +2382,10 @@ class AICourseStudioApp {
             video: '视频',
             media: '媒体'
         };
-        if (!window.confirm(`确认重新生成${labels[stage] || '当前阶段'}？已有可复用成果会保留。`)) {
+        if (!await window.VidPPTUI.confirm(`确认重新生成${labels[stage] || '当前阶段'}？已有可复用成果会保留。`, {
+            title: '重新生成',
+            confirmText: '重新生成'
+        })) {
             return;
         }
         if (button) button.disabled = true;
@@ -2388,7 +2421,12 @@ class AICourseStudioApp {
     }
 
     async stopTask(taskId) {
-        if (!taskId || !window.confirm('停止后将退回讲稿确认，并保留已生成成果。确认停止？')) {
+        if (!taskId) return;
+        if (!await window.VidPPTUI.confirm('停止后将退回讲稿确认，并保留已生成成果。确认停止？', {
+            title: '停止生成',
+            confirmText: '停止生成',
+            danger: true
+        })) {
             return;
         }
         const found = this.getItemByTaskId(taskId);
@@ -2416,7 +2454,7 @@ class AICourseStudioApp {
     handleDownload(index) {
         const item = this.state.files[index];
         if (!item || !item.videoPath) {
-            alert('没有可下载的视频');
+            window.VidPPTUI.alert('没有可下载的视频', { type: 'warning' });
             return;
         }
 
@@ -2432,14 +2470,14 @@ class AICourseStudioApp {
             document.body.removeChild(a);
         } catch (error) {
             console.error('下载错误:', error);
-            alert('下载失败: ' + error.message);
+            window.VidPPTUI.alert('下载失败: ' + error.message, { type: 'error' });
         }
     }
 
     handleDownloadByTaskId(taskId) {
         const found = this.getItemByTaskId(taskId);
         if (!found) {
-            alert('没有可下载的视频');
+            window.VidPPTUI.alert('没有可下载的视频', { type: 'warning' });
             return;
         }
         this.handleDownload(found.index);
@@ -2523,6 +2561,7 @@ class AICourseStudioApp {
         statusIcon.innerHTML = '';
         statusIcon.textContent = type === 'success' ? '\u2713' : '\u2715';
         statusText.textContent = message;
+        window.VidPPTUI?.toast(message, { type: type === 'success' ? 'success' : 'error' });
     }
 
     // ── State restoration ───────────────────────────────
@@ -2571,8 +2610,9 @@ class AICourseStudioApp {
                         this.startProgressStream(item.taskId);
                     }
                 }
+                const requestedTaskId = this.requestedPreviewTaskId();
                 const awaiting = this.state.files.find(item => item.status === 'awaiting_confirmation');
-                if (awaiting) this.loadCoursePreview(awaiting.taskId);
+                if (!requestedTaskId && awaiting) this.loadCoursePreview(awaiting.taskId);
             }
         } catch {
             // No tasks to restore
@@ -3563,10 +3603,14 @@ class AICourseStudioApp {
         button.disabled = true;
         if (!this.smartCutApplied) {
             const hasDraftCuts = this.smartCutSegments.length > 0;
-            const confirmed = window.confirm(
+            const confirmed = await window.VidPPTUI.confirm(
                 hasDraftCuts
                     ? '切课建议尚未应用，继续后只生成完整视频，不输出分段视频。是否继续？'
-                    : '尚未应用智能切课，继续后只生成完整视频。是否继续？'
+                    : '尚未应用智能切课，继续后只生成完整视频。是否继续？',
+                {
+                    title: '继续生成完整视频',
+                    confirmText: '继续生成'
+                }
             );
             if (!confirmed) {
                 button.disabled = false;
