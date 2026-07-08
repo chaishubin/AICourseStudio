@@ -16,6 +16,7 @@ import time
 import shutil
 import secrets
 import subprocess
+from io import BytesIO
 from pathlib import Path
 from queue import Queue, Empty
 from urllib.parse import quote
@@ -347,6 +348,117 @@ def _subtitle_font_catalog() -> list[str]:
             name.lower(),
         ),
     )
+
+
+def _subtitle_font_file(font_name: str) -> str | None:
+    """通过 fontconfig 匹配字体族对应的字体文件。"""
+    name = (font_name or SUBTITLE_FONT_FALLBACKS[0]).strip()[:80]
+    fc_match = shutil.which('fc-match')
+    if not fc_match:
+        return None
+    try:
+        result = subprocess.run(
+            [fc_match, '--format=%{file}', name],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception as exc:
+        logger.warning(f"匹配字幕字体失败 {name}: {exc}")
+        return None
+    path = result.stdout.strip()
+    return path if path and Path(path).is_file() else None
+
+
+def _parse_hex_color(value: str, default: str) -> tuple[int, int, int, int]:
+    color = (value or default).strip()
+    if not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+        color = default
+    return (
+        int(color[1:3], 16),
+        int(color[3:5], 16),
+        int(color[5:7], 16),
+        255,
+    )
+
+
+def _subtitle_preview_lines(draw, text: str, font, max_width: int) -> list[str]:
+    chars = list((text or '').strip()[:80])
+    if not chars:
+        return ['本页暂无字幕文本']
+    lines: list[str] = []
+    current = ''
+    for char in chars:
+        candidate = current + char
+        bbox = draw.textbbox((0, 0), candidate, font=font)
+        if current and bbox[2] - bbox[0] > max_width:
+            lines.append(current)
+            current = char
+            if len(lines) == 2:
+                break
+        else:
+            current = candidate
+    if current and len(lines) < 2:
+        lines.append(current)
+    if len(lines) == 2 and len(''.join(lines)) < len(chars):
+        lines[-1] = lines[-1].rstrip('，。；、,. ') + '…'
+    return lines
+
+
+def _render_subtitle_preview_image(params) -> BytesIO:
+    """使用真实字幕字体渲染透明文字层，供 PPT 预览叠加。"""
+    from PIL import Image, ImageDraw, ImageFont
+
+    width = max(120, min(1920, int(params.get('width', 1728) or 1728)))
+    height = max(32, min(360, int(params.get('height', 110) or 110)))
+    font_size = max(12, min(120, int(params.get('font_size', 46) or 46)))
+    outline_width = max(0, min(12, float(params.get('outline_width', 0) or 0)))
+    font_name = str(params.get('font', SUBTITLE_FONT_FALLBACKS[0])).strip()[:80]
+    text = str(params.get('text', '')).strip()[:120] or '本页暂无字幕文本'
+    text_color = _parse_hex_color(str(params.get('color', '#ffffff')), '#ffffff')
+    outline_color = _parse_hex_color(
+        str(params.get('outline_color', '#000000')),
+        '#000000',
+    )
+
+    image = Image.new('RGBA', (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    font_path = _subtitle_font_file(font_name)
+    try:
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+    except Exception as exc:
+        logger.warning(f"加载字幕预览字体失败 {font_name}: {exc}")
+        font = ImageFont.load_default()
+
+    max_text_width = max(24, width - 32)
+    lines = _subtitle_preview_lines(draw, text, font, max_text_width)
+    line_gap = max(2, int(font_size * 0.14))
+    stroke = int(round(outline_width))
+    bboxes = [
+        draw.textbbox((0, 0), line, font=font, stroke_width=stroke)
+        for line in lines
+    ]
+    line_heights = [bbox[3] - bbox[1] for bbox in bboxes]
+    block_height = sum(line_heights) + line_gap * (len(lines) - 1)
+    y = max(0, (height - block_height) // 2)
+    for line, bbox, line_height in zip(lines, bboxes, line_heights):
+        line_width = bbox[2] - bbox[0]
+        x = max(0, (width - line_width) // 2 - bbox[0])
+        draw.text(
+            (x, y - bbox[1]),
+            line,
+            font=font,
+            fill=text_color,
+            stroke_width=stroke,
+            stroke_fill=outline_color,
+        )
+        y += line_height + line_gap
+
+    buffer = BytesIO()
+    image.save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer
 
 
 def save_state(task_id: str):
@@ -1181,6 +1293,38 @@ def _estimate_page_duration(page: dict) -> float:
     return max(15.0, len(text.strip()) / 4.0)
 
 
+def _duration_estimate_payload(preview: dict) -> dict:
+    """汇总预览阶段的完整视频和已应用切课时长估算。"""
+    pages = sorted(
+        preview.get('pages', []),
+        key=lambda page: int(page.get('page_number', 0)),
+    )
+    total_seconds = sum(_estimate_page_duration(page) for page in pages)
+    segments = []
+    for index, segment in enumerate(preview.get('lesson_segments') or [], 1):
+        try:
+            start_page = int(segment.get('start_page'))
+            end_page = int(segment.get('end_page'))
+        except (TypeError, ValueError):
+            continue
+        segment_pages = [
+            page for page in pages
+            if start_page <= int(page.get('page_number', 0)) <= end_page
+        ]
+        if not segment_pages:
+            continue
+        segments.append(_segment_payload(
+            int(segment.get('id') or index),
+            str(segment.get('title') or f'第 {index} 课').strip(),
+            segment_pages,
+        ))
+    return {
+        'total_seconds': round(total_seconds, 1),
+        'total_minutes': round(total_seconds / 60, 1),
+        'segments': segments,
+    }
+
+
 def _page_section_key(page: dict) -> str:
     section = str(page.get('section_title') or '').strip()
     if section:
@@ -1272,15 +1416,22 @@ def _normalize_lesson_segments(raw_segments: list[dict], pages: list[dict]) -> l
             page_number for page_number in page_numbers
             if start_page <= page_number <= end_page
         }
+        if not pages_in_segment:
+            raise ValueError("推荐范围没有包含有效页面")
         if covered & pages_in_segment:
             raise ValueError("推荐范围不能重叠")
         covered.update(pages_in_segment)
-        normalized.append({
-            'id': index,
-            'title': str(item.get('title') or f'第 {index} 课').strip()[:80],
-            'start_page': start_page,
-            'end_page': end_page,
-        })
+        normalized.append(_segment_payload(
+            index,
+            str(item.get('title') or f'第 {index} 课').strip()[:80],
+            sorted(
+                (
+                    page for page in pages
+                    if start_page <= int(page['page_number']) <= end_page
+                ),
+                key=lambda page: int(page['page_number']),
+            ),
+        ))
     if covered != set(page_numbers):
         raise ValueError("推荐范围必须覆盖全部页面且不能遗漏")
     return normalized
@@ -1821,9 +1972,13 @@ def get_course_preview(task_id):
         {
             **page,
             'image_url': _slide_image_url(page['image_path']),
+            'estimated_seconds': round(_estimate_page_duration(page), 1),
         }
         for page in preview.get('pages', [])
     ]
+    duration_estimate = _duration_estimate_payload(preview)
+    preview['duration_estimate'] = duration_estimate
+    preview['lesson_segments'] = duration_estimate['segments']
     return jsonify(preview)
 
 
@@ -2080,7 +2235,14 @@ def save_course_preview(task_id):
         return jsonify({'error': str(exc)}), 400
     tasks[task_id]['message'] = '讲稿已保存，等待继续'
     save_state(task_id)
-    return jsonify({'success': True, 'message': '讲稿已保存'})
+    preview = _read_preview(task_id)
+    duration_estimate = _duration_estimate_payload(preview)
+    return jsonify({
+        'success': True,
+        'message': '讲稿已保存',
+        'duration_estimate': duration_estimate,
+        'lesson_segments': duration_estimate['segments'],
+    })
 
 
 @app.route('/api/course-continue/<task_id>', methods=['POST'])
@@ -2698,6 +2860,18 @@ def list_subtitle_fonts():
         'count': len(fonts),
         'default': SUBTITLE_FONT_FALLBACKS[0],
     })
+
+
+@app.route('/api/subtitle-preview-image')
+def subtitle_preview_image():
+    """生成透明字幕文字层，用于 PPT 预览中展示真实字体和描边效果。"""
+    response = make_response(send_file(
+        _render_subtitle_preview_image(request.args),
+        mimetype='image/png',
+        max_age=0,
+    ))
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 
 @app.route('/api/voices')

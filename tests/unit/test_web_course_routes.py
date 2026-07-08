@@ -157,6 +157,9 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
         "/api/slide-image"
     )
     assert "&v=" in preview_image_url
+    preview_payload = preview_response.get_json()
+    assert preview_payload["duration_estimate"]["total_seconds"] == 15.0
+    assert preview_payload["pages"][0]["estimated_seconds"] == 15.0
 
     image_response = client.get(preview_image_url)
     assert image_response.status_code == 200
@@ -183,6 +186,7 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert save_response.status_code == 200
     saved = json.loads((output_dir / "preview.json").read_text(encoding="utf-8"))
     assert saved["pages"][0]["script"] == "修改后的讲稿"
+    assert save_response.get_json()["duration_estimate"]["total_seconds"] == 15.0
 
     continue_response = client.post(f"/api/course-continue/{task_id}", json={})
     assert continue_response.status_code == 200
@@ -795,7 +799,9 @@ def test_course_segment_recommendation_and_apply(monkeypatch, temp_dir):
 
     assert response.status_code == 200
     assert payload["segments"][0]["title"] == "第一课"
+    assert payload["segments"][0]["estimated_seconds"] == 130.0
     assert saved_preview["lesson_segments"][1]["start_page"] == 3
+    assert saved_preview["lesson_segments"][1]["estimated_minutes"] == 1.1
     assert saved_preview["pages"][0]["lesson_segment"]["end_page"] == 2
     assert web_app.tasks[task_id]["lesson_segments"][0]["title"] == "第一课"
 
@@ -845,6 +851,9 @@ def test_index_contains_editable_course_preview():
     assert 'id="visual-theme"' in html
     assert 'id="smart-cut-recommend-btn"' in html
     assert 'id="smart-cut-apply-btn"' in html
+    assert 'id="course-duration-estimate"' in html
+    assert '预计完整视频总时长' in html
+    assert '约 -- 分 -- 秒' in html
     assert '可跳过切课直接继续生成完整视频' in html
     assert 'id="subtitle-preset"' in html
     assert '标准底部双行' in html
@@ -855,8 +864,9 @@ def test_index_contains_editable_course_preview():
     assert '微软雅黑' not in html
     assert '苹方' not in html
     assert 'SimHei' not in html
-    assert 'id="course-preview-play-btn"' in html
-    assert '从当前页开始，按页图、讲稿、字幕和配音预览课程效果' in html
+    assert 'id="course-preview-play-btn"' not in html
+    assert 'id="subtitle-position-preview"' not in html
+    assert '这里是字幕位置' not in html
     assert '在每页 PPT 上检查真实字幕样例、可读性和遮挡风险' in html
 
 

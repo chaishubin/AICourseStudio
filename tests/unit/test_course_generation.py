@@ -10,6 +10,7 @@ from vidppt.core.models import ProcessConfig
 from vidppt.generation.course_builder import CourseBuilder
 from vidppt.ingestion.models import SourceDocument, SourceSection
 from vidppt.renderers.subtitles import SubtitleRenderer
+from vidppt.utils.subtitle_rules import normalize_subtitle_text, subtitle_chunks
 
 
 def test_draft_builder_creates_editable_slides(temp_dir):
@@ -185,6 +186,28 @@ def test_subtitle_renderer_prefers_semantic_breaks(temp_dir):
         for block in text.strip().split("\n\n")
         for line in block.splitlines()[2:]
     )
+
+
+def test_subtitle_punctuation_normalizes_chinese_course_text():
+    text = normalize_subtitle_text(
+        "先看CRM,ERP等系统...然后回答:效率提升了吗?确实提升了!"
+    )
+
+    assert text == "先看CRM、ERP等系统……然后回答：效率提升了吗？确实提升了！"
+
+
+def test_subtitle_punctuation_preserves_decimals_and_adds_terminal_stop():
+    text = normalize_subtitle_text("模型版本是3.14,相比2.0更稳定")
+
+    assert text == "模型版本是3.14，相比2.0更稳定。"
+
+
+def test_subtitle_chunks_use_normalized_punctuation_for_breaks():
+    chunks = subtitle_chunks("第一,明确目标;第二,检查结果?第三,复盘改进")
+
+    assert "第一，明确目标；" in chunks[0]
+    assert "检查结果？" in "".join(chunks)
+    assert chunks[-1].endswith("。")
 
 
 def test_course_pipeline_rejects_video_without_tts(temp_dir):

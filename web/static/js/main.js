@@ -69,8 +69,6 @@ class AICourseStudioApp {
                 ttsEmotionScale: document.getElementById('tts-emotion-scale'),
                 ttsSentencePause: document.getElementById('tts-sentence-pause'),
                 burnSubtitles: document.getElementById('burn-subtitles'),
-                subtitlePreviewFrame: document.getElementById('subtitle-position-preview'),
-                subtitlePreviewBar: document.getElementById('subtitle-preview-bar'),
                 subtitlePreset: document.getElementById('subtitle-preset'),
                 subtitleX: document.getElementById('subtitle-x'),
                 subtitleY: document.getElementById('subtitle-y'),
@@ -78,6 +76,7 @@ class AICourseStudioApp {
                 subtitleHeight: document.getElementById('subtitle-height'),
                 subtitleFontSize: document.getElementById('subtitle-font-size'),
                 subtitleFontName: document.getElementById('subtitle-font-name'),
+                subtitleFontPreview: document.getElementById('subtitle-font-preview'),
                 subtitleColor: document.getElementById('subtitle-color'),
                 subtitleBackgroundColor: document.getElementById('subtitle-background-color'),
                 subtitleBackgroundOpacity: document.getElementById('subtitle-background-opacity'),
@@ -134,14 +133,14 @@ class AICourseStudioApp {
                 previewNextBtn: document.getElementById('preview-next-btn'),
                 previewPageSelect: document.getElementById('preview-page-select'),
                 unreviewedOnly: document.getElementById('unreviewed-only'),
-                coursePreviewPlayBtn: document.getElementById('course-preview-play-btn'),
-                coursePreviewStopBtn: document.getElementById('course-preview-stop-btn'),
-                coursePreviewPlayerStatus: document.getElementById('course-preview-player-status'),
                 cutDurationMinutes: document.getElementById('cut-duration-minutes'),
                 smartCutRecommendBtn: document.getElementById('smart-cut-recommend-btn'),
                 smartCutApplyBtn: document.getElementById('smart-cut-apply-btn'),
                 smartCutList: document.getElementById('smart-cut-list'),
                 smartCutSummary: document.getElementById('smart-cut-summary'),
+                courseDurationEstimate: document.getElementById('course-duration-estimate'),
+                courseDurationTotal: document.getElementById('course-duration-total'),
+                courseDurationSegments: document.getElementById('course-duration-segments'),
                 downloadEditablePptBtn: document.getElementById('download-editable-ppt-btn'),
                 uploadEditedPptBtn: document.getElementById('upload-edited-ppt-btn'),
                 editedPptInput: document.getElementById('edited-ppt-input'),
@@ -287,49 +286,17 @@ class AICourseStudioApp {
             control.addEventListener('input', () => {
                 this.clampSubtitleInputs();
                 this.syncSubtitlePresetSelection();
+                this.syncSubtitleFontPreview();
                 this.syncSubtitlePreviewFromInputs();
                 this.saveCurrentStrategy();
             });
         });
         this.elements.subtitleFontName?.addEventListener('change', () => {
+            this.syncSubtitleFontPreview();
             this.syncSubtitlePreviewFromInputs();
             this.saveCurrentStrategy();
         });
-        const bar = this.elements.subtitlePreviewBar;
-        const frame = this.elements.subtitlePreviewFrame?.querySelector('.subtitle-preview-frame');
-        if (!bar || !frame) return;
-        let dragOffset = { x: 0, y: 0 };
-        bar.addEventListener('pointerdown', event => {
-            event.preventDefault();
-            const barRect = bar.getBoundingClientRect();
-            dragOffset = {
-                x: event.clientX - barRect.left,
-                y: event.clientY - barRect.top
-            };
-            bar.setPointerCapture(event.pointerId);
-        });
-        bar.addEventListener('pointermove', event => {
-            if (!bar.hasPointerCapture(event.pointerId)) return;
-            const frameRect = frame.getBoundingClientRect();
-            const width = Number(this.elements.subtitleWidth.value) || 1;
-            const height = Number(this.elements.subtitleHeight.value) || 1;
-            const x = Math.round(
-                (event.clientX - frameRect.left - dragOffset.x) / frameRect.width * 1920
-            );
-            const y = Math.round(
-                (event.clientY - frameRect.top - dragOffset.y) / frameRect.height * 1080
-            );
-            this.elements.subtitleX.value = Math.max(0, Math.min(1920 - width, x));
-            this.elements.subtitleY.value = Math.max(0, Math.min(1080 - height, y));
-            this.syncSubtitlePresetSelection();
-            this.syncSubtitlePreviewFromInputs();
-            this.saveCurrentStrategy();
-        });
-        bar.addEventListener('pointerup', event => {
-            if (bar.hasPointerCapture(event.pointerId)) {
-                bar.releasePointerCapture(event.pointerId);
-            }
-        });
+        this.syncSubtitleFontPreview();
         this.syncSubtitlePreviewFromInputs();
         this.syncSubtitlePresetSelection();
     }
@@ -374,6 +341,7 @@ class AICourseStudioApp {
             select.appendChild(option);
         });
         select.value = byValue.has(selected) ? selected : 'Noto Sans CJK SC';
+        this.syncSubtitleFontPreview();
         this.syncSubtitlePreviewFromInputs();
     }
 
@@ -389,6 +357,29 @@ class AICourseStudioApp {
             select.appendChild(option);
         }
         select.value = value;
+        this.syncSubtitleFontPreview();
+    }
+
+    syncSubtitleFontPreview() {
+        const preview = this.elements.subtitleFontPreview;
+        const select = this.elements.subtitleFontName;
+        if (!preview || !select) return;
+        const opacity = Number(this.elements.subtitleBackgroundOpacity.value);
+        preview.style.background = this._hexToRgba(
+            this.elements.subtitleBackgroundColor.value || '#111111',
+            Number.isFinite(opacity) ? opacity : 0.55
+        );
+        const params = new URLSearchParams({
+            text: '这是字幕预览 AaBb 123',
+            font: select.value || 'Noto Sans CJK SC',
+            font_size: String(Number(this.elements.subtitleFontSize.value) || 46),
+            color: this.elements.subtitleColor.value || '#ffffff',
+            outline_width: String(Number(this.elements.subtitleOutlineWidth.value) || 0),
+            outline_color: this.elements.subtitleOutlineColor.value || '#000000',
+            width: '720',
+            height: '96'
+        });
+        preview.src = `/api/subtitle-preview-image?${params.toString()}`;
     }
 
     applySubtitlePreset(name) {
@@ -433,30 +424,13 @@ class AICourseStudioApp {
     }
 
     syncSubtitlePreviewFromInputs() {
-        const bar = this.elements.subtitlePreviewBar;
-        if (!bar) return;
         this.clampSubtitleInputs();
-        const x = Number(this.elements.subtitleX.value) || 0;
-        const y = Number(this.elements.subtitleY.value) || 0;
-        const width = Number(this.elements.subtitleWidth.value) || 1920;
-        const height = Number(this.elements.subtitleHeight.value) || 110;
-        const color = this.elements.subtitleColor.value || '#ffffff';
-        const background = this.elements.subtitleBackgroundColor.value || '#111111';
-        const opacity = Number(this.elements.subtitleBackgroundOpacity.value);
-        const outline = Number(this.elements.subtitleOutlineWidth.value) || 0;
-        const outlineColor = this.elements.subtitleOutlineColor.value || '#000000';
-        bar.style.left = `${x / 1920 * 100}%`;
-        bar.style.top = `${y / 1080 * 100}%`;
-        bar.style.width = `${width / 1920 * 100}%`;
-        bar.style.height = `${height / 1080 * 100}%`;
-        bar.style.color = color;
-        bar.style.background = this._hexToRgba(
-            background,
-            Number.isFinite(opacity) ? opacity : 0.55
-        );
-        bar.style.webkitTextStroke = outline ? `${outline / 5}px ${outlineColor}` : '';
-        bar.style.fontFamily = this.elements.subtitleFontName.value || 'Noto Sans CJK SC';
         this.syncCourseSubtitleOverlays();
+    }
+
+    syncAllSubtitlePreviewImages() {
+        document.querySelectorAll('.course-preview-page')
+            .forEach(card => this.updatePageSubtitleSample(card));
     }
 
     syncCourseSubtitleOverlays() {
@@ -468,29 +442,23 @@ class AICourseStudioApp {
         const width = Number(this.elements.subtitleWidth.value) || 1920;
         const height = Number(this.elements.subtitleHeight.value) || 110;
         const fontSize = Number(this.elements.subtitleFontSize.value) || 46;
-        const color = this.elements.subtitleColor.value || '#ffffff';
         const background = this.elements.subtitleBackgroundColor.value || '#111111';
         const opacity = Number(this.elements.subtitleBackgroundOpacity.value);
-        const outline = Number(this.elements.subtitleOutlineWidth.value) || 0;
-        const outlineColor = this.elements.subtitleOutlineColor.value || '#000000';
-        const fontName = this.elements.subtitleFontName.value || 'Noto Sans CJK SC';
         overlays.forEach(overlay => {
             overlay.style.left = `${x / 1920 * 100}%`;
             overlay.style.top = `${y / 1080 * 100}%`;
             overlay.style.width = `${width / 1920 * 100}%`;
             overlay.style.height = `${height / 1080 * 100}%`;
-            overlay.style.color = color;
             overlay.style.background = this._hexToRgba(
                 background,
                 Number.isFinite(opacity) ? opacity : 0.55
             );
-            overlay.style.webkitTextStroke = outline ? `${outline / 4}px ${outlineColor}` : '';
-            overlay.style.fontFamily = fontName;
             this.fitCourseSubtitleOverlay(
                 overlay,
                 Math.max(10, Math.min(28, fontSize / 2.5))
             );
         });
+        this.syncAllSubtitlePreviewImages();
         this.refreshSubtitleRiskChecks();
     }
 
@@ -509,6 +477,11 @@ class AICourseStudioApp {
         overlay.style.fontSize = `${fittedFontSize}px`;
         overlay.style.lineHeight = String(lineHeight);
         if (sample) {
+            if (sample.tagName === 'IMG') {
+                sample.style.webkitLineClamp = '';
+                sample.style.maxHeight = '';
+                return;
+            }
             sample.style.webkitLineClamp = String(lines);
             sample.style.maxHeight = `${Math.floor(fittedFontSize * lineHeight * lines)}px`;
         }
@@ -669,14 +642,6 @@ class AICourseStudioApp {
         );
         this.elements.unreviewedOnly.addEventListener(
             'change', () => this.filterPreviewPages()
-        );
-        this.elements.coursePreviewPlayBtn.addEventListener(
-            'click',
-            () => this.toggleCoursePreviewPlayback()
-        );
-        this.elements.coursePreviewStopBtn.addEventListener(
-            'click',
-            () => this.stopCoursePreviewPlayback()
         );
         this.elements.smartCutRecommendBtn.addEventListener(
             'click', () => this.recommendSmartCuts()
@@ -937,9 +902,7 @@ class AICourseStudioApp {
         }
         if (this.activeVoicePreviewButton) {
             this.activeVoicePreviewButton.textContent =
-                this.activeVoicePreviewButton.classList.contains('script-preview-button')
-                    ? '预览本页'
-                    : '▶';
+                '▶';
             this.activeVoicePreviewButton.classList.remove('loading');
             this.activeVoicePreviewButton.disabled = false;
             this.activeVoicePreviewButton = null;
@@ -2405,13 +2368,18 @@ class AICourseStudioApp {
             const response = await fetch(`/api/course-preview/${taskId}`);
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '加载预览失败');
-            this.renderCoursePreview(taskId, data.pages || [], data.lesson_segments || []);
+            this.renderCoursePreview(
+                taskId,
+                data.pages || [],
+                data.lesson_segments || [],
+                data.duration_estimate || null
+            );
         } catch (error) {
             this.showStatus('error', error.message);
         }
     }
 
-    renderCoursePreview(taskId, pages, lessonSegments = []) {
+    renderCoursePreview(taskId, pages, lessonSegments = [], durationEstimate = null) {
         const { coursePreviewModule, coursePreviewPages, coursePreviewSaveState } = this.elements;
         clearTimeout(this.previewAutoSaveTimer);
         this.stopCoursePreviewPlayback(
@@ -2437,7 +2405,7 @@ class AICourseStudioApp {
                     <img class="course-preview-image" src="${page.image_url}" alt="第 ${page.page_number} 页">
                     <div class="subtitle-safe-area" aria-hidden="true"></div>
                     <div class="course-preview-subtitle-overlay">
-                        <span class="course-preview-subtitle-sample"></span>
+                        <img class="course-preview-subtitle-sample" alt="字幕预览">
                     </div>
                     <div class="subtitle-risk-badge ok">
                         <span class="subtitle-risk-message">字幕区待检测</span>
@@ -2460,18 +2428,23 @@ class AICourseStudioApp {
                                 已审核
                             </label>
                             <button type="button" class="page-retry-tts-button">重配本页</button>
-                            <button type="button" class="script-preview-button">预览本页</button>
                         </div>
                     </div>
                 </div>
             `;
             const textarea = card.querySelector('textarea');
+            card.dataset.estimatedSeconds = String(
+                Number(page.estimated_seconds)
+                || this.estimatePreviewScriptSeconds(textarea.value)
+            );
             const updateLength = () => {
                 const length = textarea.value.trim().length;
-                const seconds = Math.max(1, Math.round(length / 4));
+                const seconds = this.estimatePreviewScriptSeconds(textarea.value);
+                card.dataset.estimatedSeconds = String(seconds);
                 card.querySelector('.course-preview-length').textContent =
                     `${length} 字 · 预计 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
                 this.updatePageSubtitleSample(card);
+                this.updateCourseDurationEstimate();
             };
             updateLength();
             card.querySelector('.course-preview-image').addEventListener(
@@ -2494,9 +2467,6 @@ class AICourseStudioApp {
                     1200
                 );
             });
-            card.querySelector('.script-preview-button').addEventListener(
-                'click', event => this.previewPageScript(event.currentTarget, textarea.value)
-            );
             card.querySelector('.course-preview-page-play').addEventListener(
                 'click', () => this.startCoursePreviewPlayback(page.page_number)
             );
@@ -2526,6 +2496,7 @@ class AICourseStudioApp {
             this.elements.previewPageSelect.appendChild(option);
         });
         this.renderSmartCutSegments();
+        this.updateCourseDurationEstimate(durationEstimate);
         this.currentPreviewPage = Number(pages[0]?.page_number || 1);
         this.updatePreviewNavigation();
         coursePreviewSaveState.textContent = '修改将自动保存';
@@ -2538,8 +2509,38 @@ class AICourseStudioApp {
     updatePageSubtitleSample(card) {
         const text = card.querySelector('.course-preview-script')?.value || '';
         const sample = this.makeSubtitleSample(text);
-        const sampleNode = card.querySelector('.course-preview-subtitle-sample');
-        if (sampleNode) sampleNode.textContent = sample || '本页暂无字幕文本';
+        this.renderSubtitlePreviewImage(card, sample || '本页暂无字幕文本');
+    }
+
+    renderSubtitlePreviewImage(card, text) {
+        const sampleNode = card?.querySelector('.course-preview-subtitle-sample');
+        if (!sampleNode) return;
+        const styleKey = [
+            this.elements.subtitleFontName.value || 'Noto Sans CJK SC',
+            Number(this.elements.subtitleFontSize.value) || 46,
+            this.elements.subtitleColor.value || '#ffffff',
+            Number(this.elements.subtitleOutlineWidth.value) || 0,
+            this.elements.subtitleOutlineColor.value || '#000000',
+            Number(this.elements.subtitleWidth.value) || 1728,
+            Number(this.elements.subtitleHeight.value) || 110
+        ].join('|');
+        if (sampleNode.dataset.previewText === text && sampleNode.dataset.previewStyle === styleKey) {
+            return;
+        }
+        sampleNode.dataset.previewText = text;
+        sampleNode.dataset.previewStyle = styleKey;
+        const params = new URLSearchParams({
+            text: text || '本页暂无字幕文本',
+            font: this.elements.subtitleFontName.value || 'Noto Sans CJK SC',
+            font_size: String(Number(this.elements.subtitleFontSize.value) || 46),
+            color: this.elements.subtitleColor.value || '#ffffff',
+            outline_width: String(Number(this.elements.subtitleOutlineWidth.value) || 0),
+            outline_color: this.elements.subtitleOutlineColor.value || '#000000',
+            width: String(Number(this.elements.subtitleWidth.value) || 1728),
+            height: String(Number(this.elements.subtitleHeight.value) || 110)
+        });
+        sampleNode.src = `/api/subtitle-preview-image?${params.toString()}`;
+        sampleNode.alt = text || '字幕预览';
     }
 
     makeSubtitleSample(text) {
@@ -2757,14 +2758,6 @@ class AICourseStudioApp {
         });
     }
 
-    async toggleCoursePreviewPlayback() {
-        if (this.coursePreviewPlaying) {
-            this.stopCoursePreviewPlayback();
-            return;
-        }
-        await this.startCoursePreviewPlayback();
-    }
-
     async startCoursePreviewPlayback(startPage = this.currentPreviewPage) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return;
@@ -2772,8 +2765,6 @@ class AICourseStudioApp {
         this.stopVoicePreview();
         this.coursePreviewPlaying = true;
         this.currentPreviewPage = Number(startPage) || this.currentPreviewPage;
-        this.elements.coursePreviewPlayBtn.textContent = '暂停预览';
-        this.elements.coursePreviewStopBtn.disabled = false;
         this.updateCoursePreviewPagePlayerState(this.currentPreviewPage, '准备预览…');
         await this.playCoursePreviewPage(this.currentPreviewPage);
     }
@@ -2785,16 +2776,6 @@ class AICourseStudioApp {
             this.coursePreviewAudio.removeAttribute('src');
             this.coursePreviewAudio.load();
             this.coursePreviewAudio = null;
-        }
-        if (this.elements.coursePreviewPlayBtn) {
-            this.elements.coursePreviewPlayBtn.disabled = false;
-            this.elements.coursePreviewPlayBtn.textContent = '播放课程预览';
-        }
-        if (this.elements.coursePreviewStopBtn) {
-            this.elements.coursePreviewStopBtn.disabled = true;
-        }
-        if (this.elements.coursePreviewPlayerStatus) {
-            this.elements.coursePreviewPlayerStatus.textContent = message;
         }
         this.clearCoursePreviewSubtitlePlayback();
         this.updateCoursePreviewPagePlayerState(null, message);
@@ -2812,8 +2793,6 @@ class AICourseStudioApp {
         const script = card.querySelector('.course-preview-script')?.value || '';
         const title = card.querySelector('.course-preview-page-title')?.textContent?.trim()
             || `第 ${pageNumber} 页`;
-        this.elements.coursePreviewPlayBtn.disabled = true;
-        this.elements.coursePreviewPlayerStatus.textContent = `${title} · 准备配音…`;
         this.updateCoursePreviewPagePlayerState(pageNumber, '准备配音…');
         try {
             const response = await fetch(`/api/course-preview/${taskId}/page-audio`, {
@@ -2845,8 +2824,6 @@ class AICourseStudioApp {
             card?.querySelector('.course-preview-script')?.value || ''
         );
         this.activateCoursePreviewSubtitles(card, cues);
-        this.elements.coursePreviewPlayBtn.disabled = false;
-        this.elements.coursePreviewPlayerStatus.textContent = `${title} · 正在播放`;
         this.updateCoursePreviewPagePlayerState(pageNumber, '正在播放本页');
         audio.addEventListener('timeupdate', () => {
             this.syncPlayingSubtitleCue(audio, card, cues);
@@ -2898,8 +2875,7 @@ class AICourseStudioApp {
         if (!card) return;
         this.coursePreviewSubtitlePage = card;
         card.classList.add('playing-preview');
-        const sample = card.querySelector('.course-preview-subtitle-sample');
-        if (sample) sample.textContent = cues[0] || '本页暂无字幕文本';
+        this.renderSubtitlePreviewImage(card, cues[0] || '本页暂无字幕文本');
     }
 
     clearCoursePreviewSubtitlePlayback(card = null) {
@@ -2915,8 +2891,6 @@ class AICourseStudioApp {
 
     syncPlayingSubtitleCue(audio, card, cues) {
         if (!card || !cues.length) return;
-        const sample = card.querySelector('.course-preview-subtitle-sample');
-        if (!sample) return;
         const duration = Number.isFinite(audio.duration) && audio.duration > 0
             ? audio.duration
             : Math.max(1, cues.length);
@@ -2924,7 +2898,7 @@ class AICourseStudioApp {
             cues.length - 1,
             Math.max(0, Math.floor(audio.currentTime / duration * cues.length))
         );
-        sample.textContent = cues[index] || cues[0] || '';
+        this.renderSubtitlePreviewImage(card, cues[index] || cues[0] || '');
     }
 
     makeSubtitleCues(text) {
@@ -3071,6 +3045,69 @@ class AICourseStudioApp {
         });
     }
 
+    estimatePreviewScriptSeconds(text) {
+        const length = String(text || '').trim().length;
+        return Math.max(15, Math.round(length / 4));
+    }
+
+    formatCourseDuration(seconds) {
+        const value = Math.max(0, Math.round(Number(seconds) || 0));
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const rest = value % 60;
+        if (hours > 0) {
+            return `约 ${hours} 小时 ${minutes} 分 ${rest} 秒`;
+        }
+        if (minutes > 0) {
+            return `约 ${minutes} 分 ${rest} 秒`;
+        }
+        return `约 ${rest} 秒`;
+    }
+
+    collectPreviewPageDurations() {
+        return Array.from(this.elements.coursePreviewPages.querySelectorAll('.course-preview-page'))
+            .map(card => ({
+                pageNumber: Number(card.dataset.pageNumber),
+                seconds: Number(card.dataset.estimatedSeconds)
+                    || this.estimatePreviewScriptSeconds(
+                        card.querySelector('.course-preview-script')?.value || ''
+                    )
+            }))
+            .filter(page => Number.isFinite(page.pageNumber));
+    }
+
+    updateCourseDurationEstimate(serverEstimate = null) {
+        const { courseDurationTotal, courseDurationSegments } = this.elements;
+        if (!courseDurationTotal || !courseDurationSegments) return;
+
+        const pageDurations = this.collectPreviewPageDurations();
+        const totalSeconds = pageDurations.length
+            ? pageDurations.reduce((sum, page) => sum + page.seconds, 0)
+            : Number(serverEstimate?.total_seconds || 0);
+        courseDurationTotal.textContent = this.formatCourseDuration(totalSeconds);
+
+        const segments = this.smartCutSegments.length
+            ? this.collectSmartCutSegments()
+            : [];
+        courseDurationSegments.innerHTML = '';
+        courseDurationSegments.hidden = !segments.length;
+        segments.forEach((segment, index) => {
+            const segmentSeconds = pageDurations
+                .filter(page => (
+                    page.pageNumber >= Number(segment.start_page)
+                    && page.pageNumber <= Number(segment.end_page)
+                ))
+                .reduce((sum, page) => sum + page.seconds, 0);
+            const row = document.createElement('div');
+            row.className = 'course-duration-segment';
+            row.innerHTML = `
+                <span>第 ${index + 1} 段 · ${this._esc(segment.title || `第 ${index + 1} 课`)}（${segment.start_page}-${segment.end_page} 页）</span>
+                <strong>${this.formatCourseDuration(segmentSeconds)}</strong>
+            `;
+            courseDurationSegments.appendChild(row);
+        });
+    }
+
     getSmartCutPriority() {
         return document.querySelector('input[name="cut-priority"]:checked')?.value || 'section';
     }
@@ -3083,6 +3120,7 @@ class AICourseStudioApp {
             smartCutSummary.textContent = '尚未生成切课建议，可跳过切课直接继续生成完整视频';
             smartCutApplyBtn.disabled = true;
             this.updateContinueCourseLabel();
+            this.updateCourseDurationEstimate();
             return;
         }
         smartCutSummary.textContent = this.smartCutApplied
@@ -3105,10 +3143,19 @@ class AICourseStudioApp {
                        aria-label="第 ${index + 1} 段结束页">
                 <span class="smart-cut-estimate">约 ${segment.estimated_minutes || '?'} 分钟</span>
             `;
+            row.querySelectorAll('input').forEach(input => {
+                input.addEventListener('input', () => {
+                    this.smartCutApplied = false;
+                    smartCutApplyBtn.disabled = false;
+                    this.updateContinueCourseLabel();
+                    this.updateCourseDurationEstimate();
+                });
+            });
             smartCutList.appendChild(row);
         });
         smartCutApplyBtn.disabled = this.smartCutApplied;
         this.updateContinueCourseLabel();
+        this.updateCourseDurationEstimate();
     }
 
     updateContinueCourseLabel() {
@@ -3200,6 +3247,12 @@ class AICourseStudioApp {
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '保存讲稿失败');
             if (sequence !== this.previewSaveSequence) return true;
+            if (Array.isArray(data.lesson_segments)) {
+                this.smartCutSegments = data.lesson_segments;
+                this.renderSmartCutSegments();
+            } else {
+                this.updateCourseDurationEstimate(data.duration_estimate || null);
+            }
             this.elements.coursePreviewSaveState.textContent = automatic ? '已自动保存' : '已保存';
             this.elements.coursePreviewSaveState.classList.add('saved');
             return true;
@@ -3242,58 +3295,6 @@ class AICourseStudioApp {
         } finally {
             button.disabled = false;
             button.textContent = originalText;
-        }
-    }
-
-    async previewPageScript(button, text) {
-        if (this.activeVoicePreviewButton === button && this.voicePreviewAudio) {
-            this.stopVoicePreview();
-            return;
-        }
-        const voice = this.elements.customVoice.value.trim() || this.elements.voiceSelect.value;
-        if (!text.trim()) {
-            this.showStatus('error', '当前页讲稿为空');
-            return;
-        }
-        this.stopCoursePreviewPlayback();
-        this.stopVoicePreview();
-        button.disabled = true;
-        button.textContent = '生成预览…';
-        try {
-            const response = await fetch('/api/script-preview', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    engine: this.elements.ttsEngine.value,
-                    voice,
-                    text,
-                    tts_rate: this.elements.ttsRate.value,
-                    tts_emotion: this.elements.ttsEmotion.value,
-                    tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
-                    tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
-                    burn_subtitles: this.elements.burnSubtitles.checked,
-                    ...this.collectSubtitleOptions()
-                })
-            });
-            if (!response.ok) {
-                const data = await response.json();
-                throw new Error(data.error || '本页预览失败');
-            }
-            const audioUrl = URL.createObjectURL(await response.blob());
-            const audio = new Audio(audioUrl);
-            this.voicePreviewAudio = audio;
-            this.activeVoicePreviewButton = button;
-            button.textContent = '停止预览';
-            button.disabled = false;
-            audio.addEventListener('ended', () => {
-                URL.revokeObjectURL(audioUrl);
-                this.stopVoicePreview();
-            }, { once: true });
-            await audio.play();
-        } catch (error) {
-            button.disabled = false;
-            button.textContent = '预览本页';
-            this.showStatus('error', error.message);
         }
     }
 
