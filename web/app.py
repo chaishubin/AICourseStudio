@@ -171,7 +171,7 @@ _preview_audio_locks: dict[str, threading.Lock] = {}
 MAX_STATE_ENTRIES = 50
 RESOURCE_CPU_LIMIT = float(os.environ.get('VIDPPT_CPU_LIMIT', '85'))
 RESOURCE_MEMORY_LIMIT = float(os.environ.get('VIDPPT_MEMORY_LIMIT', '80'))
-RESOURCE_MIN_DISK_GB = float(os.environ.get('VIDPPT_MIN_DISK_GB', '5'))
+RESOURCE_MIN_DISK_GB = float(os.environ.get('VIDPPT_MIN_DISK_GB', '2'))
 RESOURCE_CHECK_INTERVAL = float(os.environ.get('VIDPPT_RESOURCE_CHECK_INTERVAL', '5'))
 
 # 确保目录存在
@@ -377,21 +377,22 @@ class ConversionQueue:
                 memory = psutil.virtual_memory().percent
                 disk_free_gb = psutil.disk_usage(OUTPUT_FOLDER).free / (1024 ** 3)
             except ImportError:
-                return
+                return True
             if (
                 cpu < RESOURCE_CPU_LIMIT
                 and memory < RESOURCE_MEMORY_LIMIT
                 and disk_free_gb >= RESOURCE_MIN_DISK_GB
             ):
-                return
+                return True
             task = tasks.get(task_id)
             if task:
                 task.update(
                     status='queued',
                     stage='queue',
                     message=(
-                        f'机器资源繁忙，等待执行（CPU {cpu:.0f}% / '
-                        f'内存 {memory:.0f}% / 磁盘剩余 {disk_free_gb:.1f}GB）'
+                        f'资源未满足，等待执行（CPU {cpu:.0f}% / '
+                        f'内存 {memory:.0f}% / 磁盘剩余 {disk_free_gb:.1f}GB，'
+                        f'最低需要 {RESOURCE_MIN_DISK_GB:.1f}GB）'
                     ),
                 )
                 save_state(task_id)

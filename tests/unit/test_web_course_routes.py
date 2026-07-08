@@ -2,6 +2,7 @@
 
 import io
 import json
+import sys
 from pathlib import Path
 from queue import Queue
 from types import SimpleNamespace
@@ -698,6 +699,31 @@ def test_queue_skips_stale_run_after_retry(monkeypatch):
 
     assert web_app.conversion_queue._should_skip(task_id, "old-run") is True
     assert web_app.conversion_queue._should_skip(task_id, "new-run") is False
+
+
+def test_queue_capacity_ready_returns_true(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "queue-ready"
+    monkeypatch.setattr(web_app, "OUTPUT_FOLDER", temp_dir)
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "queued",
+            "queue_run_id": "run",
+        }
+    })
+    monkeypatch.setattr(web_app, "cancellation_events", {})
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(
+            cpu_percent=lambda interval=0: 0,
+            virtual_memory=lambda: SimpleNamespace(percent=0),
+            disk_usage=lambda path: SimpleNamespace(free=1024 ** 4),
+        ),
+    )
+
+    assert web_app.conversion_queue._wait_for_capacity(task_id, "run") is True
 
 
 def test_stage_event_carries_non_regressing_percentage(monkeypatch, temp_dir):

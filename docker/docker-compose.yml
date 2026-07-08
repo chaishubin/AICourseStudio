@@ -15,7 +15,7 @@ services:
       VIDPPT_SECRET_KEY: ${VIDPPT_SECRET_KEY:-change-this-secret-in-production}
       VIDPPT_CPU_LIMIT: ${VIDPPT_CPU_LIMIT:-85}
       VIDPPT_MEMORY_LIMIT: ${VIDPPT_MEMORY_LIMIT:-80}
-      VIDPPT_MIN_DISK_GB: ${VIDPPT_MIN_DISK_GB:-5}
+      VIDPPT_MIN_DISK_GB: ${VIDPPT_MIN_DISK_GB:-2}
       VIDPPT_RESOURCE_CHECK_INTERVAL: ${VIDPPT_RESOURCE_CHECK_INTERVAL:-5}
     volumes:
       - ../web/uploads:/app/web/uploads
