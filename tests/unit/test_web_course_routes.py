@@ -1191,6 +1191,9 @@ def test_accounts_page_is_separate_admin_page():
 
     assert 'id="account-form"' in html
     assert 'id="account-table-body"' in html
+    assert 'value="view_all_tasks"' in html
+    assert 'value="manage_all_tasks"' in html
+    assert 'value="manage_accounts"' in html
     assert 'id="upload-area"' not in html
     assert 'js/admin_pages.js' in html
 

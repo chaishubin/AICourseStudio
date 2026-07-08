@@ -36,10 +36,12 @@
                 <a class="nav-item active" href="{{ url_for('operation_logs_page') }}">
                     <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
-                {% if is_super_admin %}
+                {% if can_manage_accounts %}
                 <a class="nav-item" href="{{ url_for('accounts_page') }}">
                     <span class="nav-icon">◎</span><span>账号管理</span>
                 </a>
+                {% endif %}
+                {% if can_view_debug %}
                 <a class="nav-item" href="{{ url_for('debug_page') }}">
                     <span class="nav-icon">◇</span><span>调试工作台</span>
                 </a>
@@ -58,7 +60,7 @@
                     <h1>操作日志</h1>
                 </div>
                 <div class="topbar-actions">
-                    <span class="environment-badge"><span></span>{% if is_super_admin %}全部账号{% else %}仅本账号{% endif %}</span>
+                    <span class="environment-badge"><span></span>{% if can_view_all_logs %}全部账号{% else %}仅本账号{% endif %}</span>
                     <span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span>
                     <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
                     <form method="post" action="{{ url_for('logout') }}">

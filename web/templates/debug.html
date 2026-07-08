@@ -36,9 +36,11 @@
                 <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
                     <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
+                {% if can_manage_accounts %}
                 <a class="nav-item" href="{{ url_for('accounts_page') }}">
                     <span class="nav-icon">◎</span><span>账号管理</span>
                 </a>
+                {% endif %}
                 <a class="nav-item active" href="{{ url_for('debug_page') }}">
                     <span class="nav-icon">◇</span><span>调试工作台</span>
                 </a>

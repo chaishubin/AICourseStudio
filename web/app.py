@@ -66,6 +66,14 @@ AUTH_USERNAME = os.environ.get('VIDPPT_AUTH_USERNAME', 'admin')
 AUTH_PASSWORD = os.environ.get('VIDPPT_AUTH_PASSWORD', 'vidppt123')
 SUPER_ADMIN_ROLE = 'super_admin'
 USER_ROLE = 'user'
+ACCOUNT_PERMISSIONS = {
+    'view_all_tasks': '查看全部课程数据',
+    'manage_all_tasks': '管理全部课程数据',
+    'view_operation_logs': '查看全部操作日志',
+    'manage_accounts': '账号与权限管理',
+    'view_debug': '查看调试工作台',
+}
+SUPER_ADMIN_PERMISSIONS = set(ACCOUNT_PERMISSIONS)
 
 
 def _load_account_config() -> dict[str, dict]:
@@ -197,6 +205,13 @@ def _normalize_role(role: str) -> str:
     return role if role in {USER_ROLE, SUPER_ADMIN_ROLE} else USER_ROLE
 
 
+def _normalize_permissions(permissions) -> list[str]:
+    if not isinstance(permissions, list):
+        return []
+    allowed = set(ACCOUNT_PERMISSIONS)
+    return sorted({str(item) for item in permissions if str(item) in allowed})
+
+
 def _seed_configured_accounts():
     for username, account in ACCOUNTS.items():
         try:
@@ -205,6 +220,7 @@ def _seed_configured_accounts():
                 'password_hash': generate_password_hash(account['password']),
                 'role': _normalize_role(account.get('role', USER_ROLE)),
                 'display_name': account.get('display_name') or username,
+                'permissions': _normalize_permissions(account.get('permissions', [])),
                 'active': True,
             })
         except Exception as exc:
@@ -227,6 +243,7 @@ def _account_for_login(username: str) -> dict | None:
         'password': fallback['password'],
         'role': fallback.get('role', USER_ROLE),
         'display_name': fallback.get('display_name') or username,
+        'permissions': _normalize_permissions(fallback.get('permissions', [])),
         'active': True,
     }
 
@@ -236,6 +253,7 @@ def _public_account(account: dict) -> dict:
         'username': account['username'],
         'role': _normalize_role(account.get('role', USER_ROLE)),
         'display_name': account.get('display_name') or account['username'],
+        'permissions': _normalize_permissions(account.get('permissions', [])),
         'active': bool(account.get('active')),
         'created_at': account.get('created_at'),
         'updated_at': account.get('updated_at'),
@@ -256,20 +274,45 @@ def current_user_context() -> dict:
     username = session.get('username') or AUTH_USERNAME
     role = session.get('role')
     display_name = session.get('display_name')
+    permissions = session.get('permissions')
     if not role or not display_name:
         account = _account_for_login(username)
         if account:
             role = account.get('role', role)
             display_name = account.get('display_name', display_name)
+            permissions = account.get('permissions', permissions)
+    role = _normalize_role(role or ACCOUNTS.get(username, {}).get('role', USER_ROLE))
+    if role == SUPER_ADMIN_ROLE:
+        permissions = sorted(SUPER_ADMIN_PERMISSIONS)
+    else:
+        permissions = _normalize_permissions(permissions or ACCOUNTS.get(username, {}).get('permissions', []))
     return {
         'username': username,
-        'role': _normalize_role(role or ACCOUNTS.get(username, {}).get('role', USER_ROLE)),
+        'role': role,
         'display_name': display_name or ACCOUNTS.get(username, {}).get('display_name', username),
+        'permissions': permissions,
     }
 
 
 def is_super_admin() -> bool:
     return current_user_context().get('role') == SUPER_ADMIN_ROLE
+
+
+def has_permission(permission: str) -> bool:
+    user = current_user_context()
+    return user.get('role') == SUPER_ADMIN_ROLE or permission in set(user.get('permissions') or [])
+
+
+def can_manage_accounts() -> bool:
+    return has_permission('manage_accounts')
+
+
+def can_view_all_tasks() -> bool:
+    return has_permission('view_all_tasks') or has_permission('manage_all_tasks')
+
+
+def can_manage_all_tasks() -> bool:
+    return has_permission('manage_all_tasks')
 
 
 def _task_owner(task: dict | None) -> str:
@@ -287,14 +330,19 @@ def can_access_task(task: dict | None) -> bool:
     if not task:
         return False
     user = current_user_context()
-    return user['role'] == SUPER_ADMIN_ROLE or _task_owner(task) == user['username']
+    return can_view_all_tasks() or _task_owner(task) == user['username']
 
 
-def require_task_access(task_id: str):
+def require_task_access(task_id: str, *, manage: bool = False):
     task = tasks.get(task_id)
     if not task:
         return None, (jsonify({'error': '任务不存在'}), 404)
-    if not can_access_task(task):
+    user = current_user_context()
+    allowed = (
+        _task_owner(task) == user['username']
+        or (can_manage_all_tasks() if manage else can_view_all_tasks())
+    )
+    if not allowed:
         return None, (jsonify({'error': '无权访问该任务'}), 403)
     return task, None
 
@@ -431,10 +479,18 @@ SENSITIVE_DEBUG_KEYS = {
 
 
 def _require_super_admin():
-    """调试工作台只允许超级管理员访问。"""
-    if not is_super_admin():
+    """调试工作台只允许有调试权限的账号访问。"""
+    if not has_permission('view_debug'):
         if request.path.startswith('/api/'):
-            return jsonify({'error': '仅超级管理员可访问调试信息'}), 403
+            return jsonify({'error': '没有调试工作台权限'}), 403
+        return redirect(url_for('index'))
+    return None
+
+
+def _require_account_manager():
+    if not can_manage_accounts():
+        if request.path.startswith('/api/'):
+            return jsonify({'error': '没有账号管理权限'}), 403
         return redirect(url_for('index'))
     return None
 
@@ -730,11 +786,11 @@ def _subtitle_options(data: dict) -> dict:
         raise ValueError('字幕区域宽度超出视频画布')
     if y + height > 1080:
         raise ValueError('字幕区域高度超出视频画布')
-    font_size = number('subtitle_font_size', 46, 12, 120)
+    font_size = number('subtitle_font_size', 38, 12, 72)
     opacity = number(
         'subtitle_background_opacity', 0.55, 0.0, 1.0, float
     )
-    outline_width = number('subtitle_outline_width', 0.0, 0.0, 12.0, float)
+    outline_width = number('subtitle_outline_width', 0.0, 0.0, 4.0, float)
 
     def color(name, default):
         value = str(data.get(name, default)).strip()
@@ -1203,6 +1259,11 @@ def login():
             session['username'] = username
             session['role'] = _normalize_role(account.get('role', USER_ROLE))
             session['display_name'] = account.get('display_name') or username
+            session['permissions'] = (
+                sorted(SUPER_ADMIN_PERMISSIONS)
+                if session['role'] == SUPER_ADMIN_ROLE
+                else _normalize_permissions(account.get('permissions', []))
+            )
             log_operation('login', target_name=username)
             next_url = request.form.get('next', '')
             if next_url.startswith('/') and not next_url.startswith('//'):
@@ -1232,6 +1293,10 @@ def index():
         current_username=user['username'],
         current_role=user['role'],
         is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
     )
 
 
@@ -1245,6 +1310,10 @@ def data_management_page():
         current_username=user['username'],
         current_role=user['role'],
         is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
     )
 
 
@@ -1258,13 +1327,17 @@ def operation_logs_page():
         current_username=user['username'],
         current_role=user['role'],
         is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
     )
 
 
 @app.route('/accounts')
 def accounts_page():
     """渲染账号管理页面。"""
-    admin_error = _require_super_admin()
+    admin_error = _require_account_manager()
     if admin_error:
         return admin_error
     user = current_user_context()
@@ -1273,7 +1346,11 @@ def accounts_page():
         current_user=user['display_name'],
         current_username=user['username'],
         current_role=user['role'],
-        is_super_admin=True,
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=True,
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
     )
 
 
@@ -1290,6 +1367,10 @@ def debug_page():
         current_username=user['username'],
         current_role=user['role'],
         is_super_admin=True,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=True,
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
     )
 
 
@@ -2790,7 +2871,7 @@ def get_course_preview(task_id):
 @app.route('/api/course-review/<task_id>', methods=['GET', 'POST'])
 def course_review(task_id):
     """读取或运行预览阶段的 ChatGPT 质量审查。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=request.method == 'POST')
     if error:
         return error
     if task.get('status') != 'awaiting_confirmation':
@@ -2831,7 +2912,7 @@ def course_review(task_id):
 @app.route('/api/course-preview/<task_id>/page-audio', methods=['POST'])
 def ensure_course_preview_audio(task_id):
     """按需生成或复用单页完整配音，供浏览器端准视频预览播放。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     if task.get('status') not in {
@@ -2930,7 +3011,7 @@ def recommend_course_segments(task_id):
 @app.route('/api/course-segments/<task_id>', methods=['POST'])
 def apply_course_segments(task_id):
     """把用户确认的切课范围写入预览数据和 course.json。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     if task.get('status') != 'awaiting_confirmation':
@@ -2974,7 +3055,7 @@ def apply_course_segments(task_id):
 @app.route('/api/course-presentation/<task_id>', methods=['GET', 'POST'])
 def course_presentation(task_id):
     """下载可编辑 PPTX，或接收用户修改后的版本并刷新审核预览。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=request.method == 'POST')
     if error:
         return error
     if task.get('status') != 'awaiting_confirmation':
@@ -3070,7 +3151,7 @@ def course_presentation(task_id):
 @app.route('/api/course-preview/<task_id>', methods=['PATCH'])
 def save_course_preview(task_id):
     """持久化用户修改的逐页讲稿，但不启动媒体生成。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     if task.get('status') != 'awaiting_confirmation':
@@ -3099,7 +3180,7 @@ def save_course_preview(task_id):
 @app.route('/api/course-continue/<task_id>', methods=['POST'])
 def continue_course(task_id):
     """确认最终讲稿，并将 TTS/字幕/视频阶段重新加入转换队列。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     data = request.get_json(silent=True) or {}
@@ -3171,7 +3252,7 @@ def continue_course(task_id):
 @app.route('/api/stop/<task_id>', methods=['POST'])
 def stop_task(task_id):
     """请求停止当前媒体生成；工作线程会清理并回退到讲稿确认。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     status = task.get('status')
@@ -3242,7 +3323,7 @@ def stop_task(task_id):
 @app.route('/api/tasks/<task_id>/retry', methods=['POST'])
 def retry_task_stage(task_id):
     """从讲稿检查点重新执行指定媒体阶段，并尽量复用已有成果。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     if task.get('status') not in {
@@ -3298,7 +3379,7 @@ def retry_task_stage(task_id):
 @app.route('/api/tasks/<task_id>', methods=['DELETE'])
 def delete_task(task_id):
     """物理删除未运行任务的输出目录及持久化状态。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     deletable_statuses = {
@@ -3367,7 +3448,7 @@ def delete_task(task_id):
 @app.route('/api/course-cancel/<task_id>', methods=['POST'])
 def cancel_course(task_id):
     """放弃待确认任务，让前端使用原上传文件重新选择生成策略。"""
-    task, error = require_task_access(task_id)
+    task, error = require_task_access(task_id, manage=True)
     if error:
         return error
     if task.get('status') != 'awaiting_confirmation':
@@ -3659,7 +3740,7 @@ def get_operation_logs():
         limit = int(request.args.get('limit', 100))
     except (TypeError, ValueError):
         limit = 100
-    actor = None if is_super_admin() else current_user_context()['username']
+    actor = None if has_permission('view_operation_logs') else current_user_context()['username']
     try:
         logs = task_store.list_operation_logs(actor=actor, limit=limit)
     except Exception as exc:
@@ -3676,6 +3757,7 @@ def _account_payload(data: dict, *, creating: bool) -> tuple[dict | None, str | 
     username = str(data.get('username') or '').strip()
     display_name = str(data.get('display_name') or username).strip()
     role = _normalize_role(str(data.get('role') or USER_ROLE).strip())
+    permissions = _normalize_permissions(data.get('permissions') or [])
     password = str(data.get('password') or '')
     active = bool(data.get('active', True))
     if creating:
@@ -3691,6 +3773,7 @@ def _account_payload(data: dict, *, creating: bool) -> tuple[dict | None, str | 
         'username': username,
         'display_name': display_name[:80],
         'role': role,
+        'permissions': permissions,
         'active': active,
     }
     if password:
@@ -3700,7 +3783,7 @@ def _account_payload(data: dict, *, creating: bool) -> tuple[dict | None, str | 
 
 @app.route('/api/accounts')
 def list_accounts():
-    admin_error = _require_super_admin()
+    admin_error = _require_account_manager()
     if admin_error:
         return admin_error
     try:
@@ -3719,7 +3802,7 @@ def list_accounts():
 
 @app.route('/api/accounts', methods=['POST'])
 def create_account():
-    admin_error = _require_super_admin()
+    admin_error = _require_account_manager()
     if admin_error:
         return admin_error
     data = request.get_json(silent=True) or {}
@@ -3741,7 +3824,7 @@ def create_account():
 
 @app.route('/api/accounts/<username>', methods=['PATCH'])
 def update_account(username):
-    admin_error = _require_super_admin()
+    admin_error = _require_account_manager()
     if admin_error:
         return admin_error
     data = request.get_json(silent=True) or {}
@@ -3767,6 +3850,7 @@ def update_account(username):
     updates = {
         'display_name': payload['display_name'],
         'role': payload['role'],
+        'permissions_json': json.dumps(payload['permissions'], ensure_ascii=False),
         'active': payload['active'],
     }
     if payload.get('password_hash'):
@@ -3783,7 +3867,7 @@ def update_account(username):
 
 @app.route('/api/accounts/<username>', methods=['DELETE'])
 def delete_account(username):
-    admin_error = _require_super_admin()
+    admin_error = _require_account_manager()
     if admin_error:
         return admin_error
     existing = task_store.get_account(username)

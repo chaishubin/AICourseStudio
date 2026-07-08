@@ -39,9 +39,11 @@
                 <a class="nav-item active" href="{{ url_for('accounts_page') }}">
                     <span class="nav-icon">◎</span><span>账号管理</span>
                 </a>
+                {% if can_view_debug %}
                 <a class="nav-item" href="{{ url_for('debug_page') }}">
                     <span class="nav-icon">◇</span><span>调试工作台</span>
                 </a>
+                {% endif %}
             </nav>
             <div class="sidebar-meta">
                 <span class="status-dot"></span>
@@ -56,8 +58,8 @@
                     <h1>账号管理</h1>
                 </div>
                 <div class="topbar-actions">
-                    <span class="environment-badge"><span></span>超级管理员</span>
-                    <span class="admin-user-name">{{ current_user }} · 超级管理员</span>
+                    <span class="environment-badge"><span></span>账号管理员</span>
+                    <span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span>
                     <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
                     <form method="post" action="{{ url_for('logout') }}">
                         <button class="logout-button" type="submit">退出登录</button>
@@ -95,6 +97,14 @@
                             <input id="account-active" name="active" type="checkbox" checked>
                             <span>启用账号</span>
                         </label>
+                        <fieldset class="account-permissions-field">
+                            <legend>细分权限</legend>
+                            <label><input type="checkbox" name="permissions" value="view_all_tasks"> 查看全部课程数据</label>
+                            <label><input type="checkbox" name="permissions" value="manage_all_tasks"> 管理全部课程数据</label>
+                            <label><input type="checkbox" name="permissions" value="view_operation_logs"> 查看全部操作日志</label>
+                            <label><input type="checkbox" name="permissions" value="manage_accounts"> 账号与权限管理</label>
+                            <label><input type="checkbox" name="permissions" value="view_debug"> 查看调试工作台</label>
+                        </fieldset>
                         <div class="account-form-actions">
                             <button class="btn-primary-link" id="account-submit" type="submit">创建账号</button>
                             <button class="btn-secondary" id="account-reset" type="button">取消编辑</button>
@@ -113,6 +123,7 @@
                                     <th>账号</th>
                                     <th>显示名称</th>
                                     <th>角色</th>
+                                    <th>权限</th>
                                     <th>状态</th>
                                     <th>更新时间</th>
                                     <th>操作</th>

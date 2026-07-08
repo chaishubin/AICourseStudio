@@ -288,6 +288,102 @@ def test_operation_logs_are_filtered_for_regular_user(monkeypatch, temp_dir):
     assert logs[0]['actor'] == 'teacher'
 
 
+def test_user_with_log_permission_sees_all_operation_logs(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    store = TaskStore(temp_dir / 'tasks.db')
+    store.add_operation_log({'actor': 'teacher', 'role': 'user', 'action': 'upload'})
+    store.add_operation_log({'actor': 'other', 'role': 'user', 'action': 'upload'})
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'task_store', store)
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'auditor'
+        sess['role'] = 'user'
+        sess['permissions'] = ['view_operation_logs']
+
+    response = client.get('/api/operation-logs')
+
+    assert response.status_code == 200
+    assert {log['actor'] for log in response.get_json()['logs']} == {
+        'teacher',
+        'other',
+    }
+
+
+def test_view_all_permission_does_not_allow_managing_other_tasks(monkeypatch, temp_dir):
+    import web.app as app_module
+
+    task_id = 'other-task'
+    output_root = temp_dir / 'outputs'
+    output_dir = output_root / task_id
+    output_dir.mkdir(parents=True)
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'OUTPUT_FOLDER', output_root)
+    monkeypatch.setattr(app_module, 'tasks', {
+        task_id: {
+            'status': 'completed',
+            'original_name': 'other.pptx',
+            'owner_username': 'other',
+            'output_dir': str(output_dir),
+            'created_at': 1,
+        },
+    })
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'viewer'
+        sess['role'] = 'user'
+        sess['permissions'] = ['view_all_tasks']
+
+    list_response = client.get('/api/tasks')
+    delete_response = client.delete(f'/api/tasks/{task_id}')
+
+    assert list_response.status_code == 200
+    assert list_response.get_json()['tasks'][0]['task_id'] == task_id
+    assert delete_response.status_code == 403
+
+
+def test_manage_all_permission_allows_managing_other_tasks(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    task_id = 'other-task'
+    output_root = temp_dir / 'outputs'
+    output_dir = output_root / task_id
+    output_dir.mkdir(parents=True)
+    state_file = output_root / 'state.json'
+    state_file.write_text('[]', encoding='utf-8')
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'OUTPUT_FOLDER', output_root)
+    monkeypatch.setattr(app_module, 'STATE_FILE', state_file)
+    monkeypatch.setattr(app_module, 'task_store', TaskStore(output_root / 'tasks.db'))
+    monkeypatch.setattr(app_module, 'tasks', {
+        task_id: {
+            'status': 'completed',
+            'original_name': 'other.pptx',
+            'owner_username': 'other',
+            'output_dir': str(output_dir),
+            'created_at': 1,
+        },
+    })
+    monkeypatch.setattr(app_module, 'progress_queues', {})
+    monkeypatch.setattr(app_module, 'cancellation_events', {})
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'manager'
+        sess['role'] = 'user'
+        sess['permissions'] = ['manage_all_tasks']
+
+    response = client.delete(f'/api/tasks/{task_id}')
+
+    assert response.status_code == 200
+    assert task_id not in app_module.tasks
+
+
 def test_super_admin_can_crud_accounts(monkeypatch, temp_dir):
     import web.app as app_module
     from web.task_store import TaskStore
@@ -313,14 +409,20 @@ def test_super_admin_can_crud_accounts(monkeypatch, temp_dir):
         'password': 'secret1',
         'display_name': 'Teacher',
         'role': 'user',
+        'permissions': ['view_all_tasks', 'view_operation_logs'],
         'active': True,
     })
     assert created.status_code == 200
     assert store.get_account('teacher')['password_hash'] != 'secret1'
+    assert store.get_account('teacher')['permissions'] == [
+        'view_all_tasks',
+        'view_operation_logs',
+    ]
 
     updated = client.patch('/api/accounts/teacher', json={
         'display_name': 'Teacher A',
         'role': 'super_admin',
+        'permissions': ['manage_accounts'],
         'active': True,
     })
     assert updated.status_code == 200
@@ -346,6 +448,25 @@ def test_regular_user_cannot_access_account_crud(monkeypatch, temp_dir):
     response = client.get('/api/accounts')
 
     assert response.status_code == 403
+
+
+def test_user_with_account_permission_can_access_account_crud(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    store = TaskStore(temp_dir / 'tasks.db')
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'task_store', store)
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'operator'
+        sess['role'] = 'user'
+        sess['permissions'] = ['manage_accounts']
+
+    response = client.get('/api/accounts')
+
+    assert response.status_code == 200
 
 
 def test_super_admin_cannot_disable_self(monkeypatch, temp_dir):

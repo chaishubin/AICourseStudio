@@ -2714,6 +2714,28 @@ body { background: var(--color-bg); font-size: 14px; }
     align-items: center;
     min-height: 42px;
 }
+.account-permissions-field {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+}
+.account-permissions-field legend {
+    padding: 0 6px;
+    color: var(--color-text-3);
+    font-size: 11px;
+    font-weight: 700;
+}
+.account-permissions-field label {
+    flex-direction: row;
+    align-items: center;
+    gap: 7px;
+    font-weight: 600;
+}
 .account-form-actions {
     display: flex;
     gap: 8px;
@@ -2725,6 +2747,19 @@ body { background: var(--color-bg); font-size: 14px; }
     border: 0;
     cursor: pointer;
 }
+.permission-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    margin: 2px 4px 2px 0;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #edf3ff;
+    color: #2857ca;
+    font-size: 11px;
+    font-weight: 700;
+}
+.table-muted { color: var(--color-text-3); }
 .pagination-actions span {
     color: var(--color-text);
     font-weight: 700;
@@ -2907,7 +2942,7 @@ a.table-action { display: inline-flex; align-items: center; text-decoration: non
     .content { padding:20px 14px 30px; }.workspace-intro { align-items:flex-start; gap:14px; }.workspace-intro h2 { font-size:19px; }.workspace-intro p { font-size:12px; }
     .btn-primary-link { white-space:nowrap; font-size:12px; }.metrics-grid { grid-template-columns:1fr 1fr; gap:10px; }
     .metric-card { grid-template-columns:36px 1fr; padding:13px; }.metric-icon { width:36px;height:36px; }.metric-card strong { font-size:20px; }
-    .content-aside { display:block; }.options-grid { grid-template-columns:1fr; }.account-form { grid-template-columns:1fr; }.video-tuning-grid { grid-template-columns:1fr; }.video-tuning-heading { align-items:flex-start; flex-direction:column; }.card { padding:16px; }.footer { padding:16px; }
+    .content-aside { display:block; }.options-grid { grid-template-columns:1fr; }.account-form,.account-permissions-field { grid-template-columns:1fr; }.video-tuning-grid { grid-template-columns:1fr; }.video-tuning-heading { align-items:flex-start; flex-direction:column; }.card { padding:16px; }.footer { padding:16px; }
 }
 @media (max-width: 440px) {
     .nav-icon { display:none; }.metrics-grid { grid-template-columns:1fr; }.workspace-intro { display:block; }.btn-primary-link { display:inline-block; margin-top:14px; }

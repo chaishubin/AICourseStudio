@@ -72,22 +72,26 @@ def test_task_store_manages_accounts(temp_dir):
         "password_hash": "hash",
         "role": "user",
         "display_name": "Teacher",
+        "permissions": ["view_all_tasks"],
         "active": True,
     })
 
     account = store.get_account("teacher")
     assert account["display_name"] == "Teacher"
     assert account["active"] is True
+    assert account["permissions"] == ["view_all_tasks"]
 
     store.update_account("teacher", {
         "display_name": "Teacher A",
         "role": "super_admin",
+        "permissions_json": '["manage_accounts"]',
         "active": False,
     })
 
     updated = store.get_account("teacher")
     assert updated["display_name"] == "Teacher A"
     assert updated["role"] == "super_admin"
+    assert updated["permissions"] == ["manage_accounts"]
     assert updated["active"] is False
     assert store.list_accounts()[0]["username"] == "teacher"
 

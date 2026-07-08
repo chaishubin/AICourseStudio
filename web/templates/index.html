@@ -36,10 +36,12 @@
                 <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
                     <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
-                {% if is_super_admin %}
+                {% if can_manage_accounts %}
                 <a class="nav-item" href="{{ url_for('accounts_page') }}">
                     <span class="nav-icon">◎</span><span>账号管理</span>
                 </a>
+                {% endif %}
+                {% if can_view_debug %}
                 <a class="nav-item" href="{{ url_for('debug_page') }}">
                     <span class="nav-icon">◇</span><span>调试工作台</span>
                 </a>
@@ -544,23 +546,23 @@
                                 </label>
                                 <label>x坐标
                                     <input id="subtitle-x" class="number-input" type="number"
-                                           min="0" max="1919" value="96">
+                                           min="0" max="1919" value="128">
                                 </label>
                                 <label>y坐标
                                     <input id="subtitle-y" class="number-input" type="number"
-                                           min="0" max="1079" value="900">
+                                           min="0" max="1079" value="910">
                                 </label>
                                 <label>宽度
                                     <input id="subtitle-width" class="number-input" type="number"
-                                           min="1" max="1920" value="1728">
+                                           min="1" max="1920" value="1664">
                                 </label>
                                 <label>高度
                                     <input id="subtitle-height" class="number-input" type="number"
-                                           min="1" max="360" value="110">
+                                           min="1" max="360" value="96">
                                 </label>
                                 <label>字号
                                     <input id="subtitle-font-size" class="number-input" type="number"
-                                           min="12" max="120" value="46">
+                                           min="12" max="72" value="38">
                                 </label>
                                 <details class="subtitle-advanced-settings">
                                     <summary>高级样式</summary>
@@ -596,11 +598,11 @@
                                         </label>
                                         <label>背景透明
                                             <input id="subtitle-background-opacity" class="number-input"
-                                                   type="number" min="0" max="1" step="0.05" value="0.55">
+                                                   type="number" min="0" max="1" step="0.05" value="0.48">
                                         </label>
                                         <label>描边宽
                                             <input id="subtitle-outline-width" class="number-input"
-                                                   type="number" min="0" max="12" step="0.5" value="0">
+                                                   type="number" min="0" max="4" step="0.2" value="0">
                                         </label>
                                         <label>描边颜色
                                             <input id="subtitle-outline-color" class="color-input" type="color"

@@ -14,6 +14,7 @@ class AdminDataPages {
         this.accountRole = document.getElementById('account-role');
         this.accountPassword = document.getElementById('account-password');
         this.accountActive = document.getElementById('account-active');
+        this.accountPermissionInputs = Array.from(document.querySelectorAll('input[name="permissions"]'));
         this.accountSubmit = document.getElementById('account-submit');
         this.accountReset = document.getElementById('account-reset');
         this.accounts = [];
@@ -233,6 +234,7 @@ class AdminDataPages {
             this.saveAccount();
         });
         this.accountReset?.addEventListener('click', () => this.resetAccountForm());
+        this.accountRole?.addEventListener('change', () => this.syncPermissionInputsForRole());
     }
 
     async loadAccounts() {
@@ -243,13 +245,13 @@ class AdminDataPages {
             this.accounts = data.accounts || [];
             this.renderAccountTable();
         } catch (error) {
-            this.accountTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${this.escape(error.message)}</td></tr>`;
+            this.accountTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">${this.escape(error.message)}</td></tr>`;
         }
     }
 
     renderAccountTable() {
         if (!this.accounts.length) {
-            this.accountTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">暂无账号</td></tr>';
+            this.accountTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">暂无账号</td></tr>';
             return;
         }
         this.accountTableBody.innerHTML = this.accounts.map(account => {
@@ -259,6 +261,7 @@ class AdminDataPages {
                     <td><strong>${this.escape(account.username)}</strong>${isCurrent ? '<small>当前账号</small>' : ''}</td>
                     <td>${this.escape(account.display_name || account.username)}</td>
                     <td>${account.role === 'super_admin' ? '超级管理员' : '普通账号'}</td>
+                    <td>${this.permissionBadges(account)}</td>
                     <td><span class="status-pill ${account.active ? 'status-completed' : 'status-interrupted'}">${account.active ? '启用' : '停用'}</span></td>
                     <td>${this.formatTime(account.updated_at || account.created_at)}</td>
                     <td class="table-actions">
@@ -286,6 +289,10 @@ class AdminDataPages {
         this.accountRole.value = account.role || 'user';
         this.accountPassword.value = '';
         this.accountActive.checked = Boolean(account.active);
+        this.accountPermissionInputs.forEach(input => {
+            input.checked = (account.permissions || []).includes(input.value);
+        });
+        this.syncPermissionInputsForRole();
         this.accountSubmit.textContent = '保存账号';
         this.accountPassword.placeholder = '留空则不修改密码';
         this.accountForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -296,6 +303,10 @@ class AdminDataPages {
         this.accountEditUsername.value = '';
         this.accountUsername.disabled = false;
         this.accountActive.checked = true;
+        this.accountPermissionInputs.forEach(input => {
+            input.checked = false;
+        });
+        this.syncPermissionInputsForRole();
         this.accountSubmit.textContent = '创建账号';
         this.accountPassword.placeholder = '新建必填，编辑留空则不修改';
     }
@@ -306,8 +317,37 @@ class AdminDataPages {
             display_name: this.accountDisplayName.value.trim(),
             role: this.accountRole.value,
             password: this.accountPassword.value,
+            permissions: this.accountPermissionInputs
+                .filter(input => input.checked)
+                .map(input => input.value),
             active: this.accountActive.checked
         };
+    }
+
+    syncPermissionInputsForRole() {
+        const isSuperAdmin = this.accountRole?.value === 'super_admin';
+        this.accountPermissionInputs.forEach(input => {
+            input.disabled = isSuperAdmin;
+            if (isSuperAdmin) input.checked = false;
+        });
+    }
+
+    permissionBadges(account) {
+        if (account.role === 'super_admin') {
+            return '<span class="permission-badge">全部权限</span>';
+        }
+        const labels = {
+            view_all_tasks: '看全部数据',
+            manage_all_tasks: '管全部数据',
+            view_operation_logs: '看全部日志',
+            manage_accounts: '账号管理',
+            view_debug: '调试'
+        };
+        const permissions = account.permissions || [];
+        if (!permissions.length) return '<span class="table-muted">仅本账号数据</span>';
+        return permissions
+            .map(permission => `<span class="permission-badge">${this.escape(labels[permission] || permission)}</span>`)
+            .join('');
     }
 
     async saveAccount() {

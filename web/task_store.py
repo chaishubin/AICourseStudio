@@ -69,11 +69,21 @@ class TaskStore:
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
                     display_name TEXT NOT NULL,
+                    permissions_json TEXT NOT NULL DEFAULT '[]',
                     active INTEGER NOT NULL DEFAULT 1,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 )
             """)
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(accounts)").fetchall()
+            }
+            if "permissions_json" not in columns:
+                connection.execute("""
+                    ALTER TABLE accounts
+                    ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '[]'
+                """)
             connection.execute("""
                 CREATE INDEX IF NOT EXISTS idx_accounts_role_active
                 ON accounts(role, active)
@@ -217,14 +227,15 @@ class TaskStore:
                 return
             connection.execute("""
                 INSERT INTO accounts (
-                    username, password_hash, role, display_name,
+                    username, password_hash, role, display_name, permissions_json,
                     active, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 username,
                 account["password_hash"],
                 account.get("role") or "user",
                 account.get("display_name") or username,
+                json.dumps(account.get("permissions") or [], ensure_ascii=False),
                 1 if account.get("active", True) else 0,
                 now,
                 now,
@@ -238,14 +249,15 @@ class TaskStore:
         with self._lock, self._connect() as connection:
             connection.execute("""
                 INSERT INTO accounts (
-                    username, password_hash, role, display_name,
+                    username, password_hash, role, display_name, permissions_json,
                     active, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 username,
                 account["password_hash"],
                 account.get("role") or "user",
                 account.get("display_name") or username,
+                json.dumps(account.get("permissions") or [], ensure_ascii=False),
                 1 if account.get("active", True) else 0,
                 now,
                 now,
@@ -256,6 +268,7 @@ class TaskStore:
             "password_hash",
             "role",
             "display_name",
+            "permissions_json",
             "active",
         }
         assignments = []
@@ -279,7 +292,7 @@ class TaskStore:
     def get_account(self, username: str) -> dict | None:
         with self._lock, self._connect() as connection:
             row = connection.execute("""
-                SELECT username, password_hash, role, display_name,
+                SELECT username, password_hash, role, display_name, permissions_json,
                        active, created_at, updated_at
                 FROM accounts
                 WHERE username = ?
@@ -290,7 +303,7 @@ class TaskStore:
         where = "" if include_inactive else "WHERE active = 1"
         with self._lock, self._connect() as connection:
             rows = connection.execute(f"""
-                SELECT username, password_hash, role, display_name,
+                SELECT username, password_hash, role, display_name, permissions_json,
                        active, created_at, updated_at
                 FROM accounts
                 {where}
@@ -313,7 +326,17 @@ class TaskStore:
             "password_hash": row["password_hash"],
             "role": row["role"],
             "display_name": row["display_name"],
+            "permissions": self._decode_permissions(row["permissions_json"]),
             "active": bool(row["active"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    def _decode_permissions(self, raw: str) -> list[str]:
+        try:
+            value = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if item]

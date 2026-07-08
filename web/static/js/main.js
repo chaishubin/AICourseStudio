@@ -329,81 +329,81 @@ class AICourseStudioApp {
 
     bindSubtitleControls() {
         this.subtitlePresets = {
-            course: { x: 96, y: 900, width: 1728, height: 110, fontSize: 46 },
-            compact: { x: 160, y: 955, width: 1600, height: 70, fontSize: 42 },
-            safe: { x: 160, y: 805, width: 1600, height: 110, fontSize: 44 },
-            top: { x: 160, y: 80, width: 1600, height: 110, fontSize: 44 },
-            lowerMiddle: { x: 160, y: 720, width: 1600, height: 110, fontSize: 44 }
+            course: { x: 128, y: 910, width: 1664, height: 96, fontSize: 38 },
+            compact: { x: 160, y: 950, width: 1600, height: 68, fontSize: 34 },
+            safe: { x: 160, y: 805, width: 1600, height: 96, fontSize: 36 },
+            top: { x: 160, y: 80, width: 1600, height: 86, fontSize: 34 },
+            lowerMiddle: { x: 160, y: 720, width: 1600, height: 96, fontSize: 36 }
         };
         this.subtitleStyleTemplates = {
             standard: {
                 label: '标准网课 · 黑底白字',
                 fontName: 'Noto Sans CJK SC',
-                fontSize: 46,
+                fontSize: 38,
                 color: '#ffffff',
                 backgroundColor: '#111111',
-                backgroundOpacity: 0.55,
+                backgroundOpacity: 0.48,
                 outlineWidth: 0,
                 outlineColor: '#000000'
             },
             lightSlide: {
                 label: '浅色课件 · 深字浅底',
                 fontName: 'Noto Sans CJK SC',
-                fontSize: 46,
+                fontSize: 38,
                 color: '#172033',
                 backgroundColor: '#ffffff',
-                backgroundOpacity: 0.82,
+                backgroundOpacity: 0.78,
                 outlineWidth: 0,
                 outlineColor: '#ffffff'
             },
             darkSlide: {
                 label: '深色课件 · 高对比描边',
                 fontName: 'Noto Sans CJK SC',
-                fontSize: 46,
+                fontSize: 38,
                 color: '#ffffff',
                 backgroundColor: '#000000',
-                backgroundOpacity: 0.38,
-                outlineWidth: 2,
+                backgroundOpacity: 0.42,
+                outlineWidth: 0.8,
                 outlineColor: '#000000'
             },
             lectureSerif: {
                 label: '理论讲授 · 宋体稳重',
                 fontName: 'Noto Serif CJK SC',
-                fontSize: 48,
+                fontSize: 38,
                 color: '#ffffff',
                 backgroundColor: '#182033',
-                backgroundOpacity: 0.62,
-                outlineWidth: 1,
+                backgroundOpacity: 0.54,
+                outlineWidth: 0,
                 outlineColor: '#000000'
             },
             codeDemo: {
                 label: '实操录屏 · 小框清晰',
                 fontName: 'WenQuanYi Micro Hei',
-                fontSize: 42,
+                fontSize: 34,
                 color: '#fff7cc',
                 backgroundColor: '#050505',
-                backgroundOpacity: 0.72,
-                outlineWidth: 1,
+                backgroundOpacity: 0.64,
+                outlineWidth: 0,
                 outlineColor: '#000000'
             },
             emphasis: {
                 label: '重点提示 · 金色强调',
                 fontName: 'Noto Sans CJK SC',
-                fontSize: 50,
+                fontSize: 40,
                 color: '#ffe08a',
                 backgroundColor: '#111111',
                 backgroundOpacity: 0.50,
-                outlineWidth: 2,
+                outlineWidth: 0.8,
                 outlineColor: '#000000'
             },
             minimal: {
-                label: '极简无底 · 白字描边',
+                label: '极简轻描边',
                 fontName: 'Noto Sans CJK SC',
-                fontSize: 46,
+                fontSize: 36,
                 color: '#ffffff',
                 backgroundColor: '#000000',
                 backgroundOpacity: 0,
-                outlineWidth: 3,
+                outlineWidth: 1.2,
                 outlineColor: '#000000'
             }
         };

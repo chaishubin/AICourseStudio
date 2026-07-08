@@ -262,7 +262,13 @@ class CoursePipeline:
         y = max(0, round(int(config.subtitle_y) * scale_y))
         width = max(1, round(int(config.subtitle_width) * scale_x))
         height = max(1, round(int(config.subtitle_height) * scale_y))
-        font_size = max(12, round(int(config.subtitle_font_size) * font_scale))
+        font_size = max(
+            12,
+            min(
+                round(int(config.subtitle_font_size) * font_scale),
+                round(config.video_height * 0.04),
+            ),
+        )
         opacity = min(1.0, max(0.0, float(config.subtitle_background_opacity)))
         font_name = CoursePipeline._sanitize_ass_value(config.subtitle_font_name)
         primary = CoursePipeline._hex_to_ass_color(config.subtitle_color)
@@ -270,7 +276,10 @@ class CoursePipeline:
         background = CoursePipeline._hex_to_ffmpeg_color(
             config.subtitle_background_color
         )
-        outline_width = max(0.0, float(config.subtitle_outline_width) * font_scale)
+        outline_width = min(
+            max(0.0, float(config.subtitle_outline_width) * font_scale),
+            max(1.0, font_size * 0.04),
+        )
         margin_v = max(0, config.video_height - y - height + 6)
         margin_r = max(0, config.video_width - x - width)
         return (

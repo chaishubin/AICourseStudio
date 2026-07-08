@@ -252,7 +252,7 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     assert "drawbox=x=96:y=900:w=1728:h=110" in subtitle_filter
     assert "original_size=1920x1080" in subtitle_filter
     assert "color=0x111111@0.55" in subtitle_filter
-    assert "FontSize=46" in subtitle_filter
+    assert "FontSize=38" in subtitle_filter
     assert "PrimaryColour=&H00FFFFFF" in subtitle_filter
     assert "Outline=0" in subtitle_filter
     assert "Alignment=2" in subtitle_filter
@@ -285,8 +285,8 @@ def test_course_pipeline_scales_subtitle_design_units_for_video_resolution(temp_
 
     assert "drawbox=x=64:y=600:w=1152:h=73" in subtitle_filter
     assert "original_size=1280x720" in subtitle_filter
-    assert "FontSize=31" in subtitle_filter
-    assert "Outline=2" in subtitle_filter
+    assert "FontSize=29" in subtitle_filter
+    assert "Outline=1.16" in subtitle_filter
     assert "MarginL=64" in subtitle_filter
     assert "MarginR=64" in subtitle_filter
     assert "MarginV=53" in subtitle_filter

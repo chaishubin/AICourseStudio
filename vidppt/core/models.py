@@ -95,7 +95,7 @@ class ProcessConfig:
     subtitle_y: int = 900
     subtitle_width: int = 1728
     subtitle_height: int = 110
-    subtitle_font_size: int = 46
+    subtitle_font_size: int = 38
     subtitle_font_name: str = "Noto Sans CJK SC"
     subtitle_color: str = "#FFFFFF"
     subtitle_background_color: str = "#111111"
