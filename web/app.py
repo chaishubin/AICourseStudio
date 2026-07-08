@@ -3061,8 +3061,12 @@ def get_tasks():
         task_summary(task_id, task, queue_positions)
         for task_id, task in visible_tasks.items()
     ]
-    # 按最近排序，限制 50 条
-    all_tasks = all_tasks[-MAX_STATE_ENTRIES:]
+    # 按创建时间倒序排列，限制最近 50 条
+    all_tasks = sorted(
+        all_tasks,
+        key=lambda task: task.get('created_at') or 0,
+        reverse=True,
+    )[:MAX_STATE_ENTRIES]
     return jsonify({
         'tasks': all_tasks,
         'current_user': current_user_context(),

@@ -1,13 +1,30 @@
 class AdminDataPages {
     constructor() {
         this.assetTableBody = document.getElementById('asset-table-body');
+        this.assetSearchInput = document.getElementById('asset-search-input');
+        this.assetStatusFilter = document.getElementById('asset-status-filter');
+        this.assetFilterReset = document.getElementById('asset-filter-reset');
         this.operationLogBody = document.getElementById('operation-log-body');
+        this.assetTasks = [];
         this.init();
     }
 
     init() {
-        if (this.assetTableBody) this.loadAssets();
+        if (this.assetTableBody) {
+            this.bindAssetFilters();
+            this.loadAssets();
+        }
         if (this.operationLogBody) this.loadOperationLogs();
+    }
+
+    bindAssetFilters() {
+        this.assetSearchInput?.addEventListener('input', () => this.applyAssetFilters());
+        this.assetStatusFilter?.addEventListener('change', () => this.applyAssetFilters());
+        this.assetFilterReset?.addEventListener('click', () => {
+            if (this.assetSearchInput) this.assetSearchInput.value = '';
+            if (this.assetStatusFilter) this.assetStatusFilter.value = '';
+            this.applyAssetFilters();
+        });
     }
 
     async loadAssets() {
@@ -15,15 +32,34 @@ class AdminDataPages {
             const response = await fetch('/api/tasks');
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '读取课程数据失败');
-            this.renderAssetTable(data.tasks || []);
+            this.assetTasks = data.tasks || [];
+            this.applyAssetFilters();
         } catch (error) {
-            this.assetTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${this.escape(error.message)}</td></tr>`;
+            this.assetTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">${this.escape(error.message)}</td></tr>`;
         }
     }
 
-    renderAssetTable(tasks) {
+    applyAssetFilters() {
+        const keyword = (this.assetSearchInput?.value || '').trim().toLowerCase();
+        const status = this.assetStatusFilter?.value || '';
+        const filtered = this.assetTasks.filter(task => {
+            const matchesStatus = !status || task.status === status;
+            const haystack = [
+                task.original_name,
+                task.task_id,
+                task.owner_username,
+                task.created_by
+            ].filter(Boolean).join(' ').toLowerCase();
+            const matchesKeyword = !keyword || haystack.includes(keyword);
+            return matchesStatus && matchesKeyword;
+        });
+        this.renderAssetTable(filtered, this.assetTasks.length);
+    }
+
+    renderAssetTable(tasks, totalCount = tasks.length) {
         if (!tasks.length) {
-            this.assetTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">暂无课程数据</td></tr>';
+            const message = totalCount ? '没有符合筛选条件的课程数据' : '暂无课程数据';
+            this.assetTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">${message}</td></tr>`;
             return;
         }
         this.assetTableBody.innerHTML = tasks.map(task => {
@@ -50,6 +86,7 @@ class AdminDataPages {
                     <td>${this.escape(task.owner_username || task.created_by || '-')}</td>
                     <td><span class="status-pill status-${this.escapeAttr(task.status || 'unknown')}">${this.escape(this.statusText(task))}</span></td>
                     <td>${Math.round(task.percentage || 0)}%</td>
+                    <td>${this.formatTime(task.created_at)}</td>
                     <td>${this.formatTime(task.updated_at || task.completed_at || task.started_at || task.created_at)}</td>
                     <td class="table-actions">${actions.join('') || '-'}</td>
                 </tr>

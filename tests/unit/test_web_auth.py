@@ -128,6 +128,46 @@ def test_super_admin_sees_all_tasks(monkeypatch):
     }
 
 
+def test_tasks_default_order_by_created_at_desc(monkeypatch):
+    import web.app as app_module
+
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'tasks', {
+        'old-task': {
+            'status': 'completed',
+            'original_name': 'old.pptx',
+            'owner_username': 'teacher',
+            'created_at': 1000,
+        },
+        'new-task': {
+            'status': 'completed',
+            'original_name': 'new.pptx',
+            'owner_username': 'teacher',
+            'created_at': 3000,
+        },
+        'middle-task': {
+            'status': 'completed',
+            'original_name': 'middle.pptx',
+            'owner_username': 'teacher',
+            'created_at': 2000,
+        },
+    })
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+
+    response = client.get('/api/tasks')
+
+    assert response.status_code == 200
+    assert [task['task_id'] for task in response.get_json()['tasks']] == [
+        'new-task',
+        'middle-task',
+        'old-task',
+    ]
+
+
 def test_regular_user_cannot_download_other_users_file(monkeypatch, temp_dir):
     import web.app as app_module
 

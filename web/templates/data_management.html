@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>数据管理 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=19">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=20">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -65,6 +65,26 @@
                         <div><span class="section-kicker">数据管理</span><h3>课程数据列表</h3></div>
                         <a class="btn-primary-link" href="{{ url_for('index') }}#upload-module">＋ 新建生产任务</a>
                     </div>
+                    <div class="management-filters" aria-label="课程数据筛选">
+                        <label class="management-filter-field">
+                            <span>关键字</span>
+                            <input id="asset-search-input" class="select-input" type="search" placeholder="课程文件 / 任务 ID / 账号">
+                        </label>
+                        <label class="management-filter-field">
+                            <span>状态</span>
+                            <select id="asset-status-filter" class="select-input">
+                                <option value="">全部状态</option>
+                                <option value="queued">排队中</option>
+                                <option value="pending">等待执行</option>
+                                <option value="processing">生产中</option>
+                                <option value="awaiting_confirmation">等待审核</option>
+                                <option value="completed">已完成</option>
+                                <option value="error">失败</option>
+                                <option value="interrupted">已中断</option>
+                            </select>
+                        </label>
+                        <button id="asset-filter-reset" class="btn-secondary" type="button">重置</button>
+                    </div>
                     <div class="management-table-wrap">
                         <table class="management-table">
                             <thead>
@@ -73,6 +93,7 @@
                                     <th>账号</th>
                                     <th>状态</th>
                                     <th>进度</th>
+                                    <th>创建时间</th>
                                     <th>更新时间</th>
                                     <th>操作</th>
                                 </tr>
@@ -87,6 +108,6 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=3"></script>
+    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=4"></script>
 </body>
 </html>
