@@ -10,9 +10,7 @@
 - API 调用与重试逻辑
 """
 
-import os
 import pytest
-from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 from vidppt.core.interfaces import LLMEngine
@@ -132,8 +130,9 @@ class TestAPILLMEngine:
 class TestOpenAILLMEngineInit:
     """测试 OpenAILLMEngine 初始化"""
 
-    def test_engine_initialization_with_explicit_key(self):
+    def test_engine_initialization_with_explicit_key(self, monkeypatch):
         """测试显式传入 api_key"""
+        monkeypatch.delenv("OPENAI_LLM_MODEL", raising=False)
         engine = OpenAILLMEngine(api_key="sk-testkey")
         assert engine.api_key == "sk-testkey"
         assert engine.model == OpenAILLMEngine.DEFAULT_MODEL

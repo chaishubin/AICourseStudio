@@ -4,8 +4,11 @@ class AdminDataPages {
         this.assetSearchInput = document.getElementById('asset-search-input');
         this.assetStatusFilter = document.getElementById('asset-status-filter');
         this.assetFilterReset = document.getElementById('asset-filter-reset');
+        this.assetPagination = document.getElementById('asset-pagination');
         this.operationLogBody = document.getElementById('operation-log-body');
-        this.assetTasks = [];
+        this.assetPage = 1;
+        this.assetPageSize = 10;
+        this.assetPaginationState = { page: 1, page_size: 10, total: 0, total_pages: 1 };
         this.init();
     }
 
@@ -18,42 +21,42 @@ class AdminDataPages {
     }
 
     bindAssetFilters() {
-        this.assetSearchInput?.addEventListener('input', () => this.applyAssetFilters());
-        this.assetStatusFilter?.addEventListener('change', () => this.applyAssetFilters());
+        this.assetSearchInput?.addEventListener('input', () => this.loadAssets(1));
+        this.assetStatusFilter?.addEventListener('change', () => this.loadAssets(1));
         this.assetFilterReset?.addEventListener('click', () => {
             if (this.assetSearchInput) this.assetSearchInput.value = '';
             if (this.assetStatusFilter) this.assetStatusFilter.value = '';
-            this.applyAssetFilters();
+            this.loadAssets(1);
         });
     }
 
-    async loadAssets() {
+    async loadAssets(page = this.assetPage) {
+        this.assetPage = page;
         try {
-            const response = await fetch('/api/tasks');
+            const params = new URLSearchParams({
+                page: String(this.assetPage),
+                page_size: String(this.assetPageSize)
+            });
+            const keyword = (this.assetSearchInput?.value || '').trim();
+            const status = this.assetStatusFilter?.value || '';
+            if (keyword) params.set('q', keyword);
+            if (status) params.set('status', status);
+            const response = await fetch(`/api/tasks?${params.toString()}`);
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '读取课程数据失败');
-            this.assetTasks = data.tasks || [];
-            this.applyAssetFilters();
+            this.assetPaginationState = data.pagination || {
+                page: this.assetPage,
+                page_size: this.assetPageSize,
+                total: (data.tasks || []).length,
+                total_pages: 1
+            };
+            this.assetPage = this.assetPaginationState.page || 1;
+            this.renderAssetTable(data.tasks || [], this.assetPaginationState.total || 0);
+            this.renderAssetPagination();
         } catch (error) {
             this.assetTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">${this.escape(error.message)}</td></tr>`;
+            if (this.assetPagination) this.assetPagination.hidden = true;
         }
-    }
-
-    applyAssetFilters() {
-        const keyword = (this.assetSearchInput?.value || '').trim().toLowerCase();
-        const status = this.assetStatusFilter?.value || '';
-        const filtered = this.assetTasks.filter(task => {
-            const matchesStatus = !status || task.status === status;
-            const haystack = [
-                task.original_name,
-                task.task_id,
-                task.owner_username,
-                task.created_by
-            ].filter(Boolean).join(' ').toLowerCase();
-            const matchesKeyword = !keyword || haystack.includes(keyword);
-            return matchesStatus && matchesKeyword;
-        });
-        this.renderAssetTable(filtered, this.assetTasks.length);
     }
 
     renderAssetTable(tasks, totalCount = tasks.length) {
@@ -97,6 +100,35 @@ class AdminDataPages {
         });
     }
 
+    renderAssetPagination() {
+        if (!this.assetPagination) return;
+        const { page, page_size: pageSize, total, total_pages: totalPages } = this.assetPaginationState;
+        if (!total || totalPages <= 1) {
+            this.assetPagination.hidden = !total;
+            this.assetPagination.innerHTML = total
+                ? `<span>共 ${total} 条</span>`
+                : '';
+            return;
+        }
+        const start = (page - 1) * pageSize + 1;
+        const end = Math.min(page * pageSize, total);
+        this.assetPagination.hidden = false;
+        this.assetPagination.innerHTML = `
+            <span>第 ${start}-${end} 条，共 ${total} 条</span>
+            <div class="pagination-actions">
+                <button type="button" class="table-action" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+                <span>${page} / ${totalPages}</span>
+                <button type="button" class="table-action" data-page="${page + 1}" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+            </div>
+        `;
+        this.assetPagination.querySelectorAll('[data-page]').forEach(button => {
+            button.addEventListener('click', () => {
+                const nextPage = Number(button.dataset.page);
+                if (!Number.isNaN(nextPage)) this.loadAssets(nextPage);
+            });
+        });
+    }
+
     reviewUrl(taskId) {
         if (!taskId) return '';
         return `/?preview_task=${encodeURIComponent(taskId)}#course-preview-module`;
@@ -114,7 +146,7 @@ class AdminDataPages {
             const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '删除失败');
-            await this.loadAssets();
+            await this.loadAssets(this.assetPage);
             window.VidPPTUI.toast(data.message || '课程产物已删除', { type: 'success' });
         } catch (error) {
             button.disabled = false;

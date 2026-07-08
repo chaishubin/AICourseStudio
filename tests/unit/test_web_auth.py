@@ -168,6 +168,75 @@ def test_tasks_default_order_by_created_at_desc(monkeypatch):
     ]
 
 
+def test_tasks_uses_fallback_created_time_for_legacy_tasks(monkeypatch):
+    import web.app as app_module
+
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'tasks', {
+        'legacy-task': {
+            'status': 'completed',
+            'original_name': 'legacy.pptx',
+            'owner_username': 'teacher',
+            'updated_at': 2000,
+        },
+        'new-task': {
+            'status': 'completed',
+            'original_name': 'new.pptx',
+            'owner_username': 'teacher',
+            'created_at': 1000,
+        },
+    })
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+
+    response = client.get('/api/tasks')
+
+    assert response.status_code == 200
+    tasks = response.get_json()['tasks']
+    assert [task['task_id'] for task in tasks] == ['legacy-task', 'new-task']
+    assert tasks[0]['created_at'] == 2000
+    assert tasks[0]['created_at_source'] == 'fallback'
+
+
+def test_tasks_supports_pagination_and_filters(monkeypatch):
+    import web.app as app_module
+
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'tasks', {
+        f'task-{index}': {
+            'status': 'completed' if index % 2 else 'error',
+            'original_name': f'course-{index}.pptx',
+            'owner_username': 'teacher',
+            'created_at': 1000 + index,
+        }
+        for index in range(1, 16)
+    })
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+
+    response = client.get('/api/tasks?page=2&page_size=5&status=completed&q=course')
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['pagination'] == {
+        'page': 2,
+        'page_size': 5,
+        'total': 8,
+        'total_pages': 2,
+    }
+    assert [task['task_id'] for task in payload['tasks']] == [
+        'task-5',
+        'task-3',
+        'task-1',
+    ]
+
+
 def test_regular_user_cannot_download_other_users_file(monkeypatch, temp_dir):
     import web.app as app_module
 

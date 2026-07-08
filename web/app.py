@@ -6,6 +6,7 @@ AI Course Studio - Web 服务
 
 import os
 import re
+import math
 import uuid
 import json
 import hashlib
@@ -44,6 +45,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from vidppt import Pipeline, ProcessConfig
 from vidppt.core.course import Course, CourseSection, KnowledgePoint
+from vidppt.review import CourseReviewError, CourseReviewer
 from vidppt.utils.progress import ProcessStage
 
 # 导入处理器以触发注册
@@ -187,6 +189,7 @@ tasks = {}  # task_id -> {status, file_path, output_dir, stage, percentage, mess
 progress_queues = {}  # task_id -> Queue
 cancellation_events = {}  # task_id -> threading.Event
 task_store = TaskStore(TASK_DB_FILE)
+QUALITY_MODES = {'economy', 'balanced', 'premium'}
 
 
 def current_user_context() -> dict:
@@ -306,13 +309,25 @@ def log_operation(
         logger.warning(f'写入操作日志失败 action={action}, task={task_id}: {exc}')
 
 
+def _task_created_at(task: dict) -> float | None:
+    return (
+        task.get('created_at')
+        or task.get('started_at')
+        or task.get('completed_at')
+        or task.get('updated_at')
+    )
+
+
 def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> dict:
+    source_path = task.get('file_path', '')
+    created_at = _task_created_at(task)
     return {
         'task_id': task_id,
         'status': task.get('status', 'unknown'),
         'original_name': task.get('original_name', ''),
         'course_name': task.get('course_name', ''),
-        'file_path': task.get('file_path', ''),
+        'file_path': source_path,
+        'source_file_exists': bool(source_path and Path(source_path).is_file()),
         'stage': task.get('stage'),
         'percentage': task.get('percentage', 0),
         'stage_percentage': task.get('stage_percentage', 0),
@@ -330,7 +345,8 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'queue_position': queue_positions.get(task_id),
         'owner_username': _task_owner(task),
         'created_by': task.get('created_by') or _task_owner(task),
-        'created_at': task.get('created_at'),
+        'created_at': created_at,
+        'created_at_source': 'created_at' if task.get('created_at') else 'fallback',
         'started_at': task.get('started_at'),
         'stage_started_at': task.get('stage_started_at'),
         'stage_timings': task.get('stage_timings', {}),
@@ -1352,6 +1368,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                 for page in content.pages
             ],
         )
+        _auto_review_preview(task_id)
         progress.preview_ready(str(preview_path))
 
     except Exception as e:
@@ -1472,6 +1489,7 @@ def run_course_generation(
             course_json_path=str(result.course_json),
             presentation_path=str(result.presentation),
         )
+        _auto_review_preview(task_id)
         progress.preview_ready(
             str(preview_path),
             course_json_path=str(result.course_json),
@@ -1525,6 +1543,74 @@ def _persist_preview(task_id: str, preview: dict) -> None:
         json.dumps(preview, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
+
+
+def _quality_mode_for_task(task: dict | None) -> str:
+    mode = str((task or {}).get('strategy', {}).get('quality_mode') or 'balanced')
+    return mode if mode in QUALITY_MODES else 'balanced'
+
+
+def _review_mode_for_quality(quality_mode: str) -> str | None:
+    if quality_mode == 'balanced':
+        return 'sample'
+    if quality_mode == 'premium':
+        return 'full'
+    return None
+
+
+def _run_course_review(task_id: str, mode: str) -> dict:
+    if mode not in {'sample', 'full'}:
+        raise ValueError('不支持的 AI 审查模式')
+    preview = _read_preview(task_id)
+    review = CourseReviewer().review(preview, mode)
+    preview['ai_review'] = review
+    _persist_preview(task_id, preview)
+    task = tasks.get(task_id)
+    if task:
+        task['ai_review'] = review
+        task['message'] = (
+            'ChatGPT 全课二审完成'
+            if mode == 'full' else 'ChatGPT 抽检完成'
+        )
+        save_state(task_id)
+    return review
+
+
+def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dict:
+    review = {
+        'status': 'failed',
+        'mode': mode,
+        'model': os.getenv('OPENAI_REVIEW_MODEL') or os.getenv('OPENAI_LLM_MODEL') or 'openai',
+        'summary': f'AI 审查未完成: {error}',
+        'findings': [],
+        'reviewed_pages': [],
+        'estimated_cost_cny': 0,
+        'created_at': time.time(),
+    }
+    try:
+        preview = _read_preview(task_id)
+        preview['ai_review'] = review
+        _persist_preview(task_id, preview)
+    except Exception:
+        logger.exception(f'写入 AI 审查失败状态失败: task={task_id}')
+    task = tasks.get(task_id)
+    if task:
+        task['ai_review'] = review
+        task['message'] = review['summary']
+        save_state(task_id)
+    return review
+
+
+def _auto_review_preview(task_id: str) -> None:
+    task = tasks.get(task_id)
+    mode = _review_mode_for_quality(_quality_mode_for_task(task))
+    if not mode:
+        return
+    try:
+        _run_course_review(task_id, mode)
+    except Exception as exc:
+        logger.warning(f'自动 AI 审查失败: task={task_id}, mode={mode}, error={exc}')
+        _mark_course_review_failed(task_id, mode, exc)
 
 
 def _slide_image_url(image_path: str) -> str:
@@ -1811,6 +1897,19 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             page['reviewed'] = reviewed_by_page[page_number]
     if not any(page.get('script', '').strip() for page in preview.get('pages', [])):
         raise ValueError("至少需要保留一页非空讲稿")
+    if changed_pages and preview.get('ai_review'):
+        review = dict(preview['ai_review'])
+        review.update({
+            'status': 'pending',
+            'summary': '讲稿已修改，建议重新运行 AI 审查',
+            'findings': [],
+            'stale': True,
+            'stale_pages': sorted(changed_pages),
+        })
+        preview['ai_review'] = review
+        task = tasks.get(task_id)
+        if task:
+            task['ai_review'] = review
     _persist_preview(task_id, preview)
 
     course_json_path = preview.get('course_json_path')
@@ -2172,6 +2271,7 @@ def convert_ppt():
     llm_mode = data.get('llm_mode', 'per-page')
     llm_engine = data.get('llm_engine', 'qwen')
     refinement_level = data.get('refinement_level', 'standard')
+    quality_mode = str(data.get('quality_mode', 'balanced')).strip().lower()
     illustrations_enabled = bool(data.get('illustrations_enabled', False))
     max_illustrations = int(data.get('max_illustrations', 3))
     ppt_footer_text = str(
@@ -2188,6 +2288,8 @@ def convert_ppt():
     strategy_source = data.get('strategy_source', 'batch')
     if refinement_level not in {'light', 'standard', 'strong'}:
         return jsonify({'error': '不支持的精炼程度'}), 400
+    if quality_mode not in QUALITY_MODES:
+        return jsonify({'error': '不支持的质量模式'}), 400
     if max_illustrations not in {1, 2, 3, 4}:
         return jsonify({'error': '插图数量必须为 1 到 4'}), 400
     allowed_visual_themes = {
@@ -2231,6 +2333,7 @@ def convert_ppt():
         'llm_engine': llm_engine,
         'llm_mode': llm_mode,
         'refinement_level': refinement_level,
+        'quality_mode': quality_mode,
         'illustrations_enabled': illustrations_enabled,
         'max_illustrations': max_illustrations,
         'ppt_footer_text': ppt_footer_text,
@@ -2320,8 +2423,51 @@ def get_course_preview(task_id):
     duration_estimate = _duration_estimate_payload(preview)
     preview['duration_estimate'] = duration_estimate
     preview['lesson_segments'] = duration_estimate['segments']
+    preview['quality_mode'] = _quality_mode_for_task(task)
+    preview['ai_review'] = preview.get('ai_review') or task.get('ai_review')
     log_operation('preview_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify(preview)
+
+
+@app.route('/api/course-review/<task_id>', methods=['GET', 'POST'])
+def course_review(task_id):
+    """读取或运行预览阶段的 ChatGPT 质量审查。"""
+    task, error = require_task_access(task_id)
+    if error:
+        return error
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '任务尚未进入讲稿确认阶段'}), 409
+    try:
+        preview = _read_preview(task_id)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 404
+    if request.method == 'GET':
+        return jsonify({
+            'success': True,
+            'quality_mode': _quality_mode_for_task(task),
+            'ai_review': preview.get('ai_review') or task.get('ai_review'),
+        })
+
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get('mode') or 'sample').strip().lower()
+    if mode not in {'sample', 'full'}:
+        return jsonify({'error': 'mode 只能是 sample 或 full'}), 400
+    try:
+        review = _run_course_review(task_id, mode)
+    except (ValueError, CourseReviewError) as exc:
+        review = _mark_course_review_failed(task_id, mode, exc)
+        return jsonify({'success': False, 'ai_review': review, 'error': str(exc)}), 400
+    except Exception as exc:
+        logger.exception(f'课程 AI 审查失败: task={task_id}, mode={mode}')
+        review = _mark_course_review_failed(task_id, mode, exc)
+        return jsonify({'success': False, 'ai_review': review, 'error': str(exc)}), 502
+
+    log_operation(
+        'course_review_full' if mode == 'full' else 'course_review_sample',
+        task_id=task_id,
+        target_name=task.get('original_name'),
+    )
+    return jsonify({'success': True, 'ai_review': review})
 
 
 @app.route('/api/course-preview/<task_id>/page-audio', methods=['POST'])
@@ -2535,11 +2681,13 @@ def course_presentation(task_id):
 
         preview['presentation_path'] = str(reviewed_path)
         preview['pages'] = refreshed_pages
+        preview.pop('ai_review', None)
         _preview_file(task_id).write_text(
             json.dumps(preview, ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
         task['presentation_path'] = str(reviewed_path)
+        task.pop('ai_review', None)
         task['message'] = 'PPT 已更新，请确认预览和讲稿'
         save_state(task_id)
         log_operation('upload_reviewed_ppt', task_id=task_id, target_name=task.get('original_name'))
@@ -3067,7 +3215,19 @@ def get_status(task_id):
 
 @app.route('/api/tasks')
 def get_tasks():
-    """返回所有任务的列表（最近 50 条）"""
+    """返回当前用户可见任务列表，支持筛选和分页。"""
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.args.get('page_size', 10))
+    except (TypeError, ValueError):
+        page_size = 10
+    page_size = max(5, min(page_size, 50))
+    status_filter = (request.args.get('status') or '').strip()
+    keyword = (request.args.get('q') or '').strip().lower()
+
     visible_tasks = {
         task_id: task for task_id, task in tasks.items()
         if can_access_task(task)
@@ -3087,14 +3247,41 @@ def get_tasks():
         task_summary(task_id, task, queue_positions)
         for task_id, task in visible_tasks.items()
     ]
-    # 按创建时间倒序排列，限制最近 50 条
+    if status_filter:
+        all_tasks = [
+            task for task in all_tasks
+            if task.get('status') == status_filter
+        ]
+    if keyword:
+        all_tasks = [
+            task for task in all_tasks
+            if keyword in ' '.join([
+                str(task.get('original_name') or ''),
+                str(task.get('course_name') or ''),
+                str(task.get('task_id') or ''),
+                str(task.get('owner_username') or ''),
+                str(task.get('created_by') or ''),
+            ]).lower()
+        ]
+    # 按创建时间倒序排列；旧任务没有 created_at 时使用可推断时间兜底。
     all_tasks = sorted(
         all_tasks,
         key=lambda task: task.get('created_at') or 0,
         reverse=True,
-    )[:MAX_STATE_ENTRIES]
+    )
+    total = len(all_tasks)
+    total_pages = max(1, math.ceil(total / page_size))
+    page = min(page, total_pages)
+    start = (page - 1) * page_size
+    paged_tasks = all_tasks[start:start + page_size]
     return jsonify({
-        'tasks': all_tasks,
+        'tasks': paged_tasks,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'total': total,
+            'total_pages': total_pages,
+        },
         'current_user': current_user_context(),
         'is_super_admin': is_super_admin(),
     })
@@ -3278,6 +3465,51 @@ def _artifact_download_name(task: dict | None, file_path: str) -> str:
     original_basename = str(original_name).replace('\\', '/').rsplit('/', 1)[-1]
     stem = Path(original_basename).stem.strip() if original_basename else ''
     return f"{stem or artifact.stem or 'course'}{artifact.suffix}"
+
+
+def _source_file_for_task(task: dict) -> Path | None:
+    file_path = task.get('file_path')
+    if not file_path:
+        return None
+    try:
+        source = Path(file_path).resolve()
+    except OSError:
+        return None
+    if not source.is_file():
+        return None
+    try:
+        source.relative_to(UPLOAD_FOLDER.resolve())
+    except ValueError:
+        return None
+    return source
+
+
+@app.route('/api/tasks/<task_id>/source-file')
+def source_file(task_id):
+    """下载或预览任务的原始上传文件。"""
+    task, error = require_task_access(task_id)
+    if error:
+        return error
+    source = _source_file_for_task(task)
+    if not source:
+        return jsonify({'error': '上传文件不存在'}), 404
+
+    mode = request.args.get('mode', 'download')
+    if mode == 'preview' and source.suffix.lower() not in {'.pdf'}:
+        return jsonify({'error': '该格式暂不支持在线预览，请下载源文件查看'}), 415
+    if mode not in {'download', 'preview'}:
+        return jsonify({'error': '不支持的源文件操作'}), 400
+
+    log_operation(
+        'preview_source' if mode == 'preview' else 'download_source',
+        task_id=task_id,
+        target_name=task.get('original_name'),
+    )
+    return send_file(
+        source,
+        as_attachment=mode != 'preview',
+        download_name=_artifact_download_name(task, str(source)),
+    )
 
 
 @app.route('/api/download')

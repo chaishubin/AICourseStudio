@@ -80,6 +80,7 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
             "voice": "zh_female_cancan_mars_bigtts",
             "llm_enabled": True,
             "llm_engine": "qwen",
+            "quality_mode": "balanced",
             "visual_theme": "technology",
             "burn_subtitles": False,
             "subtitle_y": 940,
@@ -96,6 +97,7 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
     task_id = response.get_json()["task_id"]
     assert web_app.tasks[task_id]["course_name"] == "自定义课程名"
     assert web_app.tasks[task_id]["strategy"]["burn_subtitles"] is False
+    assert web_app.tasks[task_id]["strategy"]["quality_mode"] == "balanced"
     assert web_app.tasks[task_id]["strategy"]["subtitle_y"] == 940
     assert web_app.tasks[task_id]["strategy"]["subtitle_font_size"] == 48
     assert web_app.tasks[task_id]["media_options"]["burn_subtitles"] is False
@@ -265,6 +267,99 @@ def test_review_presentation_can_be_downloaded_and_replaced(monkeypatch, temp_di
     assert payload["pages"][0]["title"] == "修改后的标题"
     assert "&v=" in payload["pages"][0]["image_url"]
     assert (output_dir / "reviewed.pptx").read_bytes() == b"edited-pptx"
+
+
+def test_course_review_runs_and_persists_result(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "review-task"
+    output_dir = temp_dir / task_id
+    output_dir.mkdir()
+    preview_path = output_dir / "preview.json"
+    preview_path.write_text(json.dumps({
+        "task_id": task_id,
+        "source_type": "lesson_plan",
+        "pages": [
+            {
+                "page_number": 1,
+                "title": "导入",
+                "image_path": str(output_dir / "1.png"),
+                "script": "第一页讲稿",
+            },
+            {
+                "page_number": 2,
+                "title": "总结",
+                "image_path": str(output_dir / "2.png"),
+                "script": "第二页讲稿",
+            },
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    class FakeReviewer:
+        def review(self, preview, mode):
+            assert mode == "sample"
+            assert len(preview["pages"]) == 2
+            return {
+                "status": "warning",
+                "mode": mode,
+                "model": "fake-model",
+                "summary": "需要优化承接",
+                "findings": [{
+                    "page_number": 2,
+                    "level": "warning",
+                    "category": "衔接",
+                    "message": "转场略硬",
+                    "suggestion": "增加承上启下句",
+                }],
+                "reviewed_pages": [1, 2],
+                "estimated_cost_cny": 0.01,
+            }
+
+    monkeypatch.setattr(web_app, "CourseReviewer", FakeReviewer)
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "awaiting_confirmation",
+            "output_dir": str(output_dir),
+            "original_name": "lesson.docx",
+            "strategy": {"quality_mode": "balanced"},
+        },
+    })
+    client = web_app.app.test_client()
+
+    response = client.post(f"/api/course-review/{task_id}", json={"mode": "sample"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ai_review"]["status"] == "warning"
+    saved = json.loads(preview_path.read_text(encoding="utf-8"))
+    assert saved["ai_review"]["findings"][0]["page_number"] == 2
+
+
+def test_course_review_get_returns_existing_result(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    task_id = "review-get-task"
+    output_dir = temp_dir / task_id
+    output_dir.mkdir()
+    review = {"status": "passed", "mode": "full", "findings": []}
+    (output_dir / "preview.json").write_text(json.dumps({
+        "task_id": task_id,
+        "pages": [],
+        "ai_review": review,
+    }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "awaiting_confirmation",
+            "output_dir": str(output_dir),
+            "strategy": {"quality_mode": "premium"},
+        },
+    })
+
+    response = web_app.app.test_client().get(f"/api/course-review/{task_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["quality_mode"] == "premium"
+    assert response.get_json()["ai_review"] == review
 
 
 def test_artifact_downloads_use_original_upload_name(monkeypatch, temp_dir):
@@ -552,6 +647,62 @@ def test_task_list_includes_source_path_for_preview_retry(monkeypatch, temp_dir)
 
     assert response.status_code == 200
     assert response.get_json()["tasks"][0]["file_path"] == str(source)
+    assert response.get_json()["tasks"][0]["source_file_exists"] is True
+
+
+def test_source_file_can_be_downloaded_and_previewed(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    upload_dir = temp_dir / "uploads"
+    upload_dir.mkdir()
+    source = upload_dir / "uuid-lesson.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", upload_dir)
+    monkeypatch.setattr(web_app, "tasks", {
+        "source-task": {
+            "status": "completed",
+            "original_name": "../../课程资料.pdf",
+            "file_path": str(source),
+        },
+    })
+    client = web_app.app.test_client()
+
+    download = client.get("/api/tasks/source-task/source-file")
+    preview = client.get(
+        "/api/tasks/source-task/source-file",
+        query_string={"mode": "preview"},
+    )
+
+    assert download.status_code == 200
+    assert download.data == b"%PDF-1.4"
+    assert "filename*=UTF-8''%E8%AF%BE%E7%A8%8B%E8%B5%84%E6%96%99.pdf" in (
+        download.headers["Content-Disposition"]
+    )
+    assert preview.status_code == 200
+    assert "attachment" not in preview.headers.get("Content-Disposition", "")
+
+
+def test_source_file_rejects_paths_outside_upload_folder(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    upload_dir = temp_dir / "uploads"
+    upload_dir.mkdir()
+    outside = temp_dir / "outside.pdf"
+    outside.write_bytes(b"secret")
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", upload_dir)
+    monkeypatch.setattr(web_app, "tasks", {
+        "unsafe-source-task": {
+            "status": "completed",
+            "original_name": "outside.pdf",
+            "file_path": str(outside),
+        },
+    })
+
+    response = web_app.app.test_client().get(
+        "/api/tasks/unsafe-source-task/source-file"
+    )
+
+    assert response.status_code == 404
 
 
 def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
@@ -948,6 +1099,9 @@ def test_index_contains_editable_course_preview():
     assert 'id="save-scripts-btn"' in html
     assert 'id="continue-course-btn"' in html
     assert 'id="refinement-level"' in html
+    assert 'id="quality-mode"' in html
+    assert 'id="ai-review-panel"' in html
+    assert 'ChatGPT 抽检' in html
     assert 'id="custom-voice"' in html
     assert 'id="ppt-footer-text"' in html
     assert 'id="visual-theme"' in html

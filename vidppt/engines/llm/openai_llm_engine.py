@@ -33,7 +33,7 @@ class OpenAILLMEngine(LLMEngine):
         max_retries: int = DEFAULT_MAX_RETRIES,
         **kwargs,
     ):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.api_key = os.getenv("OPENAI_API_KEY") if api_key is None else api_key
         if not self.api_key:
             raise ValueError("OpenAI API Key 未设置，请设置环境变量 OPENAI_API_KEY")
         self.api_url = api_url.rstrip("/")

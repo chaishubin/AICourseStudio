@@ -268,6 +268,12 @@
                                 <option value="standard" selected>标准：精炼且完整</option>
                                 <option value="strong">高度：只保留核心内容</option>
                             </select>
+                            <label for="quality-mode">质量模式</label>
+                            <select id="quality-mode" class="select-input">
+                                <option value="economy">经济：国内模型生成，不调用 ChatGPT 审查</option>
+                                <option value="balanced" selected>均衡：国内模型生成，ChatGPT 抽检</option>
+                                <option value="premium">精品：国内模型生成，ChatGPT 全课二审</option>
+                            </select>
                             <label for="visual-theme">PPT 视觉方案</label>
                             <select id="visual-theme" class="select-input">
                                 <option value="auto" selected>智能设计：根据内容匹配色调与版式</option>
@@ -376,6 +382,20 @@
                             <input type="checkbox" id="unreviewed-only">
                             只看未审核
                         </label>
+                    </div>
+                    <div class="ai-review-panel" id="ai-review-panel">
+                        <div class="ai-review-header">
+                            <div>
+                                <h4>AI 审查</h4>
+                                <span id="ai-review-summary">等待审查结果</span>
+                            </div>
+                            <div class="ai-review-actions">
+                                <button type="button" class="btn-secondary" id="ai-review-sample-btn">ChatGPT 抽检</button>
+                                <button type="button" class="btn-secondary" id="ai-review-full-btn">全课二审</button>
+                            </div>
+                        </div>
+                        <div class="ai-review-meta" id="ai-review-meta"></div>
+                        <div class="ai-review-findings" id="ai-review-findings"></div>
                     </div>
                     <div class="smart-cut-panel">
                         <div class="smart-cut-tabs" role="tablist" aria-label="课程拆分设置">

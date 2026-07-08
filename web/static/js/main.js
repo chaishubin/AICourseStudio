@@ -39,6 +39,7 @@ class AICourseStudioApp {
         this.coursePreviewAudio = null;
         this.coursePreviewPlaying = false;
         this.coursePreviewSubtitlePage = null;
+        this.currentAIReview = null;
 
         try {
             this.elements = {
@@ -90,6 +91,7 @@ class AICourseStudioApp {
                 llmModeGroup: document.getElementById('llm-mode-group'),
                 llmMode: document.getElementById('llm-mode'),
                 refinementLevel: document.getElementById('refinement-level'),
+                qualityMode: document.getElementById('quality-mode'),
                 visualTheme: document.getElementById('visual-theme'),
                 illustrationsEnabled: document.getElementById('illustrations-enabled'),
                 maxIllustrations: document.getElementById('max-illustrations'),
@@ -134,6 +136,12 @@ class AICourseStudioApp {
                 previewNextBtn: document.getElementById('preview-next-btn'),
                 previewPageSelect: document.getElementById('preview-page-select'),
                 unreviewedOnly: document.getElementById('unreviewed-only'),
+                aiReviewPanel: document.getElementById('ai-review-panel'),
+                aiReviewSummary: document.getElementById('ai-review-summary'),
+                aiReviewMeta: document.getElementById('ai-review-meta'),
+                aiReviewFindings: document.getElementById('ai-review-findings'),
+                aiReviewSampleBtn: document.getElementById('ai-review-sample-btn'),
+                aiReviewFullBtn: document.getElementById('ai-review-full-btn'),
                 cutDurationMinutes: document.getElementById('cut-duration-minutes'),
                 smartCutRecommendBtn: document.getElementById('smart-cut-recommend-btn'),
                 smartCutApplyBtn: document.getElementById('smart-cut-apply-btn'),
@@ -263,6 +271,7 @@ class AICourseStudioApp {
             this.elements.llmEngine,
             this.elements.llmMode,
             this.elements.refinementLevel,
+            this.elements.qualityMode,
             this.elements.visualTheme,
             this.elements.illustrationsEnabled,
             this.elements.maxIllustrations,
@@ -697,6 +706,7 @@ class AICourseStudioApp {
             llmEngine: 'llm_engine',
             llmMode: 'llm_mode',
             refinementLevel: 'refinement_level',
+            qualityMode: 'quality_mode',
             visualTheme: 'visual_theme',
             maxIllustrations: 'max_illustrations',
             pptFooterText: 'ppt_footer_text',
@@ -815,6 +825,12 @@ class AICourseStudioApp {
         );
         this.elements.unreviewedOnly.addEventListener(
             'change', () => this.filterPreviewPages()
+        );
+        this.elements.aiReviewSampleBtn.addEventListener(
+            'click', () => this.runCourseReview('sample')
+        );
+        this.elements.aiReviewFullBtn.addEventListener(
+            'click', () => this.runCourseReview('full')
         );
         this.elements.smartCutRecommendBtn.addEventListener(
             'click', () => this.recommendSmartCuts()
@@ -1154,6 +1170,7 @@ class AICourseStudioApp {
             courseJsonPath: null,
             presentationPath: null,
             subtitlesPath: null,
+            sourceFileExists: false,
             error: null,
             selected: true,
             strategy: null,
@@ -1192,6 +1209,7 @@ class AICourseStudioApp {
             const result = await response.json();
             this.updateItem(index, {
                 filePath: result.file_path,
+                sourceFileExists: true,
                 status: 'pending',
                 percentage: 0,
                 message: '待转换'
@@ -1360,6 +1378,7 @@ class AICourseStudioApp {
             `语音：${engineNames[this.elements.ttsEngine.value] || this.elements.ttsEngine.value} · ${voiceName}`,
             `字幕：${this.elements.burnSubtitles.checked ? '烧录到视频' : '仅生成 SRT 文件'}`,
             lessonPlans ? `AI 提炼：${this.elements.refinementLevel.selectedOptions[0]?.textContent}` : '',
+            lessonPlans ? `质量模式：${this.elements.qualityMode.selectedOptions[0]?.textContent}` : '',
             lessonPlans ? `视觉方案：${this.elements.visualTheme.selectedOptions[0]?.textContent}` : '',
             '',
             '确认开始生成课程草稿？'
@@ -1406,6 +1425,7 @@ class AICourseStudioApp {
             llm_engine: this.elements.llmEngine.value,
             llm_mode: this.elements.llmMode.value,
             refinement_level: this.elements.refinementLevel.value,
+            quality_mode: this.elements.qualityMode.value,
             visual_theme: this.elements.visualTheme.value,
             illustrations_enabled: this.elements.illustrationsEnabled.checked,
             max_illustrations: Number(this.elements.maxIllustrations.value),
@@ -1438,6 +1458,7 @@ class AICourseStudioApp {
                 llm_engine: 'qwen',
                 llm_mode: 'per-page',
                 refinement_level: 'standard',
+                quality_mode: 'balanced',
                 illustrations_enabled: true,
                 max_illustrations: 3
             },
@@ -1447,6 +1468,7 @@ class AICourseStudioApp {
                 llm_engine: 'qwen',
                 llm_mode: 'per-page',
                 refinement_level: 'light',
+                quality_mode: 'economy',
                 illustrations_enabled: false,
                 max_illustrations: 1
             },
@@ -1456,6 +1478,7 @@ class AICourseStudioApp {
                 llm_engine: 'qwen',
                 llm_mode: 'per-page',
                 refinement_level: 'strong',
+                quality_mode: 'premium',
                 illustrations_enabled: true,
                 max_illustrations: 2
             }
@@ -1567,11 +1590,31 @@ class AICourseStudioApp {
         }
         body.innerHTML = this.state.files.map(item => {
             const actions = [];
-            if (item.status === 'awaiting_confirmation') {
-                actions.push(`<button type="button" class="table-action" data-action="preview" data-task-id="${this._escAttr(item.taskId)}">预览审核</button>`);
+            if (item.taskId && item.sourceFileExists) {
+                actions.push(`
+                    <span class="table-action-group" aria-label="上传文件操作">
+                        <span class="table-action-label">源文件</span>
+                        <button type="button" class="table-action" data-action="source-preview" data-task-id="${this._escAttr(item.taskId)}" title="预览上传文件">预览</button>
+                        <button type="button" class="table-action" data-action="source-download" data-task-id="${this._escAttr(item.taskId)}" title="下载上传文件">下载</button>
+                    </span>
+                `);
             }
             if (item.status === 'completed' && item.videoPath) {
-                actions.push(`<button type="button" class="table-action" data-action="download" data-task-id="${this._escAttr(item.taskId)}">下载</button>`);
+                actions.push(`
+                    <span class="table-action-group" aria-label="生成视频操作">
+                        <span class="table-action-label">视频</span>
+                        <button type="button" class="table-action" data-action="video-preview" data-task-id="${this._escAttr(item.taskId)}" title="预览生成视频">预览</button>
+                        <button type="button" class="table-action" data-action="video-download" data-task-id="${this._escAttr(item.taskId)}" title="下载生成视频">下载</button>
+                    </span>
+                `);
+            } else {
+                actions.push(`
+                    <span class="table-action-group table-action-group-disabled" aria-label="生成视频操作">
+                        <span class="table-action-label">视频</span>
+                        <button type="button" class="table-action" disabled title="视频生成完成后可预览">预览</button>
+                        <button type="button" class="table-action" disabled title="视频生成完成后可下载">下载</button>
+                    </span>
+                `);
             }
             if (['completed', 'error', 'interrupted', 'awaiting_confirmation'].includes(item.status)) {
                 actions.push(`<button type="button" class="table-action danger" data-action="delete" data-task-id="${this._escAttr(item.taskId)}">删除</button>`);
@@ -1591,8 +1634,10 @@ class AICourseStudioApp {
             button.addEventListener('click', () => {
                 const taskId = button.dataset.taskId;
                 const action = button.dataset.action;
-                if (action === 'preview') this.loadCoursePreview(taskId);
-                if (action === 'download') this.handleDownloadByTaskId(taskId);
+                if (action === 'source-preview') this.previewSourceFile(taskId);
+                if (action === 'source-download') this.downloadSourceFile(taskId);
+                if (action === 'video-preview') this.previewVideoByTaskId(taskId);
+                if (action === 'video-download') this.handleDownloadByTaskId(taskId);
                 if (action === 'delete') this.deleteTask(taskId);
             });
         });
@@ -2520,6 +2565,54 @@ class AICourseStudioApp {
         this.handleDownload(found.index);
     }
 
+    sourceFileUrl(taskId, mode = 'download') {
+        return `/api/tasks/${encodeURIComponent(taskId)}/source-file?mode=${encodeURIComponent(mode)}`;
+    }
+
+    downloadSourceFile(taskId) {
+        const found = this.getItemByTaskId(taskId);
+        const item = found?.item;
+        if (!item?.taskId || !item.sourceFileExists) {
+            window.VidPPTUI.alert('上传文件不存在', { type: 'warning' });
+            return;
+        }
+        const a = document.createElement('a');
+        a.href = this.sourceFileUrl(item.taskId, 'download');
+        a.download = item.fileName || '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    previewSourceFile(taskId) {
+        const found = this.getItemByTaskId(taskId);
+        const item = found?.item;
+        if (!item?.taskId || !item.sourceFileExists) {
+            window.VidPPTUI.alert('上传文件不存在', { type: 'warning' });
+            return;
+        }
+        if (/\.pdf$/i.test(item.fileName || '')) {
+            window.open(this.sourceFileUrl(item.taskId, 'preview'), '_blank', 'noopener');
+            return;
+        }
+        if (item.previewPath) {
+            this.loadCoursePreview(item.taskId);
+            return;
+        }
+        window.VidPPTUI.alert('该格式暂不支持在线预览，请下载源文件查看', { type: 'warning' });
+    }
+
+    previewVideoByTaskId(taskId) {
+        const found = this.getItemByTaskId(taskId);
+        const item = found?.item;
+        if (!item?.taskId || !item.videoPath) {
+            window.VidPPTUI.alert('没有可预览的视频', { type: 'warning' });
+            return;
+        }
+        const url = '/api/video?path=' + encodeURIComponent(item.videoPath);
+        window.open(url, '_blank', 'noopener');
+    }
+
     _artifactLinks(item) {
         const artifacts = [
             ['课程 JSON', item.courseJsonPath],
@@ -2611,6 +2704,7 @@ class AICourseStudioApp {
                     file: null,
                     filePath: t.file_path || null,
                     fileName: t.original_name || '未知文件',
+                    sourceFileExists: Boolean(t.source_file_exists),
                     courseName: t.course_name || this.defaultCourseName(t.original_name || ''),
                     sourceType: /\.(docx|pdf)$/i.test(t.original_name || '') ? 'lesson-plan' : 'presentation',
                     taskId: t.task_id,
@@ -2706,14 +2800,23 @@ class AICourseStudioApp {
                 taskId,
                 data.pages || [],
                 data.lesson_segments || [],
-                data.duration_estimate || null
+                data.duration_estimate || null,
+                data.ai_review || null,
+                data.quality_mode || 'balanced'
             );
         } catch (error) {
             this.showStatus('error', error.message);
         }
     }
 
-    renderCoursePreview(taskId, pages, lessonSegments = [], durationEstimate = null) {
+    renderCoursePreview(
+        taskId,
+        pages,
+        lessonSegments = [],
+        durationEstimate = null,
+        aiReview = null,
+        qualityMode = 'balanced'
+    ) {
         const { coursePreviewModule, coursePreviewPages, coursePreviewSaveState } = this.elements;
         clearTimeout(this.previewAutoSaveTimer);
         this.stopCoursePreviewPlayback(
@@ -2723,7 +2826,9 @@ class AICourseStudioApp {
         this.smartCutApplied = this.smartCutSegments.length > 0;
         this.elements.continueCourseBtn.disabled = false;
         coursePreviewModule.dataset.taskId = taskId;
+        coursePreviewModule.dataset.qualityMode = qualityMode || 'balanced';
         this.elements.downloadEditablePptBtn.href = `/api/course-presentation/${taskId}`;
+        this.renderCourseReview(aiReview, qualityMode);
         coursePreviewPages.innerHTML = '';
         this.elements.previewPageSelect.innerHTML = '';
         pages.forEach(page => {
@@ -2791,6 +2896,7 @@ class AICourseStudioApp {
             });
             textarea.addEventListener('input', () => {
                 this.stopCoursePreviewPlayback();
+                this.markCourseReviewStale();
                 updateLength();
                 this.evaluateSubtitleRisk(card);
                 coursePreviewSaveState.textContent = '等待自动保存…';
@@ -2838,6 +2944,127 @@ class AICourseStudioApp {
         this.syncSubtitlePreviewFromInputs();
         this.refreshSubtitleRiskChecks();
         coursePreviewModule.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    renderCourseReview(review, qualityMode = 'balanced') {
+        this.currentAIReview = review || null;
+        const modeLabels = {
+            economy: '经济模式',
+            balanced: '均衡模式',
+            premium: '精品模式',
+            sample: '抽检',
+            full: '全课二审'
+        };
+        const statusLabels = {
+            passed: '通过',
+            warning: '需关注',
+            failed: '未通过',
+            pending: '待审查'
+        };
+        const status = review?.status || (qualityMode === 'economy' ? 'passed' : 'pending');
+        this.elements.aiReviewPanel.dataset.status = status;
+        if (!review) {
+            this.elements.aiReviewSummary.textContent = qualityMode === 'economy'
+                ? '经济模式不自动调用 ChatGPT 审查，可手动抽检或二审'
+                : '等待 ChatGPT 审查结果，也可手动重新发起审查';
+            this.elements.aiReviewMeta.textContent =
+                `${modeLabels[qualityMode] || '均衡模式'} · ${statusLabels[status]}`;
+            this.elements.aiReviewFindings.innerHTML = '';
+            return;
+        }
+        const reviewMode = modeLabels[review.mode] || review.mode || '审查';
+        const pages = Array.isArray(review.reviewed_pages)
+            ? `已审查 ${review.reviewed_pages.join('、')} 页`
+            : '';
+        const cost = Number(review.estimated_cost_cny || 0);
+        this.elements.aiReviewSummary.textContent =
+            review.summary || statusLabels[status] || '审查完成';
+        this.elements.aiReviewMeta.textContent = [
+            reviewMode,
+            statusLabels[status] || status,
+            review.model ? `模型 ${review.model}` : '',
+            cost ? `约 ${cost.toFixed(4)} 元` : '',
+            pages
+        ].filter(Boolean).join(' · ');
+        const findings = Array.isArray(review.findings) ? review.findings : [];
+        if (!findings.length) {
+            this.elements.aiReviewFindings.innerHTML =
+                '<div class="ai-review-empty">暂无具体问题</div>';
+            return;
+        }
+        this.elements.aiReviewFindings.innerHTML = findings.map(item => `
+            <button type="button" class="ai-review-finding ${this._escAttr(item.level || 'info')}"
+                    data-page-number="${Number(item.page_number) || 0}">
+                <span>第 ${Number(item.page_number) || '-'} 页 · ${this._esc(item.category || '内容质量')}</span>
+                <strong>${this._esc(item.message || '')}</strong>
+                ${item.suggestion ? `<small>${this._esc(item.suggestion)}</small>` : ''}
+            </button>
+        `).join('');
+        this.elements.aiReviewFindings
+            .querySelectorAll('.ai-review-finding')
+            .forEach(button => {
+                button.addEventListener('click', () => {
+                    const pageNumber = Number(button.dataset.pageNumber);
+                    if (pageNumber) this.goToPreviewPage(pageNumber, { focusEditor: true });
+                });
+            });
+    }
+
+    async runCourseReview(mode) {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        if (!taskId) return;
+        if (!await this.savePreviewScripts({ automatic: true })) return;
+        const button = mode === 'full'
+            ? this.elements.aiReviewFullBtn
+            : this.elements.aiReviewSampleBtn;
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = mode === 'full' ? '二审中…' : '抽检中…';
+        this.elements.aiReviewSummary.textContent =
+            mode === 'full' ? 'ChatGPT 正在进行全课二审…' : 'ChatGPT 正在抽检课程讲稿…';
+        try {
+            const response = await fetch(`/api/course-review/${taskId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'AI 审查失败');
+            this.renderCourseReview(
+                data.ai_review,
+                this.elements.coursePreviewModule.dataset.qualityMode || 'balanced'
+            );
+            this.showStatus('success', mode === 'full' ? '全课二审完成' : '抽检完成');
+        } catch (error) {
+            this.showStatus('error', error.message);
+            this.renderCourseReview(
+                {
+                    status: 'failed',
+                    mode,
+                    summary: error.message,
+                    findings: [],
+                    estimated_cost_cny: 0
+                },
+                this.elements.coursePreviewModule.dataset.qualityMode || 'balanced'
+            );
+        } finally {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
+    markCourseReviewStale() {
+        if (!this.currentAIReview || this.currentAIReview.status === 'pending') return;
+        this.currentAIReview = {
+            ...this.currentAIReview,
+            status: 'pending',
+            summary: '讲稿已修改，建议重新运行 AI 审查',
+            findings: []
+        };
+        this.renderCourseReview(
+            this.currentAIReview,
+            this.elements.coursePreviewModule.dataset.qualityMode || 'balanced'
+        );
     }
 
     updatePageSubtitleSample(card) {
@@ -3620,7 +3847,7 @@ class AICourseStudioApp {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'PPT 更新失败');
-            this.renderCoursePreview(taskId, data.pages || [], []);
+            this.renderCoursePreview(taskId, data.pages || [], [], null, null, this.elements.coursePreviewModule.dataset.qualityMode || 'balanced');
             this.elements.coursePreviewSaveState.textContent = 'PPT 已更新';
             this.elements.coursePreviewSaveState.classList.add('saved');
         } catch (error) {
@@ -3640,6 +3867,10 @@ class AICourseStudioApp {
         this.stopCoursePreviewPlayback();
         const button = this.elements.continueCourseBtn;
         button.disabled = true;
+        if (!await this.confirmCourseReviewBeforeContinue()) {
+            button.disabled = false;
+            return;
+        }
         if (!this.smartCutApplied) {
             const hasDraftCuts = this.smartCutSegments.length > 0;
             const confirmed = await window.VidPPTUI.confirm(
@@ -3691,6 +3922,24 @@ class AICourseStudioApp {
             button.disabled = false;
             this.showStatus('error', error.message);
         }
+    }
+
+    async confirmCourseReviewBeforeContinue() {
+        const qualityMode = this.elements.coursePreviewModule.dataset.qualityMode || 'balanced';
+        if (qualityMode === 'economy') return true;
+        const review = this.currentAIReview;
+        if (review?.status === 'passed') return true;
+        const expected = qualityMode === 'premium' ? '全课二审' : '抽检';
+        const statusText = review
+            ? `当前 AI 审查状态为“${review.status || '未知'}”。`
+            : `当前尚未完成 ChatGPT ${expected}。`;
+        return window.VidPPTUI.confirm(
+            `${statusText}\n\n继续后会开始配音、字幕和视频合成；若之后再改讲稿，需要重跑后半段。是否仍继续？`,
+            {
+                title: 'AI 审查尚未通过',
+                confirmText: '仍然继续'
+            }
+        );
     }
 
     async cancelCourse() {
