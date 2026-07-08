@@ -651,6 +651,55 @@ def test_stop_requests_cancellation_for_processing_task(monkeypatch, temp_dir):
     assert web_app.tasks[task_id]["stop_requested"] is True
 
 
+def test_stop_queued_media_task_rolls_back_to_preview(monkeypatch, temp_dir):
+    import threading
+    import web.app as web_app
+
+    task_id = "queued-media-task"
+    preview_path = temp_dir / "preview.json"
+    preview_path.write_text("{}", encoding="utf-8")
+    queue = Queue()
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "queued",
+            "stage": "queue",
+            "percentage": 50,
+            "preview_path": str(preview_path),
+            "output_dir": str(temp_dir),
+        }
+    })
+    monkeypatch.setattr(web_app, "progress_queues", {task_id: queue})
+    monkeypatch.setattr(web_app, "cancellation_events", {
+        task_id: threading.Event()
+    })
+    monkeypatch.setattr(web_app, "STATE_FILE", temp_dir / "state.json")
+
+    response = web_app.app.test_client().post(f"/api/stop/{task_id}")
+
+    assert response.status_code == 200
+    assert web_app.cancellation_events[task_id].is_set()
+    assert web_app.tasks[task_id]["status"] == "awaiting_confirmation"
+    assert web_app.tasks[task_id]["stage"] == "preview"
+    assert web_app.tasks[task_id]["stop_requested"] is False
+    assert list(queue.queue)[0]["type"] == "rollback"
+
+
+def test_queue_skips_stale_run_after_retry(monkeypatch):
+    import web.app as web_app
+
+    task_id = "queued-stale-run"
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "queued",
+            "queue_run_id": "new-run",
+        }
+    })
+    monkeypatch.setattr(web_app, "cancellation_events", {})
+
+    assert web_app.conversion_queue._should_skip(task_id, "old-run") is True
+    assert web_app.conversion_queue._should_skip(task_id, "new-run") is False
+
+
 def test_stage_event_carries_non_regressing_percentage(monkeypatch, temp_dir):
     import web.app as web_app
 
@@ -866,8 +915,31 @@ def test_index_contains_editable_course_preview():
     assert 'SimHei' not in html
     assert 'id="course-preview-play-btn"' not in html
     assert 'id="subtitle-position-preview"' not in html
+    assert 'id="asset-management-module"' not in html
+    assert 'id="operation-log-module"' not in html
+    assert 'id="asset-table-body"' not in html
+    assert 'id="operation-log-body"' not in html
+    assert 'href="/data-management"' in html
+    assert 'href="/operation-logs-page"' in html
     assert '这里是字幕位置' not in html
     assert '在每页 PPT 上检查真实字幕样例、可读性和遮挡风险' in html
+
+
+def test_management_pages_are_separate_from_course_workspace():
+    import web.app as web_app
+
+    client = web_app.app.test_client()
+    data_page = client.get("/data-management").get_data(as_text=True)
+    logs_page = client.get("/operation-logs-page").get_data(as_text=True)
+
+    assert 'id="asset-table-body"' in data_page
+    assert 'id="operation-log-body"' not in data_page
+    assert 'id="upload-area"' not in data_page
+    assert 'js/admin_pages.js' in data_page
+    assert 'id="operation-log-body"' in logs_page
+    assert 'id="asset-table-body"' not in logs_page
+    assert 'id="upload-area"' not in logs_page
+    assert 'js/admin_pages.js' in logs_page
 
 
 def test_subtitle_font_catalog_endpoint(monkeypatch):

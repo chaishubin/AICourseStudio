@@ -69,6 +69,7 @@ class AICourseStudioApp {
                 ttsEmotionScale: document.getElementById('tts-emotion-scale'),
                 ttsSentencePause: document.getElementById('tts-sentence-pause'),
                 burnSubtitles: document.getElementById('burn-subtitles'),
+                subtitleStyleTemplate: document.getElementById('subtitle-style-template'),
                 subtitlePreset: document.getElementById('subtitle-preset'),
                 subtitleX: document.getElementById('subtitle-x'),
                 subtitleY: document.getElementById('subtitle-y'),
@@ -150,7 +151,9 @@ class AICourseStudioApp {
                 metricTotal: document.getElementById('metric-total'),
                 metricProcessing: document.getElementById('metric-processing'),
                 metricReview: document.getElementById('metric-review'),
-                metricCompleted: document.getElementById('metric-completed')
+                metricCompleted: document.getElementById('metric-completed'),
+                assetTableBody: document.getElementById('asset-table-body'),
+                operationLogBody: document.getElementById('operation-log-body')
             };
         } catch(e) {
             console.error('AICourseStudio element init failed:', e);
@@ -167,6 +170,7 @@ class AICourseStudioApp {
         this.loadStrategyTemplates();
         this.loadVoices({ preferredVoice: this.pendingVoiceSelection });
         this.restoreTasks();
+        this.loadOperationLogs();
         this.taskRefreshTimer = setInterval(() => this.reconcileTasks(), 5000);
     }
 
@@ -265,6 +269,83 @@ class AICourseStudioApp {
             top: { x: 160, y: 80, width: 1600, height: 110, fontSize: 44 },
             lowerMiddle: { x: 160, y: 720, width: 1600, height: 110, fontSize: 44 }
         };
+        this.subtitleStyleTemplates = {
+            standard: {
+                label: '标准网课 · 黑底白字',
+                fontName: 'Noto Sans CJK SC',
+                fontSize: 46,
+                color: '#ffffff',
+                backgroundColor: '#111111',
+                backgroundOpacity: 0.55,
+                outlineWidth: 0,
+                outlineColor: '#000000'
+            },
+            lightSlide: {
+                label: '浅色课件 · 深字浅底',
+                fontName: 'Noto Sans CJK SC',
+                fontSize: 46,
+                color: '#172033',
+                backgroundColor: '#ffffff',
+                backgroundOpacity: 0.82,
+                outlineWidth: 0,
+                outlineColor: '#ffffff'
+            },
+            darkSlide: {
+                label: '深色课件 · 高对比描边',
+                fontName: 'Noto Sans CJK SC',
+                fontSize: 46,
+                color: '#ffffff',
+                backgroundColor: '#000000',
+                backgroundOpacity: 0.38,
+                outlineWidth: 2,
+                outlineColor: '#000000'
+            },
+            lectureSerif: {
+                label: '理论讲授 · 宋体稳重',
+                fontName: 'Noto Serif CJK SC',
+                fontSize: 48,
+                color: '#ffffff',
+                backgroundColor: '#182033',
+                backgroundOpacity: 0.62,
+                outlineWidth: 1,
+                outlineColor: '#000000'
+            },
+            codeDemo: {
+                label: '实操录屏 · 小框清晰',
+                fontName: 'WenQuanYi Micro Hei',
+                fontSize: 42,
+                color: '#fff7cc',
+                backgroundColor: '#050505',
+                backgroundOpacity: 0.72,
+                outlineWidth: 1,
+                outlineColor: '#000000'
+            },
+            emphasis: {
+                label: '重点提示 · 金色强调',
+                fontName: 'Noto Sans CJK SC',
+                fontSize: 50,
+                color: '#ffe08a',
+                backgroundColor: '#111111',
+                backgroundOpacity: 0.50,
+                outlineWidth: 2,
+                outlineColor: '#000000'
+            },
+            minimal: {
+                label: '极简无底 · 白字描边',
+                fontName: 'Noto Sans CJK SC',
+                fontSize: 46,
+                color: '#ffffff',
+                backgroundColor: '#000000',
+                backgroundOpacity: 0,
+                outlineWidth: 3,
+                outlineColor: '#000000'
+            }
+        };
+        this.renderSubtitleStyleTemplates();
+        this.elements.subtitleStyleTemplate?.addEventListener('change', () => {
+            this.applySubtitleStyleTemplate(this.elements.subtitleStyleTemplate.value);
+            this.saveCurrentStrategy();
+        });
         this.elements.subtitlePreset?.addEventListener('change', () => {
             this.applySubtitlePreset(this.elements.subtitlePreset.value);
             this.saveCurrentStrategy();
@@ -286,12 +367,14 @@ class AICourseStudioApp {
             control.addEventListener('input', () => {
                 this.clampSubtitleInputs();
                 this.syncSubtitlePresetSelection();
+                this.syncSubtitleStyleTemplateSelection();
                 this.syncSubtitleFontPreview();
                 this.syncSubtitlePreviewFromInputs();
                 this.saveCurrentStrategy();
             });
         });
         this.elements.subtitleFontName?.addEventListener('change', () => {
+            this.syncSubtitleStyleTemplateSelection();
             this.syncSubtitleFontPreview();
             this.syncSubtitlePreviewFromInputs();
             this.saveCurrentStrategy();
@@ -299,6 +382,7 @@ class AICourseStudioApp {
         this.syncSubtitleFontPreview();
         this.syncSubtitlePreviewFromInputs();
         this.syncSubtitlePresetSelection();
+        this.syncSubtitleStyleTemplateSelection();
     }
 
     async loadSubtitleFonts() {
@@ -358,6 +442,66 @@ class AICourseStudioApp {
         }
         select.value = value;
         this.syncSubtitleFontPreview();
+    }
+
+    renderSubtitleStyleTemplates() {
+        const select = this.elements.subtitleStyleTemplate;
+        if (!select || !this.subtitleStyleTemplates) return;
+        select.innerHTML = '<option value="">选择字幕样式模板</option>';
+        Object.entries(this.subtitleStyleTemplates).forEach(([key, template]) => {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = template.label;
+            select.appendChild(option);
+        });
+        const custom = document.createElement('option');
+        custom.value = 'custom';
+        custom.textContent = '自定义';
+        select.appendChild(custom);
+    }
+
+    applySubtitleStyleTemplate(name) {
+        const template = this.subtitleStyleTemplates?.[name];
+        if (!template) return;
+        this.setSubtitleFontValue(template.fontName);
+        this.elements.subtitleFontSize.value = template.fontSize;
+        this.elements.subtitleColor.value = template.color;
+        this.elements.subtitleBackgroundColor.value = template.backgroundColor;
+        this.elements.subtitleBackgroundOpacity.value = template.backgroundOpacity;
+        this.elements.subtitleOutlineWidth.value = template.outlineWidth;
+        this.elements.subtitleOutlineColor.value = template.outlineColor;
+        this.syncSubtitlePresetSelection();
+        this.syncSubtitleFontPreview();
+        this.syncSubtitlePreviewFromInputs();
+        this.syncSubtitleStyleTemplateSelection();
+    }
+
+    collectSubtitleStyleValues() {
+        return {
+            fontName: this.elements.subtitleFontName.value || 'Noto Sans CJK SC',
+            fontSize: Number(this.elements.subtitleFontSize.value) || 46,
+            color: this.elements.subtitleColor.value || '#ffffff',
+            backgroundColor: this.elements.subtitleBackgroundColor.value || '#111111',
+            backgroundOpacity: Number(this.elements.subtitleBackgroundOpacity.value),
+            outlineWidth: Number(this.elements.subtitleOutlineWidth.value) || 0,
+            outlineColor: this.elements.subtitleOutlineColor.value || '#000000'
+        };
+    }
+
+    syncSubtitleStyleTemplateSelection() {
+        const select = this.elements.subtitleStyleTemplate;
+        if (!select || !this.subtitleStyleTemplates) return;
+        const current = this.collectSubtitleStyleValues();
+        const match = Object.entries(this.subtitleStyleTemplates).find(([, template]) => (
+            template.fontName === current.fontName
+            && template.fontSize === current.fontSize
+            && template.color.toLowerCase() === current.color.toLowerCase()
+            && template.backgroundColor.toLowerCase() === current.backgroundColor.toLowerCase()
+            && Number(template.backgroundOpacity) === current.backgroundOpacity
+            && Number(template.outlineWidth) === current.outlineWidth
+            && template.outlineColor.toLowerCase() === current.outlineColor.toLowerCase()
+        ));
+        select.value = match ? match[0] : 'custom';
     }
 
     syncSubtitleFontPreview() {
@@ -565,6 +709,8 @@ class AICourseStudioApp {
         this.elements.customVoice.value = customVoice;
         this.pendingVoiceSelection = strategy.selected_voice || strategy.voice || null;
         this.state.logoPath = strategy.school_logo_path || null;
+        this.syncSubtitleStyleTemplateSelection();
+        this.syncSubtitleFontPreview();
         this.syncSubtitlePreviewFromInputs();
         this.toggleLLMMode();
     }
@@ -1096,6 +1242,7 @@ class AICourseStudioApp {
         this.elements.convertBtn.disabled = pendingCount === 0 || this.state.isConverting;
         this.elements.renderBtn.disabled = previewableCount === 0 || this.state.isConverting;
         this.updateWorkspaceMetrics();
+        this.renderAssetTable();
         this.updateRouteSummary();
         this._syncSelectAll();
     }
@@ -1350,6 +1497,105 @@ class AICourseStudioApp {
         if (this.elements.metricProcessing) this.elements.metricProcessing.textContent = processing;
         if (this.elements.metricReview) this.elements.metricReview.textContent = review;
         if (this.elements.metricCompleted) this.elements.metricCompleted.textContent = completed;
+    }
+
+    renderAssetTable() {
+        const body = this.elements.assetTableBody;
+        if (!body) return;
+        if (!this.state.files.length) {
+            body.innerHTML = '<tr><td colspan="6" class="table-empty">暂无课程数据</td></tr>';
+            return;
+        }
+        body.innerHTML = this.state.files.map(item => {
+            const actions = [];
+            if (item.status === 'awaiting_confirmation') {
+                actions.push(`<button type="button" class="table-action" data-action="preview" data-task-id="${this._escAttr(item.taskId)}">预览审核</button>`);
+            }
+            if (item.status === 'completed' && item.videoPath) {
+                actions.push(`<button type="button" class="table-action" data-action="download" data-task-id="${this._escAttr(item.taskId)}">下载</button>`);
+            }
+            if (['completed', 'error', 'interrupted', 'awaiting_confirmation'].includes(item.status)) {
+                actions.push(`<button type="button" class="table-action danger" data-action="delete" data-task-id="${this._escAttr(item.taskId)}">删除</button>`);
+            }
+            return `
+                <tr>
+                    <td><strong>${this._esc(item.fileName || '未知文件')}</strong><small>${this._esc(item.taskId || '')}</small></td>
+                    <td>${this._esc(item.ownerUsername || '-')}</td>
+                    <td><span class="status-pill status-${this._escAttr(item.status || 'unknown')}">${this._esc(this._fileStatusText(item))}</span></td>
+                    <td>${Math.round(item.percentage || 0)}%</td>
+                    <td>${this._formatTime(item.updatedAt || item.completedAt || item.startedAt || item.createdAt)}</td>
+                    <td class="table-actions">${actions.join('') || '-'}</td>
+                </tr>
+            `;
+        }).join('');
+        body.querySelectorAll('.table-action').forEach(button => {
+            button.addEventListener('click', () => {
+                const taskId = button.dataset.taskId;
+                const action = button.dataset.action;
+                if (action === 'preview') this.loadCoursePreview(taskId);
+                if (action === 'download') this.handleDownloadByTaskId(taskId);
+                if (action === 'delete') this.deleteTask(taskId);
+            });
+        });
+    }
+
+    async loadOperationLogs() {
+        const body = this.elements.operationLogBody;
+        if (!body) return;
+        try {
+            const response = await fetch('/api/operation-logs?limit=80');
+            if (!response.ok) return;
+            const data = await response.json();
+            const logs = data.logs || [];
+            if (!logs.length) {
+                body.innerHTML = '<tr><td colspan="5" class="table-empty">暂无操作日志</td></tr>';
+                return;
+            }
+            body.innerHTML = logs.map(log => `
+                <tr>
+                    <td>${this._formatTime(log.created_at)}</td>
+                    <td>${this._esc(log.actor || '-')}</td>
+                    <td>${this._esc(this._operationText(log.action))}</td>
+                    <td><strong>${this._esc(log.target_name || log.task_id || '-')}</strong><small>${this._esc(log.message || '')}</small></td>
+                    <td>${log.success ? '成功' : '失败'}</td>
+                </tr>
+            `).join('');
+        } catch (error) {
+            console.debug('操作日志暂时不可用:', error);
+        }
+    }
+
+    _formatTime(value) {
+        if (!value) return '-';
+        const date = new Date(Number(value) * 1000);
+        if (Number.isNaN(date.getTime())) return '-';
+        return date.toLocaleString('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+
+    _operationText(action) {
+        const labels = {
+            login: '登录',
+            login_failed: '登录失败',
+            logout: '退出登录',
+            upload: '上传文件',
+            create_task: '创建任务',
+            preview_task: '预览任务',
+            save_preview: '保存讲稿',
+            continue_task: '继续生成',
+            retry_task: '重试任务',
+            stop_task: '停止任务',
+            delete_task: '删除任务',
+            cancel_task: '取消任务',
+            download: '下载文件',
+            apply_segments: '应用切课',
+            upload_reviewed_ppt: '上传审核 PPT'
+        };
+        return labels[action] || action || '-';
     }
 
     _fileStatusText(item) {
@@ -2035,6 +2281,7 @@ class AICourseStudioApp {
             this.renderFileList();
             this.renderResultsGrid();
             this.updateBatchSummary();
+            this.loadOperationLogs();
             this.showStatus('success', data.message || '课程产物已删除');
         } catch (error) {
             if (button) button.disabled = false;
@@ -2086,6 +2333,7 @@ class AICourseStudioApp {
             this.renderFileList();
             this.renderResultsGrid();
             this.updateBatchSummary();
+            this.loadOperationLogs();
             this.showStatus('success', '任务已重新提交');
             this.startProgressStream(data.task_id);
         } catch (error) {
@@ -2130,6 +2378,7 @@ class AICourseStudioApp {
             this.renderFileList();
             this.renderResultsGrid();
             this.updateBatchSummary();
+            this.loadOperationLogs();
             this.showStatus('success', data.message);
             this.startProgressStream(taskId);
         } catch (error) {
@@ -2304,9 +2553,12 @@ class AICourseStudioApp {
                     selected: false,
                     strategy: t.strategy || null,
                     strategySource: t.strategy_source || 'batch',
+                    ownerUsername: t.owner_username || t.created_by || '-',
+                    createdAt: t.created_at || null,
                     startedAt: t.started_at || null,
                     stageStartedAt: t.stage_started_at || null,
-                    updatedAt: t.updated_at || null
+                    updatedAt: t.updated_at || null,
+                    completedAt: t.completed_at || null
                 }));
 
                 this.renderFileList();
@@ -2347,9 +2599,12 @@ class AICourseStudioApp {
                     queuePosition: task.queue_position || null,
                     strategy: task.strategy || found.item.strategy,
                     strategySource: task.strategy_source || found.item.strategySource,
+                    ownerUsername: task.owner_username || task.created_by || found.item.ownerUsername,
+                    createdAt: task.created_at || found.item.createdAt,
                     startedAt: task.started_at || found.item.startedAt,
                     stageStartedAt: task.stage_started_at || found.item.stageStartedAt,
-                    updatedAt: task.updated_at || found.item.updatedAt
+                    updatedAt: task.updated_at || found.item.updatedAt,
+                    completedAt: task.completed_at || found.item.completedAt
                 }) || changed;
             }
             if (changed) {

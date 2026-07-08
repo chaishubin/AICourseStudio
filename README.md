@@ -80,6 +80,22 @@ outputs/course/
 
 ---
 
+## Web 账号与数据隔离
+
+Web 工作台默认使用 `VIDPPT_AUTH_USERNAME` / `VIDPPT_AUTH_PASSWORD`
+配置一个超级管理员账号。需要多账号时，可以在 `.env` 中设置
+`VIDPPT_USERS`，普通账号只能查看和操作自己创建的任务，`super_admin`
+可以查看全部任务和操作日志。
+
+```bash
+VIDPPT_USERS='{
+  "admin": {"password": "admin-password", "role": "super_admin"},
+  "teacher": {"password": "teacher-password", "role": "user"}
+}'
+```
+
+---
+
 ## 快速开始（路线 B — PPT 转视频）
 
 ```bash

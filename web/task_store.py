@@ -40,6 +40,29 @@ class TaskStore:
                 CREATE INDEX IF NOT EXISTS idx_jobs_queue
                 ON jobs(status, priority DESC, queue_order ASC)
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS operation_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    actor TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    action TEXT NOT NULL,
+                    task_id TEXT,
+                    target_name TEXT,
+                    success INTEGER NOT NULL DEFAULT 1,
+                    message TEXT,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_operation_logs_actor_created
+                ON operation_logs(actor, created_at DESC)
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_operation_logs_created
+                ON operation_logs(created_at DESC)
+            """)
 
     def upsert(self, task_id: str, task: dict):
         now = time.time()
@@ -105,3 +128,62 @@ class TaskStore:
     def delete(self, task_id: str):
         with self._lock, self._connect() as connection:
             connection.execute("DELETE FROM jobs WHERE task_id = ?", (task_id,))
+
+    def add_operation_log(self, log: dict):
+        with self._lock, self._connect() as connection:
+            connection.execute("""
+                INSERT INTO operation_logs (
+                    actor, role, action, task_id, target_name, success,
+                    message, ip_address, user_agent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                log.get("actor") or "anonymous",
+                log.get("role") or "user",
+                log.get("action") or "unknown",
+                log.get("task_id"),
+                log.get("target_name"),
+                1 if log.get("success", True) else 0,
+                log.get("message"),
+                log.get("ip_address"),
+                log.get("user_agent"),
+                float(log.get("created_at") or time.time()),
+            ))
+
+    def list_operation_logs(
+        self,
+        *,
+        actor: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 500))
+        params: list = []
+        where = ""
+        if actor:
+            where = "WHERE actor = ?"
+            params.append(actor)
+        params.append(limit)
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(f"""
+                SELECT id, actor, role, action, task_id, target_name, success,
+                       message, ip_address, user_agent, created_at
+                FROM operation_logs
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, params).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "actor": row["actor"],
+                "role": row["role"],
+                "action": row["action"],
+                "task_id": row["task_id"],
+                "target_name": row["target_name"],
+                "success": bool(row["success"]),
+                "message": row["message"],
+                "ip_address": row["ip_address"],
+                "user_agent": row["user_agent"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]

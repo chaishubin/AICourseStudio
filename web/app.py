@@ -17,6 +17,7 @@ import shutil
 import secrets
 import subprocess
 from io import BytesIO
+from functools import lru_cache
 from pathlib import Path
 from queue import Queue, Empty
 from urllib.parse import quote
@@ -60,6 +61,57 @@ app.config.update(
 
 AUTH_USERNAME = os.environ.get('VIDPPT_AUTH_USERNAME', 'admin')
 AUTH_PASSWORD = os.environ.get('VIDPPT_AUTH_PASSWORD', 'vidppt123')
+SUPER_ADMIN_ROLE = 'super_admin'
+USER_ROLE = 'user'
+
+
+def _load_account_config() -> dict[str, dict]:
+    """读取账号配置；默认保留原单管理员登录方式。"""
+    accounts = {
+        AUTH_USERNAME: {
+            'password': AUTH_PASSWORD,
+            'role': SUPER_ADMIN_ROLE,
+            'display_name': AUTH_USERNAME,
+        }
+    }
+    raw = os.environ.get('VIDPPT_USERS', '').strip()
+    if not raw:
+        return accounts
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning(f'VIDPPT_USERS 解析失败，回退单管理员账号: {exc}')
+        return accounts
+
+    configured: dict[str, dict] = {}
+    if isinstance(parsed, dict):
+        iterable = parsed.items()
+    elif isinstance(parsed, list):
+        iterable = ((item.get('username'), item) for item in parsed if isinstance(item, dict))
+    else:
+        logger.warning('VIDPPT_USERS 必须是对象或数组，回退单管理员账号')
+        return accounts
+
+    for username, item in iterable:
+        if isinstance(item, str):
+            item = {'password': item}
+        if not username or not isinstance(item, dict):
+            continue
+        password = str(item.get('password') or '').strip()
+        if not password:
+            continue
+        role = str(item.get('role') or USER_ROLE).strip()
+        if role not in {USER_ROLE, SUPER_ADMIN_ROLE}:
+            role = USER_ROLE
+        configured[str(username).strip()] = {
+            'password': password,
+            'role': role,
+            'display_name': str(item.get('display_name') or username).strip(),
+        }
+    return configured or accounts
+
+
+ACCOUNTS = _load_account_config()
 
 DASHBOARD_ENABLED = os.environ.get('VIDPPT_DASHBOARD', 'true').lower() == 'true'
 if DASHBOARD_ENABLED:
@@ -137,6 +189,155 @@ cancellation_events = {}  # task_id -> threading.Event
 task_store = TaskStore(TASK_DB_FILE)
 
 
+def current_user_context() -> dict:
+    """返回当前请求用户；测试关闭登录时视为超级管理员。"""
+    if app.config.get('LOGIN_DISABLED'):
+        return {
+            'username': AUTH_USERNAME,
+            'role': SUPER_ADMIN_ROLE,
+            'display_name': AUTH_USERNAME,
+        }
+    username = session.get('username') or AUTH_USERNAME
+    return {
+        'username': username,
+        'role': session.get('role') or ACCOUNTS.get(username, {}).get('role', USER_ROLE),
+        'display_name': session.get('display_name') or ACCOUNTS.get(username, {}).get('display_name', username),
+    }
+
+
+def is_super_admin() -> bool:
+    return current_user_context().get('role') == SUPER_ADMIN_ROLE
+
+
+def _task_owner(task: dict | None) -> str:
+    """旧任务没有 owner 时默认归属原单管理员账号。"""
+    if not task:
+        return AUTH_USERNAME
+    return str(
+        task.get('owner_username')
+        or task.get('created_by')
+        or AUTH_USERNAME
+    )
+
+
+def can_access_task(task: dict | None) -> bool:
+    if not task:
+        return False
+    user = current_user_context()
+    return user['role'] == SUPER_ADMIN_ROLE or _task_owner(task) == user['username']
+
+
+def require_task_access(task_id: str):
+    task = tasks.get(task_id)
+    if not task:
+        return None, (jsonify({'error': '任务不存在'}), 404)
+    if not can_access_task(task):
+        return None, (jsonify({'error': '无权访问该任务'}), 403)
+    return task, None
+
+
+def _path_belongs_to_task(path: Path, task: dict) -> bool:
+    candidates = {
+        task.get('file_path'),
+        task.get('video_path'),
+        task.get('course_json_path'),
+        task.get('presentation_path'),
+        task.get('subtitles_path'),
+        task.get('preview_path'),
+    }
+    for segment in task.get('video_segments') or []:
+        if isinstance(segment, dict):
+            candidates.add(segment.get('video_path'))
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            if Path(candidate).resolve() == resolved:
+                return True
+        except OSError:
+            continue
+    output_dir = task.get('output_dir')
+    if output_dir:
+        try:
+            resolved.relative_to(Path(output_dir).resolve())
+            return True
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+def task_for_path(file_path: str) -> tuple[str | None, dict | None]:
+    if not file_path:
+        return None, None
+    path = Path(file_path)
+    for task_id, task in tasks.items():
+        if _path_belongs_to_task(path, task):
+            return task_id, task
+    return None, None
+
+
+def log_operation(
+    action: str,
+    *,
+    task_id: str | None = None,
+    target_name: str | None = None,
+    success: bool = True,
+    message: str | None = None,
+):
+    user = current_user_context()
+    try:
+        task_store.add_operation_log({
+            'actor': user['username'],
+            'role': user['role'],
+            'action': action,
+            'task_id': task_id,
+            'target_name': target_name,
+            'success': success,
+            'message': message,
+            'ip_address': request.headers.get('X-Forwarded-For', request.remote_addr),
+            'user_agent': request.headers.get('User-Agent', '')[:300],
+            'created_at': time.time(),
+        })
+    except Exception as exc:
+        logger.warning(f'写入操作日志失败 action={action}, task={task_id}: {exc}')
+
+
+def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> dict:
+    return {
+        'task_id': task_id,
+        'status': task.get('status', 'unknown'),
+        'original_name': task.get('original_name', ''),
+        'file_path': task.get('file_path', ''),
+        'stage': task.get('stage'),
+        'percentage': task.get('percentage', 0),
+        'stage_percentage': task.get('stage_percentage', 0),
+        'message': task.get('message', ''),
+        'video_path': task.get('video_path'),
+        'course_json_path': task.get('course_json_path'),
+        'presentation_path': task.get('presentation_path'),
+        'subtitles_path': task.get('subtitles_path'),
+        'preview_path': task.get('preview_path'),
+        'video_segments': task.get('video_segments', []),
+        'error': task.get('error'),
+        'batch_id': task.get('batch_id'),
+        'strategy_source': task.get('strategy_source', 'batch'),
+        'strategy': task.get('strategy', {}),
+        'queue_position': queue_positions.get(task_id),
+        'owner_username': _task_owner(task),
+        'created_by': task.get('created_by') or _task_owner(task),
+        'created_at': task.get('created_at'),
+        'started_at': task.get('started_at'),
+        'stage_started_at': task.get('stage_started_at'),
+        'stage_timings': task.get('stage_timings', {}),
+        'updated_at': task.get('updated_at'),
+        'completed_at': task.get('completed_at'),
+    }
+
+
 class ConversionQueue:
     """串行转换队列，保证同一时刻只运行一个转换任务"""
 
@@ -146,10 +347,30 @@ class ConversionQueue:
         self._worker.start()
 
     def enqueue(self, func, *args, **kwargs):
-        self._queue.put((func, args, kwargs))
+        task_id = args[0] if args else None
+        queue_run_id = None
+        if task_id and task_id in tasks:
+            queue_run_id = uuid.uuid4().hex
+            tasks[task_id]['queue_run_id'] = queue_run_id
+        self._queue.put((func, args, kwargs, queue_run_id))
 
-    def _wait_for_capacity(self, task_id):
+    def _should_skip(self, task_id, queue_run_id=None):
+        task = tasks.get(task_id)
+        if not task:
+            return True
+        if queue_run_id and task.get('queue_run_id') != queue_run_id:
+            return True
+        if task.get('stop_requested'):
+            return True
+        cancel_event = cancellation_events.get(task_id)
+        if cancel_event and cancel_event.is_set():
+            return True
+        return task.get('status') not in {'queued', 'pending', 'processing'}
+
+    def _wait_for_capacity(self, task_id, queue_run_id=None):
         while True:
+            if self._should_skip(task_id, queue_run_id):
+                return False
             try:
                 import psutil
                 cpu = psutil.cpu_percent(interval=0.3)
@@ -178,11 +399,16 @@ class ConversionQueue:
 
     def _run(self):
         while True:
-            func, args, kwargs = self._queue.get()
+            func, args, kwargs, queue_run_id = self._queue.get()
             try:
                 task_id = args[0] if args else None
                 if task_id:
-                    self._wait_for_capacity(task_id)
+                    if self._should_skip(task_id, queue_run_id):
+                        continue
+                    if not self._wait_for_capacity(task_id, queue_run_id):
+                        continue
+                    if self._should_skip(task_id, queue_run_id):
+                        continue
                 func(*args, **kwargs)
             except Exception as e:
                 logger.error(f"ConversionQueue worker error: {e}")
@@ -350,22 +576,61 @@ def _subtitle_font_catalog() -> list[str]:
     )
 
 
+@lru_cache(maxsize=128)
 def _subtitle_font_file(font_name: str) -> str | None:
-    """通过 fontconfig 匹配字体族对应的字体文件。"""
+    """通过 fontconfig 字体目录匹配字体族对应的字体文件。"""
     name = (font_name or SUBTITLE_FONT_FALLBACKS[0]).strip()[:80]
+    aliases = {
+        'Source Han Sans SC': 'Noto Sans CJK SC',
+        'Source Han Sans CN': 'Noto Sans CJK SC',
+        'Source Han Serif SC': 'Noto Serif CJK SC',
+        'Source Han Serif CN': 'Noto Serif CJK SC',
+    }
+    lookup_name = aliases.get(name, name)
+    fc_list = shutil.which('fc-list')
+    if fc_list:
+        try:
+            result = subprocess.run(
+                [fc_list, ':lang=zh', 'file', 'family'],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            exact: dict[str, str] = {}
+            regular: dict[str, str] = {}
+            for line in result.stdout.splitlines():
+                if ': ' not in line:
+                    continue
+                path, families = line.split(': ', 1)
+                if not Path(path).is_file():
+                    continue
+                for family in families.split(','):
+                    family_name = family.strip()
+                    if not family_name:
+                        continue
+                    exact.setdefault(family_name, path)
+                    if 'Bold' not in Path(path).name:
+                        regular[family_name] = path
+            path = regular.get(lookup_name) or exact.get(lookup_name)
+            if path:
+                return path
+        except Exception as exc:
+            logger.warning(f"读取字幕字体文件目录失败，回退 fc-match: {exc}")
+
     fc_match = shutil.which('fc-match')
     if not fc_match:
         return None
     try:
         result = subprocess.run(
-            [fc_match, '--format=%{file}', name],
+            [fc_match, '--format=%{file}', lookup_name],
             check=True,
             capture_output=True,
             text=True,
             timeout=3,
         )
     except Exception as exc:
-        logger.warning(f"匹配字幕字体失败 {name}: {exc}")
+        logger.warning(f"匹配字幕字体失败 {lookup_name}: {exc}")
         return None
     path = result.stdout.strip()
     return path if path and Path(path).is_file() else None
@@ -599,16 +864,23 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        username_ok = secrets.compare_digest(username, AUTH_USERNAME)
-        password_ok = secrets.compare_digest(password, AUTH_PASSWORD)
-        if username_ok and password_ok:
+        account = ACCOUNTS.get(username)
+        password_ok = bool(account) and secrets.compare_digest(
+            password,
+            account['password'],
+        )
+        if password_ok:
             session.clear()
             session['authenticated'] = True
             session['username'] = username
+            session['role'] = account['role']
+            session['display_name'] = account.get('display_name') or username
+            log_operation('login', target_name=username)
             next_url = request.form.get('next', '')
             if next_url.startswith('/') and not next_url.startswith('//'):
                 return redirect(next_url)
             return redirect(url_for('index'))
+        log_operation('login_failed', target_name=username, success=False)
         error = '用户名或密码错误，请重新输入'
 
     return render_template('login.html', error=error, next_url=request.args.get('next', ''))
@@ -617,6 +889,7 @@ def login():
 @app.route('/logout', methods=['POST'])
 def logout():
     """退出当前登录会话。"""
+    log_operation('logout')
     session.clear()
     return redirect(url_for('login'))
 
@@ -624,7 +897,40 @@ def logout():
 @app.route('/')
 def index():
     """渲染主页面"""
-    return render_template('index.html', current_user=session.get('username', AUTH_USERNAME))
+    user = current_user_context()
+    return render_template(
+        'index.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+    )
+
+
+@app.route('/data-management')
+def data_management_page():
+    """渲染课程数据管理页面。"""
+    user = current_user_context()
+    return render_template(
+        'data_management.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+    )
+
+
+@app.route('/operation-logs-page')
+def operation_logs_page():
+    """渲染操作日志页面。"""
+    user = current_user_context()
+    return render_template(
+        'operation_logs.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+    )
 
 
 @app.route('/api/upload', methods=['POST'])
@@ -659,6 +965,7 @@ def upload_ppt():
 
     # 保存文件
     file.save(file_path)
+    log_operation('upload', target_name=original_filename)
 
     return jsonify({
         'success': True,
@@ -1906,6 +2213,8 @@ def convert_ppt():
         'burn_subtitles': burn_subtitles,
         **subtitle_options,
     }
+    user = current_user_context()
+    now = time.time()
     tasks[task_id] = {
         'status': 'queued',
         'stage': 'queue',
@@ -1916,6 +2225,10 @@ def convert_ppt():
         'original_name': original_name,
         'batch_id': batch_id,
         'strategy_source': strategy_source,
+        'owner_username': user['username'],
+        'created_by': user['username'],
+        'created_at': now,
+        'updated_at': now,
         'strategy': strategy,
         'media_options': {
             'tts_engine': tts_engine,
@@ -1932,6 +2245,7 @@ def convert_ppt():
         },
     }
     save_state(task_id)
+    log_operation('create_task', task_id=task_id, target_name=original_name)
 
     suffix = Path(file_path).suffix.lower()
     if suffix in {'.docx', '.pdf'}:
@@ -1959,9 +2273,9 @@ def convert_ppt():
 @app.route('/api/course-preview/<task_id>')
 def get_course_preview(task_id):
     """返回逐页 PPT 图片和可编辑讲稿。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') != 'awaiting_confirmation':
         return jsonify({'error': '任务尚未进入讲稿确认阶段'}), 409
     try:
@@ -1979,15 +2293,16 @@ def get_course_preview(task_id):
     duration_estimate = _duration_estimate_payload(preview)
     preview['duration_estimate'] = duration_estimate
     preview['lesson_segments'] = duration_estimate['segments']
+    log_operation('preview_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify(preview)
 
 
 @app.route('/api/course-preview/<task_id>/page-audio', methods=['POST'])
 def ensure_course_preview_audio(task_id):
     """按需生成或复用单页完整配音，供浏览器端准视频预览播放。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') not in {
         'awaiting_confirmation',
         'processing',
@@ -2033,9 +2348,9 @@ def ensure_course_preview_audio(task_id):
 @app.route('/api/course-preview/<task_id>/audio/<int:page_number>')
 def get_course_preview_audio(task_id, page_number):
     """播放课程准视频预览用的单页音频。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     audio_path = Path(task['output_dir']) / str(page_number) / 'audio.mp3'
     if not audio_path.exists() or audio_path.stat().st_size == 0:
         return jsonify({'error': '音频不存在'}), 404
@@ -2045,9 +2360,9 @@ def get_course_preview_audio(task_id, page_number):
 @app.route('/api/course-segments/<task_id>/recommend', methods=['POST'])
 def recommend_course_segments(task_id):
     """根据目标时长和优先级给出智能切课范围。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') != 'awaiting_confirmation':
         return jsonify({'error': '任务尚未进入讲稿确认阶段'}), 409
     data = request.get_json(silent=True) or {}
@@ -2084,9 +2399,9 @@ def recommend_course_segments(task_id):
 @app.route('/api/course-segments/<task_id>', methods=['POST'])
 def apply_course_segments(task_id):
     """把用户确认的切课范围写入预览数据和 course.json。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') != 'awaiting_confirmation':
         return jsonify({'error': '当前任务不能应用切课'}), 409
     data = request.get_json(silent=True) or {}
@@ -2117,6 +2432,7 @@ def apply_course_segments(task_id):
     task['lesson_segments'] = segments
     task['message'] = f'已应用智能切课，共 {len(segments)} 段'
     save_state(task_id)
+    log_operation('apply_segments', task_id=task_id, target_name=task.get('original_name'))
     return jsonify({
         'success': True,
         'message': f'已应用智能切课，共 {len(segments)} 段',
@@ -2127,9 +2443,9 @@ def apply_course_segments(task_id):
 @app.route('/api/course-presentation/<task_id>', methods=['GET', 'POST'])
 def course_presentation(task_id):
     """下载可编辑 PPTX，或接收用户修改后的版本并刷新审核预览。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') != 'awaiting_confirmation':
         return jsonify({'error': '任务尚未进入 PPT 审核阶段'}), 409
     try:
@@ -2199,6 +2515,7 @@ def course_presentation(task_id):
         task['presentation_path'] = str(reviewed_path)
         task['message'] = 'PPT 已更新，请确认预览和讲稿'
         save_state(task_id)
+        log_operation('upload_reviewed_ppt', task_id=task_id, target_name=task.get('original_name'))
         return jsonify({
             'success': True,
             'message': 'PPT 已更新并重新渲染',
@@ -2220,9 +2537,9 @@ def course_presentation(task_id):
 @app.route('/api/course-preview/<task_id>', methods=['PATCH'])
 def save_course_preview(task_id):
     """持久化用户修改的逐页讲稿，但不启动媒体生成。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') != 'awaiting_confirmation':
         return jsonify({'error': '当前任务不能修改讲稿'}), 409
     data = request.get_json(silent=True) or {}
@@ -2235,6 +2552,7 @@ def save_course_preview(task_id):
         return jsonify({'error': str(exc)}), 400
     tasks[task_id]['message'] = '讲稿已保存，等待继续'
     save_state(task_id)
+    log_operation('save_preview', task_id=task_id, target_name=task.get('original_name'))
     preview = _read_preview(task_id)
     duration_estimate = _duration_estimate_payload(preview)
     return jsonify({
@@ -2248,9 +2566,9 @@ def save_course_preview(task_id):
 @app.route('/api/course-continue/<task_id>', methods=['POST'])
 def continue_course(task_id):
     """确认最终讲稿，并将 TTS/字幕/视频阶段重新加入转换队列。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     pages = data.get('pages')
     tts_engine = data.get('tts_engine')
@@ -2305,9 +2623,12 @@ def continue_course(task_id):
             stage='tts',
             percentage=50,
             message='已确认讲稿，等待生成配音',
+            stop_requested=False,
+            error=None,
         )
         save_state(task_id)
         conversion_queue.enqueue(run_media_generation, task_id)
+    log_operation('continue_task', task_id=task_id, target_name=task.get('original_name'))
 
     return jsonify({'success': True, 'message': '已继续生成视频'})
 
@@ -2315,35 +2636,80 @@ def continue_course(task_id):
 @app.route('/api/stop/<task_id>', methods=['POST'])
 def stop_task(task_id):
     """请求停止当前媒体生成；工作线程会清理并回退到讲稿确认。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
-    if task.get('status') not in {'pending', 'processing'}:
+    task, error = require_task_access(task_id)
+    if error:
+        return error
+    status = task.get('status')
+    if status not in {'queued', 'pending', 'processing'}:
         return jsonify({'error': '当前任务不在运行中'}), 409
     cancel_event = cancellation_events.setdefault(task_id, threading.Event())
     cancel_event.set()
     task.update(message='正在停止生成，请稍候…', stop_requested=True)
+    if status in {'queued', 'pending'}:
+        preview_path = task.get('preview_path')
+        if preview_path and Path(preview_path).exists():
+            task.update(
+                status='awaiting_confirmation',
+                stage='preview',
+                percentage=50,
+                stage_percentage=0,
+                message='生成已停止，已退回讲稿确认，可直接重试',
+                error='用户停止了生成',
+                failed_stage=task.get('stage', 'queue'),
+                retryable=True,
+                stop_requested=False,
+            )
+            event_type = 'rollback'
+        else:
+            task.update(
+                status='interrupted',
+                stage='queue',
+                percentage=0,
+                stage_percentage=0,
+                message='任务已从队列移除，可重新提交',
+                error='用户停止了排队任务',
+                retryable=True,
+                stop_requested=False,
+            )
+            event_type = 'error'
     save_state(task_id)
     queue = progress_queues.get(task_id)
     if queue:
-        queue.put({
-            'type': 'progress',
-            'stage': task.get('stage', 'video'),
-            'current': task.get('percentage', 0),
-            'total': 100,
-            'percentage': task.get('percentage', 0),
-            'stage_percentage': task.get('stage_percentage', 0),
-            'message': '正在停止生成，请稍候…',
-        })
+        if status in {'queued', 'pending'}:
+            if event_type == 'rollback':
+                queue.put({
+                    'type': 'rollback',
+                    'message': '用户停止了生成',
+                    'failed_stage': '生成已停止',
+                    'preview_path': task.get('preview_path'),
+                    'course_json_path': task.get('course_json_path'),
+                    'presentation_path': task.get('presentation_path'),
+                })
+            else:
+                queue.put({
+                    'type': 'error',
+                    'message': '任务已从队列移除，可重新提交',
+                })
+        else:
+            queue.put({
+                'type': 'progress',
+                'stage': task.get('stage', 'video'),
+                'current': task.get('percentage', 0),
+                'total': 100,
+                'percentage': task.get('percentage', 0),
+                'stage_percentage': task.get('stage_percentage', 0),
+                'message': '正在停止生成，请稍候…',
+            })
+    log_operation('stop_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify({'success': True, 'message': '已请求停止，正在回退上一步'})
 
 
 @app.route('/api/tasks/<task_id>/retry', methods=['POST'])
 def retry_task_stage(task_id):
     """从讲稿检查点重新执行指定媒体阶段，并尽量复用已有成果。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') not in {
         'awaiting_confirmation', 'completed', 'error', 'interrupted'
     }:
@@ -2378,11 +2744,13 @@ def retry_task_stage(task_id):
         error=None,
         failed_stage=None,
         retryable=False,
+        stop_requested=False,
         retry_stage=retry_stage,
         retry_page=page_number,
     )
     save_state(task_id)
     conversion_queue.enqueue(run_media_generation, task_id)
+    log_operation('retry_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify({
         'success': True,
         'task_id': task_id,
@@ -2395,9 +2763,9 @@ def retry_task_stage(task_id):
 @app.route('/api/tasks/<task_id>', methods=['DELETE'])
 def delete_task(task_id):
     """物理删除未运行任务的输出目录及持久化状态。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     deletable_statuses = {
         'completed',
         'error',
@@ -2457,15 +2825,16 @@ def delete_task(task_id):
     tasks.pop(task_id, None)
     progress_queues.pop(task_id, None)
     cancellation_events.pop(task_id, None)
+    log_operation('delete_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify({'success': True, 'message': '课程产物已物理删除'})
 
 
 @app.route('/api/course-cancel/<task_id>', methods=['POST'])
 def cancel_course(task_id):
     """放弃待确认任务，让前端使用原上传文件重新选择生成策略。"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     if task.get('status') != 'awaiting_confirmation':
         return jsonify({'error': '当前任务不能取消'}), 409
 
@@ -2489,6 +2858,7 @@ def cancel_course(task_id):
         task_store.delete(task_id)
     except Exception as exc:
         logger.warning(f'Unable to delete cancelled task {task_id} from SQLite: {exc}')
+    log_operation('cancel_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify({'success': True, 'message': '已取消本次生成'})
 
 
@@ -2513,11 +2883,17 @@ def render_slides():
     uploaded_name = Path(file_path).name
     name_parts = uploaded_name.split('_', 1)
     original_name = name_parts[1] if len(name_parts) > 1 else uploaded_name
+    user = current_user_context()
+    now = time.time()
     tasks[task_id] = {
         'status': 'pending',
         'file_path': file_path,
         'output_dir': str(output_dir),
         'original_name': original_name,
+        'owner_username': user['username'],
+        'created_by': user['username'],
+        'created_at': now,
+        'updated_at': now,
     }
 
     conversion_queue.enqueue(run_render_only, task_id, file_path, output_dir, render_engine)
@@ -2532,9 +2908,9 @@ def render_slides():
 @app.route('/api/slides/<task_id>')
 def get_slides(task_id):
     """获取任务的所有幻灯片图片路径"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
 
     output_dir = Path(task.get('output_dir', ''))
     if not output_dir.exists():
@@ -2559,6 +2935,11 @@ def get_slides(task_id):
 def get_slide_image():
     """获取单张幻灯片图片"""
     slide_path = request.args.get('path', '')
+    _, task = task_for_path(slide_path)
+    if not task:
+        return jsonify({'error': '图片不存在'}), 404
+    if not can_access_task(task):
+        return jsonify({'error': '无权访问该图片'}), 403
     try:
         response = make_response(send_file(slide_path, mimetype='image/png'))
         response.headers['Cache-Control'] = 'no-store, max-age=0'
@@ -2574,6 +2955,9 @@ def get_progress(task_id):
     """
     SSE 接口，推送转换进度
     """
+    task, error = require_task_access(task_id)
+    if error:
+        return error
     queue = progress_queues.get(task_id)
     if not queue:
         return jsonify({'error': '任务不存在'}), 404
@@ -2619,9 +3003,9 @@ def get_progress(task_id):
 @app.route('/api/status/<task_id>')
 def get_status(task_id):
     """获取任务状态"""
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
+    task, error = require_task_access(task_id)
+    if error:
+        return error
 
     return jsonify({
         'task_id': task_id,
@@ -2637,11 +3021,13 @@ def get_status(task_id):
         'message': task.get('message', ''),
         'batch_id': task.get('batch_id'),
         'strategy_source': task.get('strategy_source', 'batch'),
+        'owner_username': _task_owner(task),
         'queue_position': (
             sum(
                 1
                 for other in tasks.values()
                 if other.get('status') == 'queued'
+                and can_access_task(other)
                 and other.get('queue_order', float('inf'))
                 <= task.get('queue_order', float('inf'))
             )
@@ -2655,11 +3041,14 @@ def get_status(task_id):
 @app.route('/api/tasks')
 def get_tasks():
     """返回所有任务的列表（最近 50 条）"""
-    all_tasks = []
+    visible_tasks = {
+        task_id: task for task_id, task in tasks.items()
+        if can_access_task(task)
+    }
     queued_ids = [
         task_id
         for task_id, task in sorted(
-            tasks.items(),
+            visible_tasks.items(),
             key=lambda item: item[1].get('queue_order', float('inf')),
         )
         if task.get('status') == 'queued'
@@ -2667,40 +3056,45 @@ def get_tasks():
     queue_positions = {
         task_id: index + 1 for index, task_id in enumerate(queued_ids)
     }
-    for task_id, task in tasks.items():
-        all_tasks.append({
-            'task_id': task_id,
-            'status': task.get('status', 'unknown'),
-            'original_name': task.get('original_name', ''),
-            'file_path': task.get('file_path', ''),
-            'stage': task.get('stage'),
-            'percentage': task.get('percentage', 0),
-            'stage_percentage': task.get('stage_percentage', 0),
-            'message': task.get('message', ''),
-            'video_path': task.get('video_path'),
-            'course_json_path': task.get('course_json_path'),
-            'presentation_path': task.get('presentation_path'),
-            'subtitles_path': task.get('subtitles_path'),
-            'preview_path': task.get('preview_path'),
-            'error': task.get('error'),
-            'batch_id': task.get('batch_id'),
-            'strategy_source': task.get('strategy_source', 'batch'),
-            'strategy': task.get('strategy', {}),
-            'queue_position': queue_positions.get(task_id),
-            'started_at': task.get('started_at'),
-            'stage_started_at': task.get('stage_started_at'),
-            'stage_timings': task.get('stage_timings', {}),
-            'updated_at': task.get('updated_at'),
-        })
+    all_tasks = [
+        task_summary(task_id, task, queue_positions)
+        for task_id, task in visible_tasks.items()
+    ]
     # 按最近排序，限制 50 条
     all_tasks = all_tasks[-MAX_STATE_ENTRIES:]
-    return jsonify({'tasks': all_tasks})
+    return jsonify({
+        'tasks': all_tasks,
+        'current_user': current_user_context(),
+        'is_super_admin': is_super_admin(),
+    })
+
+
+@app.route('/api/operation-logs')
+def get_operation_logs():
+    """返回当前用户可见的操作日志。"""
+    try:
+        limit = int(request.args.get('limit', 100))
+    except (TypeError, ValueError):
+        limit = 100
+    actor = None if is_super_admin() else current_user_context()['username']
+    try:
+        logs = task_store.list_operation_logs(actor=actor, limit=limit)
+    except Exception as exc:
+        logger.exception(f'读取操作日志失败: {exc}')
+        return jsonify({'error': '读取操作日志失败'}), 500
+    return jsonify({
+        'logs': logs,
+        'current_user': current_user_context(),
+        'is_super_admin': is_super_admin(),
+    })
 
 
 @app.route('/api/active-task')
 def get_active_task():
     """获取当前正在运行或刚完成的任务，供前端刷新后恢复状态"""
     for task_id, task in tasks.items():
+        if not can_access_task(task):
+            continue
         status = task.get('status', '')
         if status in ('pending', 'processing') or \
            (status in ('completed', 'error') and task_id in progress_queues):
@@ -2718,7 +3112,10 @@ def get_active_task():
                 'completed_at': task.get('completed_at'),
             })
     # 也返回最近完成的任务（1个）
-    completed = [(tid, t) for tid, t in tasks.items() if t.get('status') in ('completed', 'error')]
+    completed = [
+        (tid, t) for tid, t in tasks.items()
+        if t.get('status') in ('completed', 'error') and can_access_task(t)
+    ]
     if completed:
         tid, t = completed[-1]
         return jsonify({
@@ -2740,7 +3137,10 @@ def get_active_task():
 @app.route('/api/last-result')
 def get_last_result():
     """返回 state.json 中最近完成的任务结果（含 original_name）"""
-    data = _read_state_file()
+    data = [
+        entry for entry in _read_state_file()
+        if can_access_task(entry)
+    ]
     if not data:
         return jsonify({'found': False})
     # 查找最后一个已完成且有视频的任务
@@ -2771,6 +3171,8 @@ def get_task_timing():
     """获取任务计时信息"""
     # 优先查找正在运行的任务
     for task_id, task in tasks.items():
+        if not can_access_task(task):
+            continue
         status = task.get('status', '')
         if status in ('pending', 'processing'):
             return jsonify({
@@ -2782,7 +3184,10 @@ def get_task_timing():
                 'stage_timings': task.get('stage_timings', {}),
             })
     # 再查找最近完成的任务
-    completed = [(tid, t) for tid, t in tasks.items() if t.get('status') in ('completed', 'error')]
+    completed = [
+        (tid, t) for tid, t in tasks.items()
+        if t.get('status') in ('completed', 'error') and can_access_task(t)
+    ]
     if completed:
         tid, t = completed[-1]
         return jsonify({
@@ -2801,6 +3206,11 @@ def get_task_timing():
 def get_video():
     """获取视频文件用于预览"""
     video_path = request.args.get('path', '')
+    _, task = task_for_path(video_path)
+    if not task:
+        return jsonify({'error': '视频文件不存在'}), 404
+    if not can_access_task(task):
+        return jsonify({'error': '无权访问该视频'}), 403
     try:
         return send_file(video_path, mimetype='video/mp4')
     except FileNotFoundError:
@@ -2811,6 +3221,11 @@ def get_video():
 def get_frame():
     """获取视频第一帧图片用于预览"""
     frame_path = request.args.get('path', '')
+    _, task = task_for_path(frame_path)
+    if not task:
+        return jsonify({'error': '图片文件不存在'}), 404
+    if not can_access_task(task):
+        return jsonify({'error': '无权访问该图片'}), 403
     try:
         return send_file(frame_path, mimetype='image/png')
     except FileNotFoundError:
@@ -2830,18 +3245,16 @@ def _artifact_download_name(task: dict | None, file_path: str) -> str:
 def download_file():
     """下载文件"""
     file_path = request.args.get('path', '')
-    task = tasks.get(request.args.get('task_id', ''))
+    task_id = request.args.get('task_id', '')
+    task = tasks.get(task_id)
     if not task:
-        task = next((
-            item for item in tasks.values()
-            if file_path in {
-                item.get('video_path'),
-                item.get('course_json_path'),
-                item.get('presentation_path'),
-                item.get('subtitles_path'),
-            }
-        ), None)
+        task_id, task = task_for_path(file_path)
+    if not task:
+        return jsonify({'error': '文件不存在'}), 404
+    if not can_access_task(task):
+        return jsonify({'error': '无权下载该文件'}), 403
     try:
+        log_operation('download', task_id=task_id or None, target_name=task.get('original_name'))
         return send_file(
             file_path,
             as_attachment=True,

@@ -38,6 +38,33 @@ def test_task_store_updates_without_changing_queue_order(temp_dir):
     assert restored["queue_order"] == original_order
 
 
+def test_task_store_records_operation_logs(temp_dir):
+    store = TaskStore(temp_dir / "tasks.db")
+
+    store.add_operation_log({
+        "actor": "teacher",
+        "role": "user",
+        "action": "create_task",
+        "task_id": "task-1",
+        "target_name": "lesson.pptx",
+    })
+    store.add_operation_log({
+        "actor": "admin",
+        "role": "super_admin",
+        "action": "delete_task",
+        "task_id": "task-2",
+        "target_name": "other.pptx",
+    })
+
+    teacher_logs = store.list_operation_logs(actor="teacher")
+    all_logs = store.list_operation_logs()
+
+    assert len(teacher_logs) == 1
+    assert teacher_logs[0]["actor"] == "teacher"
+    assert teacher_logs[0]["action"] == "create_task"
+    assert len(all_logs) == 2
+
+
 def test_delete_route_removes_database_record_and_files(monkeypatch, temp_dir):
     import web.app as web_app
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=15">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=17">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -18,7 +18,7 @@
                 </div>
             </div>
             <nav class="admin-nav" aria-label="主导航">
-                <a class="nav-item active" href="#workspace">
+                <a class="nav-item active" href="{{ url_for('index') }}">
                     <span class="nav-icon">▦</span><span>生产工作台</span>
                 </a>
                 <a class="nav-item" href="#upload-module">
@@ -29,6 +29,12 @@
                 </a>
                 <a class="nav-item" href="#results-module">
                     <span class="nav-icon">□</span><span>课程资产</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('data_management_page') }}">
+                    <span class="nav-icon">☷</span><span>数据管理</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('operation_logs_page') }}">
+                    <span class="nav-icon">◴</span><span>操作日志</span>
                 </a>
             </nav>
             <div class="sidebar-meta">
@@ -45,7 +51,7 @@
                 </div>
                 <div class="topbar-actions">
                     <span class="environment-badge"><span></span>生产环境</span>
-                    <span class="admin-user-name">{{ current_user }}</span>
+                    <span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span>
                     <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
                     <form method="post" action="{{ url_for('logout') }}">
                         <button class="logout-button" type="submit">退出登录</button>
@@ -407,6 +413,11 @@
                         </div>
                         <div class="course-subtitle-grid">
                             <div class="course-subtitle-controls">
+                                <label class="subtitle-template-field">样式模板
+                                    <select id="subtitle-style-template" class="select-input">
+                                        <option value="">选择字幕样式模板</option>
+                                    </select>
+                                </label>
                                 <label>推荐预设
                                     <select id="subtitle-preset" class="select-input">
                                         <option value="course">标准底部双行</option>
@@ -524,6 +535,7 @@
                     </div>
                     <div class="results-grid" id="results-grid"></div>
                 </section>
+
             </div>
 
             <aside class="content-aside" id="dashboard-column">
@@ -544,7 +556,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=19"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=21"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({
