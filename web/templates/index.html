@@ -241,14 +241,14 @@
                         <div class="option-group toggle-group">
                             <label>视频字幕</label>
                             <div class="toggle-row">
-                                <span style="font-size:13px;color:var(--color-text-3)">不烧录</span>
+                                <span style="font-size:13px;color:var(--color-text-3)">只生成 SRT</span>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="burn-subtitles" checked>
                                     <span class="toggle-slider"></span>
                                 </label>
-                                <span style="font-size:13px;color:var(--color-text-3)">烧录到视频</span>
+                                <span style="font-size:13px;color:var(--color-text-3)">内嵌到视频</span>
                             </div>
-                            <small class="field-hint">始终生成 UTF-8 SRT；开启后按课程草稿中的字幕位置和样式烧录</small>
+                            <small class="field-hint">关闭时只导出 UTF-8 SRT 文件；开启后按课程草稿中的字幕位置和样式写入视频画面</small>
                         </div>
                         <div class="option-group video-tuning-group">
                             <div class="video-tuning-heading">
@@ -518,8 +518,8 @@
                         <div class="smart-cut-section">
                             <h4>推荐范围</h4>
                             <div class="smart-cut-summary" id="smart-cut-summary">尚未生成切课建议，可跳过切课直接继续生成完整视频</div>
+                            <button type="button" class="btn-convert smart-cut-apply" id="smart-cut-apply-btn" disabled>应用切课</button>
                             <div class="smart-cut-list" id="smart-cut-list"></div>
-                            <button type="button" class="btn-convert smart-cut-apply" id="smart-cut-apply-btn" disabled>应用</button>
                         </div>
                     </div>
                     <div class="course-packaging-panel">
@@ -579,8 +579,8 @@
                                 </label>
                                 <label>推荐预设
                                     <select id="subtitle-preset" class="select-input">
-                                        <option value="course">标准底部双行</option>
-                                        <option value="compact">紧凑单行</option>
+                                        <option value="course">标准底部单行</option>
+                                        <option value="compact">底部小字号单行</option>
                                         <option value="safe">避让课件底部</option>
                                         <option value="top">顶部字幕</option>
                                         <option value="lowerMiddle">中部偏下</option>

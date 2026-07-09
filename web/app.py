@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from vidppt import Pipeline, ProcessConfig
 from vidppt.core.course import Course, CourseSection, KnowledgePoint
 from vidppt.review import CourseReviewError, CourseReviewer
+from vidppt.utils.subtitle_rules import normalize_subtitle_text
 from vidppt.utils.progress import ProcessStage
 
 # 导入处理器以触发注册
@@ -1124,26 +1125,20 @@ def _parse_hex_color(value: str, default: str) -> tuple[int, int, int, int]:
 
 
 def _subtitle_preview_lines(draw, text: str, font, max_width: int) -> list[str]:
-    chars = list((text or '').strip()[:80])
-    if not chars:
+    text = normalize_subtitle_text(text)[:80]
+    if not text:
         return ['本页暂无字幕文本']
-    lines: list[str] = []
+    if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+        return [text]
+
     current = ''
-    for char in chars:
+    for char in text:
         candidate = current + char
-        bbox = draw.textbbox((0, 0), candidate, font=font)
+        bbox = draw.textbbox((0, 0), f'{candidate} ', font=font)
         if current and bbox[2] - bbox[0] > max_width:
-            lines.append(current)
-            current = char
-            if len(lines) == 2:
-                break
-        else:
-            current = candidate
-    if current and len(lines) < 2:
-        lines.append(current)
-    if len(lines) == 2 and len(''.join(lines)) < len(chars):
-        lines[-1] = lines[-1].rstrip('，。；、,. ') + '…'
-    return lines
+            break
+        current = candidate
+    return [current.rstrip() or text[:1]]
 
 
 def _render_subtitle_preview_image(params) -> BytesIO:
@@ -1155,7 +1150,7 @@ def _render_subtitle_preview_image(params) -> BytesIO:
     font_size = max(12, min(120, int(params.get('font_size', 46) or 46)))
     outline_width = max(0, min(12, float(params.get('outline_width', 0) or 0)))
     font_name = str(params.get('font', SUBTITLE_FONT_FALLBACKS[0])).strip()[:80]
-    text = str(params.get('text', '')).strip()[:120] or '本页暂无字幕文本'
+    text = normalize_subtitle_text(str(params.get('text', '')).strip()[:120]) or '本页暂无字幕文本'
     text_color = _parse_hex_color(str(params.get('color', '#ffffff')), '#ffffff')
     outline_color = _parse_hex_color(
         str(params.get('outline_color', '#000000')),
@@ -4171,6 +4166,7 @@ def debug_logs():
             log for log in logs
             if keyword in ' '.join(str(log.get(key) or '') for key in (
                 'actor', 'role', 'action', 'task_id', 'target_name', 'message',
+                'ip_address',
             )).lower()
         ]
     return jsonify({

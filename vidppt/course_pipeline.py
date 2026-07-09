@@ -14,6 +14,7 @@ from .core.models import ProcessConfig
 from .generation import CourseBuilder
 from .ingestion import read_source_document
 from .renderers import PPTXRenderer, SubtitleRenderer
+from .utils.subtitle_rules import normalize_subtitle_text
 
 
 @dataclass
@@ -198,7 +199,8 @@ class CoursePipeline:
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             raise RuntimeError("烧录字幕需要 ffmpeg，但当前环境未找到该命令")
-        subtitle_name = subtitles.name.replace("\\", r"\\").replace("'", r"\'")
+        styled_subtitles = CoursePipeline._styled_ass_subtitles(subtitles, config)
+        subtitle_name = styled_subtitles.name.replace("\\", r"\\").replace("'", r"\'")
         subtitle_filter = CoursePipeline._subtitle_filter(subtitle_name, config)
         command = [
                 ffmpeg,
@@ -234,7 +236,7 @@ class CoursePipeline:
                 command,
                 check=True,
                 capture_output=True,
-                cwd=subtitles.parent,
+                cwd=styled_subtitles.parent,
             )
             return
 
@@ -244,7 +246,7 @@ class CoursePipeline:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            cwd=subtitles.parent,
+            cwd=styled_subtitles.parent,
         )
         try:
             assert process.stdout is not None
@@ -270,6 +272,16 @@ class CoursePipeline:
 
     @staticmethod
     def _subtitle_filter(subtitle_name: str, config: ProcessConfig) -> str:
+        layout = CoursePipeline._subtitle_layout(config)
+        return (
+            f"drawbox=x={layout['x']}:y={layout['y']}:"
+            f"w={layout['width']}:h={layout['height']}:"
+            f"color={layout['background']}@{layout['opacity']:.2f}:t=fill,"
+            f"subtitles=filename='{subtitle_name}'"
+        )
+
+    @staticmethod
+    def _subtitle_layout(config: ProcessConfig) -> dict[str, int | float | str]:
         scale_x = max(0.01, float(config.video_width) / 1920)
         scale_y = max(0.01, float(config.video_height) / 1080)
         font_scale = min(scale_x, scale_y)
@@ -295,19 +307,94 @@ class CoursePipeline:
             max(0.0, float(config.subtitle_outline_width) * font_scale),
             max(1.0, font_size * 0.04),
         )
-        margin_v = max(0, config.video_height - y - height + 6)
-        margin_r = max(0, config.video_width - x - width)
-        return (
-            f"drawbox=x={x}:y={y}:w={width}:h={height}:"
-            f"color={background}@{opacity:.2f}:t=fill,"
-            f"subtitles=filename='{subtitle_name}':"
-            f"original_size={config.video_width}x{config.video_height}:"
-            f"force_style='FontName={font_name},"
-            f"FontSize={font_size},PrimaryColour={primary},"
-            f"OutlineColour={outline},BorderStyle=1,"
-            f"Outline={outline_width:g},Shadow=0,"
-            f"Alignment=2,MarginL={x},MarginR={margin_r},MarginV={margin_v}'"
+        margin_v = max(
+            0,
+            round(config.video_height - y - ((height + font_size) / 2)),
         )
+        margin_r = max(0, config.video_width - x - width)
+        return {
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "font_size": font_size,
+            "font_name": font_name,
+            "primary": primary,
+            "outline": outline,
+            "background": background,
+            "opacity": opacity,
+            "outline_width": outline_width,
+            "margin_r": margin_r,
+            "margin_v": margin_v,
+        }
+
+    @staticmethod
+    def _styled_ass_subtitles(subtitles: Path, config: ProcessConfig) -> Path:
+        layout = CoursePipeline._subtitle_layout(config)
+        output = subtitles.with_suffix(".burn.ass")
+        events = CoursePipeline._srt_events(subtitles)
+        lines = [
+            "[Script Info]",
+            "ScriptType: v4.00+",
+            f"PlayResX: {config.video_width}",
+            f"PlayResY: {config.video_height}",
+            "WrapStyle: 2",
+            "",
+            "[V4+ Styles]",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+            "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding",
+            "Style: Default,"
+            f"{layout['font_name']},{layout['font_size']},{layout['primary']},"
+            "&H000000FF,"
+            f"{layout['outline']},&H00000000,0,0,0,0,100,100,0,0,1,"
+            f"{layout['outline_width']:g},0,2,"
+            f"{layout['x']},{layout['margin_r']},{layout['margin_v']},1",
+            "",
+            "[Events]",
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+            "MarginV, Effect, Text",
+        ]
+        for start, end, text in events:
+            lines.append(
+                f"Dialogue: 0,{start},{end},Default,,0,0,0,,"
+                f"{CoursePipeline._ass_escape_text(text)}"
+            )
+        output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return output
+
+    @staticmethod
+    def _srt_events(subtitles: Path) -> list[tuple[str, str, str]]:
+        content = Path(subtitles).read_text(encoding="utf-8")
+        events: list[tuple[str, str, str]] = []
+        for block in re.split(r"\n\s*\n", content.strip()):
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            if len(lines) < 3 or "-->" not in lines[1]:
+                continue
+            start, end = [part.strip() for part in lines[1].split("-->", 1)]
+            text = normalize_subtitle_text(" ".join(lines[2:]))
+            if not text:
+                continue
+            events.append((
+                CoursePipeline._ass_time(start),
+                CoursePipeline._ass_time(end),
+                text,
+            ))
+        return events
+
+    @staticmethod
+    def _ass_time(value: str) -> str:
+        match = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", value)
+        if not match:
+            return "0:00:00.00"
+        hours, minutes, seconds, milliseconds = match.groups()
+        centiseconds = min(99, round(int(milliseconds) / 10))
+        return f"{int(hours)}:{minutes}:{seconds}.{centiseconds:02d}"
+
+    @staticmethod
+    def _ass_escape_text(text: str) -> str:
+        return str(text).replace("{", "").replace("}", "").replace("\n", " ")
 
     @staticmethod
     def _sanitize_ass_value(value: str) -> str:

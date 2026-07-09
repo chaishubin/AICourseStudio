@@ -63,6 +63,22 @@ class TaskStore:
                 CREATE INDEX IF NOT EXISTS idx_operation_logs_created
                 ON operation_logs(created_at DESC)
             """)
+            log_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(operation_logs)"
+                ).fetchall()
+            }
+            if "ip_address" not in log_columns:
+                connection.execute("""
+                    ALTER TABLE operation_logs
+                    ADD COLUMN ip_address TEXT
+                """)
+            if "user_agent" not in log_columns:
+                connection.execute("""
+                    ALTER TABLE operation_logs
+                    ADD COLUMN user_agent TEXT
+                """)
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS accounts (
                     username TEXT PRIMARY KEY,

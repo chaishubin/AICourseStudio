@@ -1,11 +1,12 @@
-"""字幕分段规则：优先语义停顿，再控制每屏行数与字数。"""
+"""字幕分段规则：优先语义停顿，再控制单行字幕字数。"""
 
 from __future__ import annotations
 
 import re
+import unicodedata
 
-MAX_SUBTITLE_LINES = 2
-MAX_CHARS_PER_LINE = 14
+MAX_SUBTITLE_LINES = 1
+MAX_CHARS_PER_LINE = 28
 MAX_SUBTITLE_CHARS = MAX_SUBTITLE_LINES * MAX_CHARS_PER_LINE
 MIN_CHARS_PER_CUE = 6
 
@@ -36,18 +37,20 @@ CONNECTORS = (
 
 
 def subtitle_chunks(text: str) -> list[str]:
-    """按字幕可读性拆分文本，返回每屏最多两行的字幕块。"""
-    normalized = normalize_subtitle_text(text)
+    """按字幕可读性拆分文本，返回单行字幕块。"""
+    normalized = _semantic_subtitle_text(text)
     if not normalized:
         return []
 
     chunks: list[str] = []
     current = ""
     for phrase in _semantic_phrases(normalized):
+        phrase = normalize_subtitle_text(phrase)
         if not phrase:
             continue
-        if _subtitle_len(current + phrase) <= MAX_SUBTITLE_CHARS:
-            current += phrase
+        candidate = _join_subtitle_parts(current, phrase)
+        if _subtitle_len(candidate) <= MAX_SUBTITLE_CHARS:
+            current = candidate
             continue
         if current:
             chunks.append(current)
@@ -64,24 +67,44 @@ def subtitle_chunks(text: str) -> list[str]:
 
 
 def wrap_subtitle(text: str) -> str:
-    """把单条字幕整理为最多两行，便于 SRT 与烧录样式稳定显示。"""
-    text = _compact_subtitle_text(text, trim_breaks=False)
-    if not text:
-        return ""
-    if _subtitle_len(text) <= MAX_CHARS_PER_LINE:
-        return text
-    first_end = _best_split_index(text, MAX_CHARS_PER_LINE)
-    first = text[:first_end]
-    second = text[first_end : first_end + MAX_CHARS_PER_LINE]
-    return f"{first}\n{second}" if second else first
+    """把单条字幕整理为单行，便于 SRT 与烧录样式稳定显示。"""
+    return normalize_subtitle_text(text)
 
 
 def normalize_subtitle_text(text: str) -> str:
-    """按中文课程字幕的展示场景规范化标点，并补齐整段句末点号。"""
+    """清理字幕展示文本：仅保留书名号，其他标点用空格断句。"""
+    normalized = _display_subtitle_text(text)
+    if not normalized:
+        return ""
+    return normalized
+
+
+def _semantic_subtitle_text(text: str) -> str:
+    """保留语义标点用于拆分，但不作为最终字幕展示文本。"""
     normalized = _compact_subtitle_text(text)
     if not normalized:
         return ""
     return _ensure_terminal_punctuation(normalized)
+
+
+def _display_subtitle_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return ""
+    normalized = _normalize_punctuation(normalized)
+    normalized = _remove_repeated_punctuation(normalized)
+
+    chars: list[str] = []
+    for char in normalized:
+        if char in "《》":
+            chars.append(char)
+            continue
+        category = unicodedata.category(char)
+        if category.startswith("P"):
+            chars.append(" ")
+        else:
+            chars.append(char)
+    return re.sub(r"\s+", " ", "".join(chars)).strip()
 
 
 def _compact_subtitle_text(text: str, *, trim_breaks: bool = True) -> str:
@@ -125,14 +148,41 @@ def _normalize_punctuation(text: str) -> str:
 
 def _normalize_quotes(text: str) -> str:
     result: list[str] = []
-    opening = True
-    for char in text:
-        if char != '"':
+    quote_stack: list[str] = []
+    for index, char in enumerate(text):
+        if char not in "\"'“”‘’":
             result.append(char)
             continue
-        result.append("“" if opening else "”")
-        opening = not opening
+
+        before = text[index - 1] if index > 0 else ""
+        after = text[index + 1] if index + 1 < len(text) else ""
+        if (
+            char in "'‘’"
+            and before.isascii()
+            and before.isalnum()
+            and after.isascii()
+            and after.isalnum()
+        ):
+            result.append(char)
+            continue
+
+        if char in "”’" or (
+            char in "\"'"
+            and quote_stack
+            and _quote_kind(quote_stack[-1]) == _quote_kind(char)
+        ):
+            depth = len(quote_stack)
+            quote_stack.pop()
+            result.append("”" if depth % 2 == 1 else "’")
+            continue
+
+        quote_stack.append(char)
+        result.append("“" if len(quote_stack) % 2 == 1 else "‘")
     return "".join(result)
+
+
+def _quote_kind(char: str) -> str:
+    return "double" if char in '"“”' else "single"
 
 
 def _normalize_periods(text: str) -> str:
@@ -234,12 +284,12 @@ def _split_after_connectors(text: str) -> list[str]:
 
 
 def _split_long_phrase(text: str) -> list[str]:
-    phrase = _compact_subtitle_text(text, trim_breaks=False)
+    phrase = normalize_subtitle_text(text)
     chunks: list[str] = []
     while _subtitle_len(phrase) > MAX_SUBTITLE_CHARS:
         split_at = _best_split_index(phrase, MAX_SUBTITLE_CHARS)
-        chunks.append(phrase[:split_at])
-        phrase = phrase[split_at:]
+        chunks.append(phrase[:split_at].strip())
+        phrase = phrase[split_at:].strip()
     if phrase:
         chunks.append(phrase)
     return chunks
@@ -247,7 +297,7 @@ def _split_long_phrase(text: str) -> list[str]:
 
 def _best_split_index(text: str, limit: int) -> int:
     window = text[:limit]
-    for marks in ("，,、：:", "的地得在和与及或并而"):
+    for marks in (" ", "的地得在和与及或并而"):
         candidates = [window.rfind(mark) + 1 for mark in marks]
         split_at = max(candidates)
         if split_at >= MIN_CHARS_PER_CUE:
@@ -261,18 +311,24 @@ def _rebalance_short_chunks(chunks: list[str]) -> list[str]:
         if (
             balanced
             and _subtitle_len(chunk) < MIN_CHARS_PER_CUE
-            and _subtitle_len(balanced[-1] + chunk) <= MAX_SUBTITLE_CHARS
+            and _subtitle_len(_join_subtitle_parts(balanced[-1], chunk))
+            <= MAX_SUBTITLE_CHARS
         ):
-            balanced[-1] += chunk
+            balanced[-1] = _join_subtitle_parts(balanced[-1], chunk)
         else:
             balanced.append(chunk)
     return balanced
 
 
 def _subtitle_len(text: str) -> int:
-    normalized = re.sub(r"\s+", "", str(text or "")).strip()
-    if not normalized:
-        return 0
-    normalized = _normalize_punctuation(normalized)
-    normalized = _remove_repeated_punctuation(normalized)
-    return len(normalized)
+    return len(re.sub(r"\s+", "", normalize_subtitle_text(text)))
+
+
+def _join_subtitle_parts(left: str, right: str) -> str:
+    left = str(left or "").strip()
+    right = str(right or "").strip()
+    if not left:
+        return right
+    if not right:
+        return left
+    return f"{left} {right}"

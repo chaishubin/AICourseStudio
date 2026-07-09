@@ -211,19 +211,20 @@ class DebugWorkbench {
             this.logNote.textContent = data.note || '';
             this.renderLogs(data.logs || []);
         } catch (error) {
-            this.logBody.innerHTML = `<tr><td colspan="5" class="table-empty">${this.escape(error.message)}</td></tr>`;
+            this.logBody.innerHTML = `<tr><td colspan="6" class="table-empty">${this.escape(error.message)}</td></tr>`;
         }
     }
 
     renderLogs(logs) {
         if (!logs.length) {
-            this.logBody.innerHTML = '<tr><td colspan="5" class="table-empty">暂无匹配日志</td></tr>';
+            this.logBody.innerHTML = '<tr><td colspan="6" class="table-empty">暂无匹配日志</td></tr>';
             return;
         }
         this.logBody.innerHTML = logs.map(log => `
             <tr>
                 <td>${this.formatTime(log.created_at)}</td>
                 <td>${this.escape(log.actor || '-')}</td>
+                <td>${this.escape(log.ip_address || '-')}</td>
                 <td>${this.escape(log.action || '-')}</td>
                 <td><strong>${this.escape(log.target_name || log.task_id || '-')}</strong><small>${this.escape(log.message || '')}</small></td>
                 <td>${log.success ? '成功' : '失败'}</td>

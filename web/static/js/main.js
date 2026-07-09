@@ -345,11 +345,11 @@ class AICourseStudioApp {
 
     bindSubtitleControls() {
         this.subtitlePresets = {
-            course: { x: 128, y: 910, width: 1664, height: 96, fontSize: 38 },
-            compact: { x: 160, y: 950, width: 1600, height: 68, fontSize: 34 },
-            safe: { x: 160, y: 805, width: 1600, height: 96, fontSize: 36 },
-            top: { x: 160, y: 80, width: 1600, height: 86, fontSize: 34 },
-            lowerMiddle: { x: 160, y: 720, width: 1600, height: 96, fontSize: 36 }
+            course: { x: 128, y: 930, width: 1664, height: 72, fontSize: 38 },
+            compact: { x: 160, y: 950, width: 1600, height: 64, fontSize: 34 },
+            safe: { x: 160, y: 825, width: 1600, height: 72, fontSize: 36 },
+            top: { x: 160, y: 88, width: 1600, height: 68, fontSize: 34 },
+            lowerMiddle: { x: 160, y: 740, width: 1600, height: 72, fontSize: 36 }
         };
         this.subtitleStyleTemplates = {
             standard: {
@@ -1460,7 +1460,7 @@ class AICourseStudioApp {
             '',
             ...routeLines,
             `语音：${engineNames[this.elements.ttsEngine.value] || this.elements.ttsEngine.value} · ${voiceName}`,
-            `字幕：${this.elements.burnSubtitles.checked ? '烧录到视频' : '仅生成 SRT 文件'}`,
+            `字幕：${this.elements.burnSubtitles.checked ? '内嵌到视频' : '仅生成 SRT 文件'}`,
             lessonPlans ? `AI 提炼：${this.elements.refinementLevel.selectedOptions[0]?.textContent}` : '',
             lessonPlans ? `质量模式：${this.elements.qualityMode.selectedOptions[0]?.textContent}` : '',
             lessonPlans ? `视觉方案：${this.elements.visualTheme.selectedOptions[0]?.textContent}` : '',
@@ -3278,22 +3278,11 @@ class AICourseStudioApp {
 
     makeSubtitleSample(text) {
         const clean = String(text || '')
-            .replace(/\s+/g, '')
-            .replace(/[“”"']/g, '')
+            .replace(/[^\p{L}\p{N}\s《》]+/gu, ' ')
+            .replace(/\s+/g, ' ')
             .trim();
         if (!clean) return '';
-        const parts = [];
-        let buffer = '';
-        for (const char of clean) {
-            buffer += char;
-            if ('。！？!?；;，,'.includes(char)) {
-                parts.push(buffer);
-                buffer = '';
-            }
-        }
-        if (buffer) parts.push(buffer);
-        const first = (parts.find(part => part.length >= 8) || parts[0] || clean).trim();
-        return first.slice(0, 48);
+        return clean.slice(0, 48);
     }
 
     refreshSubtitleRiskChecks() {
@@ -3327,10 +3316,8 @@ class AICourseStudioApp {
             return;
         }
 
-        const lineCapacity = Math.max(8, Math.floor(width / Math.max(1, fontSize)));
-        const estimatedLines = Math.max(1, Math.ceil(textLength / lineCapacity));
         const lineHeight = fontSize * 1.25;
-        const needsHeight = estimatedLines * lineHeight + 24;
+        const needsHeight = lineHeight + 24;
         let level = 'ok';
         let message = '字幕区清晰';
         if (areaDensity > 0.28) {
@@ -3365,11 +3352,11 @@ class AICourseStudioApp {
     pickSubtitleRecommendation(img) {
         if (!img?.complete || !img.naturalWidth) return null;
         const candidates = [
-            { key: 'course', label: '标准底部双行', ...this.subtitlePresets.course },
+            { key: 'course', label: '标准底部单行', ...this.subtitlePresets.course },
             { key: 'safe', label: '中下避让', ...this.subtitlePresets.safe },
             { key: 'top', label: '顶部字幕', ...this.subtitlePresets.top },
             { key: 'lowerMiddle', label: '中部偏下', ...this.subtitlePresets.lowerMiddle },
-            { key: 'compact', label: '紧凑单行', ...this.subtitlePresets.compact }
+            { key: 'compact', label: '底部小字号单行', ...this.subtitlePresets.compact }
         ];
         const current = {
             x: Number(this.elements.subtitleX.value),

@@ -1182,7 +1182,7 @@ def test_index_contains_editable_course_preview():
     assert '约 -- 分 -- 秒' in html
     assert '可跳过切课直接继续生成完整视频' in html
     assert 'id="subtitle-preset"' in html
-    assert '标准底部双行' in html
+    assert '标准底部单行' in html
     assert '顶部字幕' in html
     assert 'Noto Serif CJK SC' in html
     assert '文泉驿微米黑' in html
@@ -1222,8 +1222,10 @@ def test_management_pages_are_separate_from_course_workspace():
     assert 'js/admin_pages.js' in logs_page
     assert 'id="debug-task-body"' in debug_page
     assert 'id="debug-task-detail"' in debug_page
+    assert 'IP 地址' in debug_page
     assert 'id="upload-area"' not in debug_page
     assert 'js/debug.js' in debug_page
+    assert '/static/js/debug.js?v=2' in debug_page
 
 
 def test_accounts_page_is_separate_admin_page():
@@ -1265,6 +1267,30 @@ def test_debug_api_overview_redacts_sensitive_values(monkeypatch):
     assert strategy['api_key'] == '已隐藏'
     assert strategy['nested']['access_token'] == '已隐藏'
     assert payload['environment']['env_status']
+
+
+def test_debug_logs_can_filter_by_ip_address():
+    import web.app as web_app
+
+    web_app.task_store.add_operation_log({
+        "actor": "teacher",
+        "role": "user",
+        "action": "upload",
+        "ip_address": "203.0.113.21",
+    })
+    web_app.task_store.add_operation_log({
+        "actor": "teacher",
+        "role": "user",
+        "action": "upload",
+        "ip_address": "198.51.100.9",
+    })
+
+    response = web_app.app.test_client().get("/api/debug/logs?q=203.0.113.21")
+    logs = response.get_json()["logs"]
+
+    assert response.status_code == 200
+    assert len(logs) == 1
+    assert logs[0]["ip_address"] == "203.0.113.21"
 
 
 def test_debug_task_detail_reads_artifacts(monkeypatch, temp_dir):

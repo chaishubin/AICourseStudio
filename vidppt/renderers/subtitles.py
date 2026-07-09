@@ -72,12 +72,12 @@ class SubtitleRenderer:
 
 
 def _subtitle_chunks(text: str) -> list[str]:
-    """按语义停顿与每屏行数限制切成适合画面展示的字幕。"""
+    """按语义停顿与单行字数限制切成适合画面展示的字幕。"""
     return subtitle_chunks(text)
 
 
 def _wrap_subtitle(text: str) -> str:
-    """把单条字幕整理为最多两行。"""
+    """把单条字幕整理为单行。"""
     return wrap_subtitle(text)
 
 

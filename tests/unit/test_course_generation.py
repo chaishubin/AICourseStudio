@@ -157,7 +157,8 @@ def test_subtitle_renderer_builds_course_timeline(temp_dir):
 
     assert "00:00:00,000" in text
     assert "00:00:04,000 --> 00:00:06,000" in text
-    assert "第三句。" in text
+    assert "第三句" in text
+    assert "第三句。" not in text
 
 
 def test_subtitle_renderer_splits_long_script_into_readable_cues(temp_dir):
@@ -184,9 +185,14 @@ def test_subtitle_renderer_splits_long_script_into_readable_cues(temp_dir):
     blocks = output.read_text(encoding="utf-8").strip().split("\n\n")
 
     assert len(blocks) >= 3
-    assert all(len(block.splitlines()[2:]) <= 2 for block in blocks)
+    assert all(len(block.splitlines()[2:]) == 1 for block in blocks)
     assert all(
-        len(line) <= 14
+        len(line.replace(" ", "")) <= 28
+        for block in blocks
+        for line in block.splitlines()[2:]
+    )
+    assert not any(
+        any(mark in line for mark in "，。；：！？,.?!;:——")
         for block in blocks
         for line in block.splitlines()[2:]
     )
@@ -217,9 +223,13 @@ def test_subtitle_renderer_prefers_semantic_breaks(temp_dir):
     assert "然后" in text
     assert "同时" in text
     assert all(
-        len(line) <= 14
+        len(line.replace(" ", "")) <= 28
         for block in text.strip().split("\n\n")
         for line in block.splitlines()[2:]
+    )
+    assert all(
+        len(block.splitlines()[2:]) == 1
+        for block in text.strip().split("\n\n")
     )
 
 
@@ -228,21 +238,41 @@ def test_subtitle_punctuation_normalizes_chinese_course_text():
         "先看CRM,ERP等系统...然后回答:效率提升了吗?确实提升了!"
     )
 
-    assert text == "先看CRM、ERP等系统……然后回答：效率提升了吗？确实提升了！"
+    assert text == "先看CRM ERP等系统 然后回答 效率提升了吗 确实提升了"
 
 
 def test_subtitle_punctuation_preserves_decimals_and_adds_terminal_stop():
     text = normalize_subtitle_text("模型版本是3.14,相比2.0更稳定")
 
-    assert text == "模型版本是3.14，相比2.0更稳定。"
+    assert text == "模型版本是3 14 相比2 0更稳定"
+
+
+def test_subtitle_punctuation_normalizes_single_quotes_as_outer_double_quotes():
+    text = normalize_subtitle_text(
+        "'学习闭环'不是口号,而是\"输入'练习'反馈\"的过程"
+    )
+
+    assert text == "学习闭环 不是口号 而是 输入 练习 反馈 的过程"
+
+
+def test_subtitle_punctuation_preserves_ascii_apostrophes_in_words():
+    text = normalize_subtitle_text("这类AI's应用需要关注用户反馈")
+
+    assert text == "这类AI s应用需要关注用户反馈"
+
+
+def test_subtitle_punctuation_preserves_book_title_marks():
+    text = normalize_subtitle_text("推荐阅读《人工智能导论》,再完成练习。")
+
+    assert text == "推荐阅读《人工智能导论》 再完成练习"
 
 
 def test_subtitle_chunks_use_normalized_punctuation_for_breaks():
     chunks = subtitle_chunks("第一,明确目标;第二,检查结果?第三,复盘改进")
 
-    assert "第一，明确目标；" in chunks[0]
-    assert "检查结果？" in "".join(chunks)
-    assert chunks[-1].endswith("。")
+    assert "第一 明确目标" in chunks[0]
+    assert "检查结果" in " ".join(chunks)
+    assert not any(any(mark in chunk for mark in "，。；：！？,.?!;:") for chunk in chunks)
 
 
 def test_subtitle_wrapping_preserves_trailing_text_after_soft_break():
@@ -251,11 +281,12 @@ def test_subtitle_wrapping_preserves_trailing_text_after_soft_break():
         "后面的几个字会不会被截断。"
     )
     rendered = "".join(
-        wrap_subtitle(chunk).replace("\n", "")
+        wrap_subtitle(chunk).replace(" ", "")
         for chunk in subtitle_chunks(script)
     )
 
-    assert rendered == normalize_subtitle_text(script)
+    assert rendered == normalize_subtitle_text(script).replace(" ", "")
+    assert all("\n" not in wrap_subtitle(chunk) for chunk in subtitle_chunks(script))
 
 
 def test_course_pipeline_rejects_video_without_tts(temp_dir):
@@ -281,6 +312,12 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     video = temp_dir / "base.mp4"
     subtitles = temp_dir / "course.srt"
     output = temp_dir / "course.mp4"
+    subtitles.write_text(
+        "1\n"
+        "00:00:00,000 --> 00:00:02,000\n"
+        "今天我们要回答一个更关键的问题：企业该从哪里开始？\n",
+        encoding="utf-8",
+    )
 
     with (
         patch("vidppt.course_pipeline.shutil.which", return_value="/usr/bin/ffmpeg"),
@@ -295,15 +332,18 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
 
     command = run.call_args.args[0]
     assert "-vf" in command
-    assert "subtitles=filename='course.srt'" in command[command.index("-vf") + 1]
+    assert "subtitles=filename='course.burn.ass'" in command[command.index("-vf") + 1]
     subtitle_filter = command[command.index("-vf") + 1]
     assert "drawbox=x=96:y=900:w=1728:h=110" in subtitle_filter
-    assert "original_size=1920x1080" in subtitle_filter
     assert "color=0x111111@0.55" in subtitle_filter
-    assert "FontSize=38" in subtitle_filter
-    assert "PrimaryColour=&H00FFFFFF" in subtitle_filter
-    assert "Outline=0" in subtitle_filter
-    assert "Alignment=2" in subtitle_filter
+    ass_text = (temp_dir / "course.burn.ass").read_text(encoding="utf-8")
+    assert "PlayResX: 1920" in ass_text
+    assert "PlayResY: 1080" in ass_text
+    assert "WrapStyle: 2" in ass_text
+    assert "Style: Default,Noto Sans CJK SC,38,&H00FFFFFF" in ass_text
+    assert ",96,96,106,1" in ass_text
+    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Default" in ass_text
+    assert "今天我们要回答一个更关键的问题 企业该从哪里开始" in ass_text
     assert command[command.index("-c:v") + 1] == "libx264"
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-crf") + 1] == "21"
@@ -329,15 +369,15 @@ def test_course_pipeline_scales_subtitle_design_units_for_video_resolution(temp_
         subtitle_outline_width=3,
     )
 
-    subtitle_filter = CoursePipeline._subtitle_filter("course.srt", config)
+    subtitle_filter = CoursePipeline._subtitle_filter("course.burn.ass", config)
+    layout = CoursePipeline._subtitle_layout(config)
 
     assert "drawbox=x=64:y=600:w=1152:h=73" in subtitle_filter
-    assert "original_size=1280x720" in subtitle_filter
-    assert "FontSize=29" in subtitle_filter
-    assert "Outline=1.16" in subtitle_filter
-    assert "MarginL=64" in subtitle_filter
-    assert "MarginR=64" in subtitle_filter
-    assert "MarginV=53" in subtitle_filter
+    assert "subtitles=filename='course.burn.ass'" in subtitle_filter
+    assert layout["font_size"] == 29
+    assert layout["outline_width"] == 1.16
+    assert layout["margin_r"] == 64
+    assert layout["margin_v"] == 69
 
 
 def test_moviepy_progress_uses_video_frames_not_audio_chunks():

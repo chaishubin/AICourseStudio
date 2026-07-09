@@ -133,7 +133,7 @@
                         <div><span class="section-kicker">最近日志</span><h3>浏览器可见操作记录</h3></div>
                         <label class="debug-search">
                             <span>过滤</span>
-                            <input id="debug-log-search" class="select-input" type="search" placeholder="task_id / 操作 / 账号">
+                            <input id="debug-log-search" class="select-input" type="search" placeholder="task_id / 操作 / 账号 / IP">
                         </label>
                     </div>
                     <div id="debug-log-note" class="debug-note"></div>
@@ -143,6 +143,7 @@
                                 <tr>
                                     <th>时间</th>
                                     <th>账号</th>
+                                    <th>IP 地址</th>
                                     <th>操作</th>
                                     <th>对象</th>
                                     <th>结果</th>
@@ -158,6 +159,6 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/debug.js') }}?v=1"></script>
+    <script src="{{ url_for('static', filename='js/debug.js') }}?v=2"></script>
 </body>
 </html>

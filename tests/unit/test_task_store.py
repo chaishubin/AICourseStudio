@@ -65,6 +65,40 @@ def test_task_store_records_operation_logs(temp_dir):
     assert len(all_logs) == 2
 
 
+def test_task_store_migrates_operation_log_ip_columns(temp_dir):
+    db_path = temp_dir / "legacy.db"
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("""
+            CREATE TABLE operation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                action TEXT NOT NULL,
+                task_id TEXT,
+                target_name TEXT,
+                success INTEGER NOT NULL DEFAULT 1,
+                message TEXT,
+                created_at REAL NOT NULL
+            )
+        """)
+
+    store = TaskStore(db_path)
+    store.add_operation_log({
+        "actor": "teacher",
+        "role": "user",
+        "action": "login",
+        "ip_address": "203.0.113.8",
+        "user_agent": "pytest",
+    })
+
+    logs = store.list_operation_logs(actor="teacher")
+
+    assert logs[0]["ip_address"] == "203.0.113.8"
+    assert logs[0]["user_agent"] == "pytest"
+
+
 def test_task_store_manages_accounts(temp_dir):
     store = TaskStore(temp_dir / "tasks.db")
     store.create_account({

@@ -1912,7 +1912,7 @@ body {
 }
 
 .smart-cut-panel {
-    margin: 16px 0 18px;
+    margin: 12px 0 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-surface-2);
@@ -1921,18 +1921,18 @@ body {
 
 .smart-cut-tabs {
     display: flex;
-    gap: 34px;
-    padding: 16px 22px 0;
+    gap: 28px;
+    padding: 12px 18px 0;
     border-bottom: 1px solid var(--color-border);
 }
 
 .smart-cut-tab {
     position: relative;
-    padding: 0 0 14px;
+    padding: 0 0 10px;
     border: 0;
     background: transparent;
     color: var(--color-text);
-    font: 700 18px var(--font);
+    font: 700 16px var(--font);
 }
 
 .smart-cut-tab.active {
@@ -1955,33 +1955,43 @@ body {
 }
 
 .smart-cut-section {
-    padding: 20px 22px;
+    padding: 14px 18px;
 }
 
 .smart-cut-section + .smart-cut-section {
     border-top: 1px solid var(--color-border);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 14px;
 }
 
 .smart-cut-section h4 {
-    margin: 0 0 14px;
-    padding-left: 12px;
-    border-left: 6px solid #4518d8;
+    margin: 0 0 10px;
+    padding-left: 10px;
+    border-left: 4px solid #4518d8;
     color: var(--color-text);
-    font-size: 20px;
+    font-size: 16px;
     line-height: 1.35;
+}
+
+.smart-cut-section + .smart-cut-section h4 {
+    margin: 0;
 }
 
 .smart-cut-form {
     display: grid;
-    gap: 18px;
+    grid-template-columns: minmax(260px, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
 }
 
 .smart-cut-duration {
     display: grid;
-    grid-template-columns: auto 74px minmax(96px, 1fr) 74px;
+    grid-template-columns: auto 58px 92px 58px;
     align-items: center;
     color: var(--color-text);
-    font-size: 15px;
+    font-size: 14px;
 }
 
 .smart-cut-duration input,
@@ -1994,14 +2004,14 @@ body {
 }
 
 .smart-cut-duration input {
-    height: 42px;
-    padding: 0 14px;
+    height: 36px;
+    padding: 0 12px;
 }
 
 .duration-prefix,
 .duration-unit {
     display: grid;
-    height: 42px;
+    height: 36px;
     place-items: center;
     border: 1px solid var(--color-border);
     background: var(--color-surface);
@@ -2021,7 +2031,7 @@ body {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 20px;
+    gap: 14px;
     margin: 0;
     padding: 0;
     border: 0;
@@ -2029,41 +2039,50 @@ body {
 
 .smart-cut-priority legend {
     float: left;
-    margin-right: 4px;
+    margin-right: 2px;
     color: var(--color-text);
-    font-size: 15px;
+    font-size: 14px;
 }
 
 .smart-cut-priority label {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     color: var(--color-text);
-    font-size: 15px;
+    font-size: 14px;
 }
 
 .smart-cut-priority input {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     accent-color: #4518d8;
 }
 
 .smart-cut-confirm,
 .smart-cut-apply {
     justify-content: center;
-    width: 100%;
+    width: auto;
+    min-width: 96px;
+    min-height: 36px;
+    padding: 0 18px;
+    white-space: nowrap;
 }
 
 .smart-cut-summary {
-    margin-bottom: 12px;
+    margin: 0;
     color: var(--color-text-2);
     font-size: 13px;
 }
 
 .smart-cut-list {
     display: grid;
+    grid-column: 1 / -1;
     gap: 10px;
-    margin-bottom: 14px;
+    margin-top: 4px;
+}
+
+.smart-cut-list:empty {
+    display: none;
 }
 
 .smart-cut-row {
@@ -3091,6 +3110,16 @@ a.table-action { display: inline-flex; align-items: center; text-decoration: non
     .batch-selection-actions {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .smart-cut-section + .smart-cut-section,
+    .smart-cut-form {
+        grid-template-columns: 1fr;
+    }
+
+    .smart-cut-confirm,
+    .smart-cut-apply {
+        width: 100%;
     }
 
     .smart-cut-duration {
