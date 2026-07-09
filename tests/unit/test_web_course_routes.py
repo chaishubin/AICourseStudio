@@ -214,6 +214,12 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
             "video_preset": "superfast",
             "video_crf": 26,
             "audio_loudness_lufs": -18,
+            "packaging_template": "modern",
+            "packaging_organization": "测试大学",
+            "packaging_instructor": "王老师",
+            "packaging_duration_seconds": 3.5,
+            "packaging_outro_text": "下节课见",
+            "packaging_apply_to_segments": True,
         },
     )
     assert continue_response.status_code == 200
@@ -221,6 +227,13 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert web_app.tasks[task_id]["media_options"]["video_width"] == 1280
     assert web_app.tasks[task_id]["media_options"]["video_preset"] == "superfast"
     assert web_app.tasks[task_id]["media_options"]["audio_loudness_lufs"] == -18
+    packaging = web_app.tasks[task_id]["media_options"]["course_packaging"]
+    assert packaging["template"] == "modern"
+    assert packaging["organization"] == "测试大学"
+    assert packaging["instructor"] == "王老师"
+    assert packaging["duration_seconds"] == 3.5
+    assert packaging["outro_text"] == "下节课见"
+    assert packaging["apply_to_segments"] is True
     assert isinstance(web_app.progress_queues[task_id], Queue)
     assert enqueued[0][0] == (web_app.run_media_generation, task_id)
 
@@ -735,6 +748,7 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     import web.app as web_app
     from vidppt.course_pipeline import CoursePipeline
     from vidppt.pipeline import Pipeline
+    import vidppt.utils.course_packaging as course_packaging
     from vidppt.utils.video_composer import VideoComposer
 
     task_id = "media-task"
@@ -771,6 +785,16 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
                 "tts_voice": "zh-CN-XiaoxiaoNeural",
                 "tts_options": {},
                 "render_engine": "spire",
+                "course_packaging": {
+                    "enable_intro": True,
+                    "enable_outro": True,
+                    "template": "academic",
+                    "duration_seconds": 4,
+                    "organization": "测试大学",
+                    "instructor": "",
+                    "outro_text": "感谢观看",
+                    "apply_to_segments": False,
+                },
             },
         }
     })
@@ -810,14 +834,32 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             progress_callback(1.0)
         output.write_bytes(b"final-video")
 
+    packaged = []
+
+    def fake_package(
+        source_video, output_video, config, options, *,
+        course_title, segment_title="", logo_path=None, cancel_check=None,
+    ):
+        packaged.append({
+            "source_video": source_video,
+            "output_video": output_video,
+            "options": options,
+            "course_title": course_title,
+            "segment_title": segment_title,
+        })
+
     monkeypatch.setattr(Pipeline, "_generate_audio", fake_audio)
     monkeypatch.setattr(moviepy, "AudioFileClip", FakeAudioClip)
     monkeypatch.setattr(VideoComposer, "compose", fake_compose)
     monkeypatch.setattr(CoursePipeline, "_burn_subtitles", fake_burn)
+    monkeypatch.setattr(course_packaging, "package_course_video", fake_package)
 
     web_app.run_media_generation(task_id)
 
     assert captured_scripts == ["用户确认后的讲稿"]
+    assert len(packaged) == 1
+    assert packaged[0]["course_title"] == "source"
+    assert packaged[0]["options"]["template"] == "academic"
     assert web_app.tasks[task_id]["status"] == "completed"
     assert Path(web_app.tasks[task_id]["video_path"]).exists()
     saved_preview = json.loads((output_dir / "preview.json").read_text(encoding="utf-8"))

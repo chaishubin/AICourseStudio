@@ -116,6 +116,14 @@ class AICourseStudioApp {
                 schoolLogoImage: document.getElementById('school-logo-image'),
                 schoolLogoRemove: document.getElementById('school-logo-remove'),
                 schoolLogoHint: document.getElementById('school-logo-hint'),
+                packagingTemplate: document.getElementById('packaging-template'),
+                packagingOrganization: document.getElementById('packaging-organization'),
+                packagingInstructor: document.getElementById('packaging-instructor'),
+                packagingDuration: document.getElementById('packaging-duration'),
+                packagingOutroText: document.getElementById('packaging-outro-text'),
+                enableIntro: document.getElementById('enable-intro'),
+                enableOutro: document.getElementById('enable-outro'),
+                packagingApplySegments: document.getElementById('packaging-apply-segments'),
                 advancedToggle: document.getElementById('advanced-toggle'),
                 workflowBadge: document.getElementById('workflow-badge'),
                 workflowDescription: document.getElementById('workflow-description'),
@@ -305,7 +313,15 @@ class AICourseStudioApp {
             this.elements.visualTheme,
             this.elements.illustrationsEnabled,
             this.elements.maxIllustrations,
-            this.elements.pptFooterText
+            this.elements.pptFooterText,
+            this.elements.packagingTemplate,
+            this.elements.packagingOrganization,
+            this.elements.packagingInstructor,
+            this.elements.packagingDuration,
+            this.elements.packagingOutroText,
+            this.elements.enableIntro,
+            this.elements.enableOutro,
+            this.elements.packagingApplySegments
         ];
         controls.forEach(control => {
             if (!control) return;
@@ -740,6 +756,11 @@ class AICourseStudioApp {
             visualTheme: 'visual_theme',
             maxIllustrations: 'max_illustrations',
             pptFooterText: 'ppt_footer_text',
+            packagingTemplate: 'packaging_template',
+            packagingOrganization: 'packaging_organization',
+            packagingInstructor: 'packaging_instructor',
+            packagingDuration: 'packaging_duration_seconds',
+            packagingOutroText: 'packaging_outro_text',
             ttsEmotion: 'tts_emotion',
             ttsRate: 'tts_rate',
             ttsEmotionScale: 'tts_emotion_scale',
@@ -784,6 +805,15 @@ class AICourseStudioApp {
         }
         if (strategy.burn_subtitles !== undefined) {
             this.elements.burnSubtitles.checked = Boolean(strategy.burn_subtitles);
+        }
+        if (strategy.enable_intro !== undefined && this.elements.enableIntro) {
+            this.elements.enableIntro.checked = Boolean(strategy.enable_intro);
+        }
+        if (strategy.enable_outro !== undefined && this.elements.enableOutro) {
+            this.elements.enableOutro.checked = Boolean(strategy.enable_outro);
+        }
+        if (strategy.packaging_apply_to_segments !== undefined && this.elements.packagingApplySegments) {
+            this.elements.packagingApplySegments.checked = Boolean(strategy.packaging_apply_to_segments);
         }
 
         const customVoice = strategy.custom_voice || '';
@@ -1486,7 +1516,21 @@ class AICourseStudioApp {
             max_illustrations: Number(this.elements.maxIllustrations.value),
             ppt_footer_text: this.elements.pptFooterText.value.trim(),
             school_logo_path: this.state.logoPath,
+            ...this.collectCoursePackagingOptions(),
             ...videoOptions
+        };
+    }
+
+    collectCoursePackagingOptions() {
+        return {
+            enable_intro: this.elements.enableIntro?.checked ?? true,
+            enable_outro: this.elements.enableOutro?.checked ?? true,
+            packaging_template: this.elements.packagingTemplate?.value || 'academic',
+            packaging_organization: this.elements.packagingOrganization?.value.trim() || '',
+            packaging_instructor: this.elements.packagingInstructor?.value.trim() || '',
+            packaging_duration_seconds: Number(this.elements.packagingDuration?.value) || 4,
+            packaging_outro_text: this.elements.packagingOutroText?.value.trim() || '感谢观看',
+            packaging_apply_to_segments: this.elements.packagingApplySegments?.checked ?? false
         };
     }
 
@@ -4045,6 +4089,7 @@ class AICourseStudioApp {
                     tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
                     tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
                     burn_subtitles: this.elements.burnSubtitles.checked,
+                    ...this.collectCoursePackagingOptions(),
                     ...this.collectVideoOptions(),
                     ...this.collectSubtitleOptions()
                 })

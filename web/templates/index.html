@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=20">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=22">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -522,6 +522,49 @@
                             <button type="button" class="btn-convert smart-cut-apply" id="smart-cut-apply-btn" disabled>应用</button>
                         </div>
                     </div>
+                    <div class="course-packaging-panel">
+                        <div class="course-packaging-header">
+                            <h4>课程包装</h4>
+                            <span>生成统一片头片尾，主视频默认应用，分段视频可单独开启短片头。</span>
+                        </div>
+                        <div class="course-packaging-grid">
+                            <label>包装模板
+                                <select id="packaging-template" class="select-input">
+                                    <option value="academic">高校课程</option>
+                                    <option value="modern">现代培训</option>
+                                    <option value="minimal">简洁微课</option>
+                                </select>
+                            </label>
+                            <label>单位/机构
+                                <input id="packaging-organization" class="text-input" type="text"
+                                       maxlength="60" placeholder="例如：某某大学">
+                            </label>
+                            <label>主讲人
+                                <input id="packaging-instructor" class="text-input" type="text"
+                                       maxlength="40" placeholder="可选">
+                            </label>
+                            <label>片头片尾时长
+                                <input id="packaging-duration" class="number-input" type="number"
+                                       min="2" max="8" step="0.5" value="4">
+                            </label>
+                            <label class="packaging-wide">片尾文案
+                                <input id="packaging-outro-text" class="text-input" type="text"
+                                       maxlength="120" value="感谢观看">
+                            </label>
+                            <label class="packaging-toggle">
+                                <input type="checkbox" id="enable-intro" checked>
+                                启用片头
+                            </label>
+                            <label class="packaging-toggle">
+                                <input type="checkbox" id="enable-outro" checked>
+                                启用片尾
+                            </label>
+                            <label class="packaging-toggle">
+                                <input type="checkbox" id="packaging-apply-segments">
+                                分段视频加短片头
+                            </label>
+                        </div>
+                    </div>
                     <div class="course-subtitle-panel">
                         <div class="course-subtitle-panel-header">
                             <h4>字幕调试</h4>
@@ -673,7 +716,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=26"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=29"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

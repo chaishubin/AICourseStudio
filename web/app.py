@@ -976,6 +976,33 @@ def _video_options(data: dict) -> dict:
     }
 
 
+def _course_packaging_options(data: dict) -> dict:
+    """校验片头片尾包装参数。"""
+    template = str(data.get('packaging_template', 'academic')).strip().lower()
+    if template not in {'academic', 'modern', 'minimal'}:
+        raise ValueError('不支持的课程包装模板')
+    duration = float(data.get('packaging_duration_seconds', 4))
+    if duration < 2 or duration > 8:
+        raise ValueError('片头片尾时长必须在 2 到 8 秒之间')
+    organization = str(data.get('packaging_organization', '')).strip()[:60]
+    instructor = str(data.get('packaging_instructor', '')).strip()[:40]
+    outro_text = str(
+        data.get('packaging_outro_text', '感谢观看')
+    ).strip()[:120] or '感谢观看'
+    return {
+        'course_packaging': {
+            'enable_intro': bool(data.get('enable_intro', True)),
+            'enable_outro': bool(data.get('enable_outro', True)),
+            'template': template,
+            'duration_seconds': duration,
+            'organization': organization,
+            'instructor': instructor,
+            'outro_text': outro_text,
+            'apply_to_segments': bool(data.get('packaging_apply_to_segments', False)),
+        }
+    }
+
+
 def _media_config_options(options: dict) -> dict:
     allowed = {
         'video_width', 'video_height', 'video_fps', 'video_codec',
@@ -2481,6 +2508,7 @@ def run_media_generation(task_id: str):
         from moviepy import AudioFileClip
         from vidppt.core.models import DocumentContent, PageContent
         from vidppt.renderers.subtitles import SubtitleRenderer
+        from vidppt.utils.course_packaging import package_course_video
         from vidppt.utils.progress import ProgressTracker
         from vidppt.utils.video_composer import VideoComposer
         from vidppt.course_pipeline import CoursePipeline
@@ -2607,6 +2635,26 @@ def run_media_generation(task_id: str):
             base_video.unlink(missing_ok=True)
         else:
             base_video.replace(video_path)
+        packaging_options = options.get('course_packaging') or {}
+        logo_candidate = (
+            options.get('school_logo_path')
+            or (task.get('strategy') or {}).get('school_logo_path')
+        )
+        logo_path = Path(logo_candidate) if logo_candidate else None
+        if (
+            packaging_options.get('enable_intro')
+            or packaging_options.get('enable_outro')
+        ):
+            report_video(99, '正在添加片头片尾')
+            package_course_video(
+                video_path,
+                video_path,
+                config,
+                packaging_options,
+                course_title=task.get('course_name') or stem,
+                logo_path=logo_path if logo_path and logo_path.is_file() else None,
+                cancel_check=cancel_event.is_set,
+            )
         progress.update('video', 100, 100, '视频生成完成')
         lesson_segments = [
             segment for segment in preview.get('lesson_segments', [])
@@ -2691,6 +2739,23 @@ def run_media_generation(task_id: str):
                     segment_base.unlink(missing_ok=True)
                 else:
                     segment_base.replace(segment_video)
+                if packaging_options.get('apply_to_segments') and (
+                    packaging_options.get('enable_intro')
+                    or packaging_options.get('enable_outro')
+                ):
+                    package_course_video(
+                        segment_video,
+                        segment_video,
+                        config,
+                        {
+                            **packaging_options,
+                            'enable_outro': False,
+                        },
+                        course_title=task.get('course_name') or stem,
+                        segment_title=segment.get('title', ''),
+                        logo_path=logo_path if logo_path and logo_path.is_file() else None,
+                        cancel_check=cancel_event.is_set,
+                    )
                 segment_artifacts.append({
                     **segment,
                     'video_path': str(segment_video),
@@ -2815,6 +2880,7 @@ def convert_ppt():
     try:
         subtitle_options = _subtitle_options(data)
         video_options = _video_options(data)
+        packaging_options = _course_packaging_options(data)
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
     batch_id = str(data.get('batch_id') or uuid.uuid4().hex)
@@ -2875,6 +2941,7 @@ def convert_ppt():
         'burn_subtitles': burn_subtitles,
         **video_options,
         **subtitle_options,
+        **packaging_options,
     }
     user = current_user_context()
     now = time.time()
@@ -2907,6 +2974,7 @@ def convert_ppt():
             'burn_subtitles': burn_subtitles,
             **video_options,
             **subtitle_options,
+            **packaging_options,
         },
     }
     save_state(task_id)
@@ -3287,6 +3355,7 @@ def continue_course(task_id):
     try:
         subtitle_options = _subtitle_options(data)
         video_options = _video_options(data)
+        packaging_options = _course_packaging_options(data)
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -3326,6 +3395,15 @@ def continue_course(task_id):
                 'burn_subtitles': burn_subtitles,
                 **video_options,
                 **subtitle_options,
+                **packaging_options,
+            }
+        else:
+            task['media_options'] = {
+                **task.get('media_options', {}),
+                'burn_subtitles': burn_subtitles,
+                **video_options,
+                **subtitle_options,
+                **packaging_options,
             }
 
         progress_queues[task_id] = Queue()
