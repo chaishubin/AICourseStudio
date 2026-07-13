@@ -207,6 +207,50 @@ progress_queues = {}  # task_id -> Queue
 cancellation_events = {}  # task_id -> threading.Event
 task_store = TaskStore(TASK_DB_FILE)
 QUALITY_MODES = {'economy', 'balanced', 'premium'}
+PACKAGING_BASE_TEMPLATES = {'academic', 'modern', 'minimal', 'university', 'credits'}
+BUILTIN_PACKAGING_TEMPLATES = [
+    {'id': 'academic', 'name': '高校课程', 'description': '稳重的高校公开课品牌包装', 'is_default': True},
+    {'id': 'university', 'name': '高校片头', 'description': '更具空间层次的高校课程片头'},
+    {'id': 'credits', 'name': '片尾鸣谢', 'description': '适合课程结束和版权信息展示'},
+    {'id': 'modern', 'name': '现代培训', 'description': '简洁明快的现代培训视觉'},
+    {'id': 'minimal', 'name': '简洁微课', 'description': '低干扰、轻量化的微课包装'},
+]
+
+
+def _ensure_packaging_templates():
+    task_store.ensure_packaging_templates(BUILTIN_PACKAGING_TEMPLATES)
+
+
+def _packaging_template_config(value) -> dict:
+    """Keep only serializable course-packaging values in reusable presets."""
+    if not isinstance(value, dict):
+        return {}
+    config = {}
+    for key, item in value.items():
+        key = str(key)
+        if not (key.startswith('packaging_') or key in {'enable_intro', 'enable_mid', 'enable_outro'}):
+            continue
+        if isinstance(item, (str, int, float, bool)) or item is None:
+            config[key] = item
+    return config
+
+
+def _resolve_packaging_template(data: dict) -> tuple[dict, str]:
+    """Merge a managed preset into explicit request values and return its renderer base."""
+    _ensure_packaging_templates()
+    requested = str(data.get('packaging_template', '') or '').strip().lower()
+    if not requested:
+        default = next(
+            (item for item in task_store.list_packaging_templates(False) if item['is_default']),
+            None,
+        )
+        requested = default['id'] if default else 'academic'
+    managed = task_store.get_packaging_template(requested)
+    if managed and managed['enabled']:
+        merged = {**managed['config'], **data}
+        merged['packaging_template'] = managed['base_template']
+        return merged, requested
+    return dict(data), requested
 
 
 def _normalize_role(role: str) -> str:
@@ -989,8 +1033,9 @@ def _video_options(data: dict) -> dict:
 
 def _course_packaging_options(data: dict) -> dict:
     """校验片头片尾包装参数。"""
+    data, template_id = _resolve_packaging_template(data)
     template = str(data.get('packaging_template', 'academic')).strip().lower()
-    if template not in {'academic', 'modern', 'minimal', 'university', 'credits'}:
+    if template not in PACKAGING_BASE_TEMPLATES:
         raise ValueError('不支持的课程包装模板')
     duration = float(data.get('packaging_duration_seconds', 4))
     if duration < 2 or duration > 8:
@@ -1039,6 +1084,7 @@ def _course_packaging_options(data: dict) -> dict:
             'enable_music': bool(data.get('packaging_enable_music', True)),
             'use_slide_background': bool(data.get('packaging_use_slide_background', True)),
             'template': template,
+            'template_id': template_id,
             'duration_seconds': duration,
             'intro_duration_seconds': intro_duration,
             'mid_duration_seconds': mid_duration,
@@ -1635,6 +1681,24 @@ def packaging_assets_page():
     )
 
 
+@app.route('/packaging-templates')
+def packaging_templates_page():
+    """渲染课程包装模板管理页面。"""
+    _ensure_packaging_templates()
+    user = current_user_context()
+    return render_template(
+        'packaging_templates.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
+    )
+
+
 @app.route('/operation-logs-page')
 def operation_logs_page():
     """渲染操作日志页面。"""
@@ -1805,6 +1869,92 @@ def upload_course_packaging_asset():
         'kind': kind,
         'name': Path(file.filename).stem,
     })
+
+
+@app.route('/api/course-packaging-templates', methods=['GET', 'POST'])
+def course_packaging_templates_api():
+    """List reusable packaging presets or create a custom preset."""
+    _ensure_packaging_templates()
+    if request.method == 'GET':
+        include_disabled = request.args.get('include_disabled') in {'1', 'true'}
+        templates = task_store.list_packaging_templates(include_disabled)
+        default = next((item['id'] for item in templates if item['is_default']), 'academic')
+        return jsonify({'templates': templates, 'default_template_id': default})
+
+    data = request.get_json(silent=True) or {}
+    source_id = str(data.get('source_id') or '').strip().lower()
+    source = task_store.get_packaging_template(source_id) if source_id else None
+    name = str(data.get('name') or (f"{source['name']} 副本" if source else '')).strip()[:50]
+    if not name:
+        return jsonify({'error': '请输入模板名称'}), 400
+    base_template = str(data.get('base_template') or (source['base_template'] if source else 'academic')).strip().lower()
+    if base_template not in PACKAGING_BASE_TEMPLATES:
+        return jsonify({'error': '基础模板无效'}), 400
+    config = _packaging_template_config(data.get('config') if 'config' in data else (source['config'] if source else {}))
+    config['packaging_template'] = base_template
+    template_id = f"tpl_{uuid.uuid4().hex[:12]}"
+    task_store.create_packaging_template({
+        'id': template_id,
+        'name': name,
+        'description': str(data.get('description') or (source['description'] if source else '')).strip()[:160],
+        'base_template': base_template,
+        'config': config,
+        'enabled': True,
+        'created_by': current_user_context()['username'],
+    })
+    template = task_store.get_packaging_template(template_id)
+    log_operation('create_packaging_template', target_name=name)
+    return jsonify({'success': True, 'template': template}), 201
+
+
+@app.route('/api/course-packaging-templates/<template_id>', methods=['PATCH', 'DELETE'])
+def course_packaging_template_api(template_id):
+    """Update template metadata/configuration or delete a custom preset."""
+    _ensure_packaging_templates()
+    template_id = str(template_id).strip().lower()
+    template = task_store.get_packaging_template(template_id)
+    if not template:
+        return jsonify({'error': '模板不存在'}), 404
+    if request.method == 'DELETE':
+        if template['builtin']:
+            return jsonify({'error': '系统模板不能删除'}), 400
+        if template['is_default']:
+            task_store.update_packaging_template('academic', {'is_default': True, 'enabled': True})
+        if not task_store.delete_packaging_template(template_id):
+            return jsonify({'error': '模板删除失败'}), 400
+        log_operation('delete_packaging_template', target_name=template['name'])
+        return jsonify({'success': True})
+
+    data = request.get_json(silent=True) or {}
+    updates = {}
+    if 'name' in data:
+        name = str(data.get('name') or '').strip()[:50]
+        if not name:
+            return jsonify({'error': '模板名称不能为空'}), 400
+        updates['name'] = name
+    if 'description' in data:
+        updates['description'] = str(data.get('description') or '').strip()[:160]
+    if 'enabled' in data:
+        if template['is_default'] and not bool(data['enabled']):
+            return jsonify({'error': '默认模板不能停用，请先设置其他默认模板'}), 400
+        updates['enabled'] = bool(data['enabled'])
+    if data.get('is_default'):
+        updates['is_default'] = True
+        updates['enabled'] = True
+    if not template['builtin']:
+        if 'base_template' in data:
+            base = str(data.get('base_template') or '').strip().lower()
+            if base not in PACKAGING_BASE_TEMPLATES:
+                return jsonify({'error': '基础模板无效'}), 400
+            updates['base_template'] = base
+        if 'config' in data:
+            config = _packaging_template_config(data['config'])
+            config['packaging_template'] = updates.get('base_template', template['base_template'])
+            updates['config_json'] = json.dumps(config, ensure_ascii=False)
+    task_store.update_packaging_template(template_id, updates)
+    updated = task_store.get_packaging_template(template_id)
+    log_operation('update_packaging_template', target_name=updated['name'])
+    return jsonify({'success': True, 'template': updated})
 
 
 @app.route('/api/course-packaging-assets')
@@ -4803,57 +4953,58 @@ def course_packaging_preview_image():
     """生成课程片头/片尾模板预览图，不进入视频合成流程。"""
     from vidppt.utils.course_packaging import _render_packaging_image
 
-    kind = str(request.args.get('kind', 'intro')).strip().lower()
+    args, _ = _resolve_packaging_template(request.args.to_dict())
+    kind = str(args.get('kind', 'intro')).strip().lower()
     if kind not in {'intro', 'mid', 'outro'}:
         kind = 'intro'
-    template = str(request.args.get('packaging_template', 'academic')).strip().lower()
-    if template not in {'academic', 'modern', 'minimal', 'university', 'credits'}:
+    template = str(args.get('packaging_template', 'academic')).strip().lower()
+    if template not in PACKAGING_BASE_TEMPLATES:
         template = 'academic'
     options = {
         'template': template,
-        'organization': str(request.args.get('packaging_organization', '')).strip()[:60],
-        'department': str(request.args.get('packaging_department', '')).strip()[:60],
-        'instructor': str(request.args.get('packaging_instructor', '')).strip()[:40],
-        'instructor_title': str(request.args.get('packaging_instructor_title', '')).strip()[:40],
-        'copyright': str(request.args.get('packaging_copyright', '')).strip()[:80],
-        'outro_text': str(request.args.get('packaging_outro_text', '感谢观看')).strip()[:120] or '感谢观看',
-        'intro_label': str(request.args.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
-        'intro_title': str(request.args.get('packaging_intro_title', '')).strip()[:80],
-        'intro_subtitle': str(request.args.get('packaging_intro_subtitle', '')).strip()[:100],
-        'mid_title': str(request.args.get('packaging_mid_title', '章节过渡')).strip()[:80] or '章节过渡',
-        'mid_subtitle': str(request.args.get('packaging_mid_subtitle', '')).strip()[:100],
-        'mid_label': str(request.args.get('packaging_mid_label', '课程继续')).strip()[:30] or '课程继续',
-        'outro_title': str(request.args.get('packaging_outro_title', '')).strip()[:80],
-        'outro_subtitle': str(request.args.get('packaging_outro_subtitle', '')).strip()[:100],
-        'accent_color': _packaging_color(request.args.get('packaging_accent_color'), '#D6A239'),
+        'organization': str(args.get('packaging_organization', '')).strip()[:60],
+        'department': str(args.get('packaging_department', '')).strip()[:60],
+        'instructor': str(args.get('packaging_instructor', '')).strip()[:40],
+        'instructor_title': str(args.get('packaging_instructor_title', '')).strip()[:40],
+        'copyright': str(args.get('packaging_copyright', '')).strip()[:80],
+        'outro_text': str(args.get('packaging_outro_text', '感谢观看')).strip()[:120] or '感谢观看',
+        'intro_label': str(args.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
+        'intro_title': str(args.get('packaging_intro_title', '')).strip()[:80],
+        'intro_subtitle': str(args.get('packaging_intro_subtitle', '')).strip()[:100],
+        'mid_title': str(args.get('packaging_mid_title', '章节过渡')).strip()[:80] or '章节过渡',
+        'mid_subtitle': str(args.get('packaging_mid_subtitle', '')).strip()[:100],
+        'mid_label': str(args.get('packaging_mid_label', '课程继续')).strip()[:30] or '课程继续',
+        'outro_title': str(args.get('packaging_outro_title', '')).strip()[:80],
+        'outro_subtitle': str(args.get('packaging_outro_subtitle', '')).strip()[:100],
+        'accent_color': _packaging_color(args.get('packaging_accent_color'), '#D6A239'),
         'background_style': _packaging_choice(
-            request.args.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'solid'
+            args.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'solid'
         ),
         'logo_position': _packaging_choice(
-            request.args.get('packaging_logo_position'),
+            args.get('packaging_logo_position'),
             {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'},
             'top-right',
         ),
-        'intro_content_x': _packaging_percent(request.args.get('packaging_intro_content_x'), 9.5),
-        'intro_content_y': _packaging_percent(request.args.get('packaging_intro_content_y'), 30.0),
-        'intro_content_width': _packaging_percent(request.args.get('packaging_intro_content_width'), 70.0, 18.0),
-        'mid_content_x': _packaging_percent(request.args.get('packaging_mid_content_x'), 9.5),
-        'mid_content_y': _packaging_percent(request.args.get('packaging_mid_content_y'), 34.0),
-        'mid_content_width': _packaging_percent(request.args.get('packaging_mid_content_width'), 70.0, 18.0),
-        'outro_content_x': _packaging_percent(request.args.get('packaging_outro_content_x'), 9.5),
-        'outro_content_y': _packaging_percent(request.args.get('packaging_outro_content_y'), 34.0),
-        'outro_content_width': _packaging_percent(request.args.get('packaging_outro_content_width'), 70.0, 18.0),
+        'intro_content_x': _packaging_percent(args.get('packaging_intro_content_x'), 9.5),
+        'intro_content_y': _packaging_percent(args.get('packaging_intro_content_y'), 30.0),
+        'intro_content_width': _packaging_percent(args.get('packaging_intro_content_width'), 70.0, 18.0),
+        'mid_content_x': _packaging_percent(args.get('packaging_mid_content_x'), 9.5),
+        'mid_content_y': _packaging_percent(args.get('packaging_mid_content_y'), 34.0),
+        'mid_content_width': _packaging_percent(args.get('packaging_mid_content_width'), 70.0, 18.0),
+        'outro_content_x': _packaging_percent(args.get('packaging_outro_content_x'), 9.5),
+        'outro_content_y': _packaging_percent(args.get('packaging_outro_content_y'), 34.0),
+        'outro_content_width': _packaging_percent(args.get('packaging_outro_content_width'), 70.0, 18.0),
         'use_slide_background': False,
     }
     options.update({
-        f'{kind}_accent_color': _packaging_color(request.args.get(f'packaging_{kind}_accent_color'), options['accent_color']),
-        f'{kind}_background_style': _packaging_choice(request.args.get(f'packaging_{kind}_background_style'), {'ppt', 'solid', 'gradient', 'light'}, options['background_style']),
-        f'{kind}_logo_position': _packaging_choice(request.args.get(f'packaging_{kind}_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, options['logo_position']),
+        f'{kind}_accent_color': _packaging_color(args.get(f'packaging_{kind}_accent_color'), options['accent_color']),
+        f'{kind}_background_style': _packaging_choice(args.get(f'packaging_{kind}_background_style'), {'ppt', 'solid', 'gradient', 'light'}, options['background_style']),
+        f'{kind}_logo_position': _packaging_choice(args.get(f'packaging_{kind}_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, options['logo_position']),
     })
     background_path = None
     try:
         candidate = _packaging_asset_path(
-            request.args.get(f'packaging_{kind}_background_path') or request.args.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
+            args.get(f'packaging_{kind}_background_path') or args.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
         )
         background_path = Path(candidate) if candidate else None
         if candidate:
@@ -4919,7 +5070,7 @@ def course_packaging_preview_video():
     course_title = str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例'
     segment_title = str(request.args.get('segment_title', '')).strip()[:80]
     cache_payload = {
-        'version': 4,
+        'version': 5,
         'kind': kind,
         'options': options,
         'course_title': course_title,

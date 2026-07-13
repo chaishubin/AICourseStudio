@@ -18,6 +18,7 @@ class CoursePackagingDesigner {
             mid_video: null,
             outro_video: null
         };
+        this.templates = new Map();
         this.fields = {
             packaging_template: 'packaging-template',
             packaging_organization: 'packaging-organization',
@@ -77,6 +78,7 @@ class CoursePackagingDesigner {
         this.syncDesignerState();
         this.loadMusicLibrary();
         this.loadVideoLibraries();
+        this.loadTemplates();
         this.refreshPreview();
     }
 
@@ -124,6 +126,10 @@ class CoursePackagingDesigner {
             document.querySelector('.packaging-preview-panel').classList.toggle('show-safe-area', event.target.checked);
         });
         this.element('packaging-copy-intro-style').addEventListener('click', () => this.copyIntroStyle());
+        this.element('packaging-template').addEventListener('change', event => {
+            const template = this.templates.get(event.target.value);
+            if (template && !template.builtin) this.applyTemplateConfig(template);
+        });
         document.querySelectorAll('[data-packaging-tab]').forEach(tab => {
             tab.addEventListener('click', () => this.setActiveSide(tab.dataset.packagingTab));
         });
@@ -144,6 +150,12 @@ class CoursePackagingDesigner {
             });
         });
         ['intro', 'mid', 'outro'].forEach(side => {
+            const video = this.element(`packaging-${side}-preview`);
+            const canvas = video.closest('.packaging-preview-canvas');
+            video.addEventListener('play', () => canvas.classList.add('is-playing'));
+            ['pause', 'ended', 'emptied'].forEach(eventName => {
+                video.addEventListener(eventName, () => canvas.classList.remove('is-playing'));
+            });
             ['background', 'music', 'video'].forEach(media => {
                 const kind = `${side}_${media}`;
                 this.bindAsset(kind, `packaging-${side}-${media}-button`, `packaging-${side}-${media}-input`);
@@ -163,6 +175,59 @@ class CoursePackagingDesigner {
             });
         });
         this.bindLayoutEditor();
+    }
+
+    async loadTemplates() {
+        try {
+            const response = await fetch('/api/course-packaging-templates');
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '模板加载失败');
+            this.templates = new Map(result.templates.map(template => [template.id, template]));
+            const select = this.element('packaging-template');
+            const stored = this.storedStrategy().packaging_template;
+            select.replaceChildren();
+            const system = document.createElement('optgroup');
+            system.label = '系统模板';
+            const custom = document.createElement('optgroup');
+            custom.label = '自定义模板';
+            result.templates.forEach(template => {
+                const option = new Option(`${template.name}${template.is_default ? ' · 默认' : ''}`, template.id);
+                (template.builtin ? system : custom).append(option);
+            });
+            if (system.children.length) select.append(system);
+            if (custom.children.length) select.append(custom);
+            const selected = this.templates.has(stored) ? stored : result.default_template_id;
+            select.value = selected;
+        } catch (error) {
+            console.warn('加载包装模板失败:', error);
+        }
+    }
+
+    applyTemplateConfig(template) {
+        const config = template.config || {};
+        Object.entries(this.fields).forEach(([key, id]) => {
+            if (key !== 'packaging_template' && config[key] !== undefined && this.element(id)) {
+                this.element(id).value = config[key];
+            }
+        });
+        Object.entries(this.checkboxes).forEach(([key, id]) => {
+            if (config[key] !== undefined && this.element(id)) this.element(id).checked = Boolean(config[key]);
+        });
+        ['intro', 'mid', 'outro'].forEach(side => {
+            ['x', 'y', 'width'].forEach(name => {
+                const value = Number(config[`packaging_${side}_content_${name}`]);
+                if (Number.isFinite(value)) this.layout[side][name] = value;
+            });
+            ['background', 'music', 'video'].forEach(media => {
+                const key = `packaging_${side}_${media}_path`;
+                if (config[key] !== undefined) this.assets[`${side}_${media}`] = config[key] || null;
+            });
+        });
+        this.syncLayoutBoxes();
+        this.syncAssets();
+        this.syncDesignerState();
+        this.markDirty();
+        this.refreshPreview();
     }
 
     setActiveSide(side) {
@@ -371,6 +436,7 @@ class CoursePackagingDesigner {
                 const start = { x: event.clientX, y: event.clientY };
                 const original = { ...this.layout[kind] };
                 const rect = canvas.getBoundingClientRect();
+                box.classList.add('is-editing');
                 box.setPointerCapture(event.pointerId);
                 const move = moveEvent => {
                     const dx = (moveEvent.clientX - start.x) / rect.width * 100;
@@ -386,6 +452,7 @@ class CoursePackagingDesigner {
                     box.removeEventListener('pointermove', move);
                     box.removeEventListener('pointerup', up);
                     box.removeEventListener('pointercancel', up);
+                    box.classList.remove('is-editing');
                     this.markDirty();
                     this.refreshPreview();
                 };

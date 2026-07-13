@@ -246,6 +246,7 @@ class AICourseStudioApp {
         this.bindSubtitleControls();
         this.loadSubtitleFonts();
         this.restoreCurrentStrategy();
+        this.loadPackagingTemplates();
         this.loadStrategyTemplates();
         this.loadVoices({ preferredVoice: this.pendingVoiceSelection });
         this.restoreTasks().then(() => this.openRequestedPreviewTask());
@@ -1709,6 +1710,39 @@ class AICourseStudioApp {
             packaging_outro_content_y: this.packagingLayout.outro.y,
             packaging_outro_content_width: this.packagingLayout.outro.width
         };
+    }
+
+    async loadPackagingTemplates() {
+        const select = this.elements.packagingTemplate;
+        if (!select) return;
+        try {
+            const response = await fetch('/api/course-packaging-templates');
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '包装模板加载失败');
+            const stored = JSON.parse(localStorage.getItem(this.strategyDraftStorageKey) || '{}').packaging_template;
+            select.replaceChildren();
+            const system = document.createElement('optgroup');
+            system.label = '系统模板';
+            const custom = document.createElement('optgroup');
+            custom.label = '自定义模板';
+            result.templates.forEach(template => {
+                const option = new Option(`${template.name}${template.is_default ? ' · 默认' : ''}`, template.id);
+                option.dataset.config = JSON.stringify(template.config || {});
+                (template.builtin ? system : custom).append(option);
+            });
+            if (system.children.length) select.append(system);
+            if (custom.children.length) select.append(custom);
+            select.value = result.templates.some(item => item.id === stored) ? stored : result.default_template_id;
+            select.addEventListener('change', () => {
+                const selectedId = select.value;
+                const config = JSON.parse(select.selectedOptions[0]?.dataset.config || '{}');
+                if (Object.keys(config).length) this.applyStrategyToControls(config);
+                select.value = selectedId;
+                this.persistCurrentStrategy();
+            });
+        } catch (error) {
+            console.warn('加载包装模板失败:', error);
+        }
     }
 
     defaultPackagingLayout() {

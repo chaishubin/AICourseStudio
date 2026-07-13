@@ -389,6 +389,47 @@ def test_course_packaging_renders_course_template_images(temp_dir):
         assert len(rendered.getcolors(maxcolors=1_000_000)) > 1
 
 
+def test_university_title_card_uses_open_brand_rail_instead_of_closed_frame(temp_dir):
+    from PIL import Image
+
+    from vidppt.utils.course_packaging import _render_packaging_image
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+    )
+    output = temp_dir / "modern-university.png"
+    _render_packaging_image(
+        output,
+        config,
+        {
+            "template": "university",
+            "accent_color": "#22C55E",
+            "background_style": "solid",
+            "use_slide_background": False,
+            "intro_label": "在线开放课程",
+            "intro_title": "人工智能赋能教学创新",
+            "organization": "测试大学",
+            "department": "人工智能学院",
+            "instructor": "王老师",
+        },
+        kind="intro",
+        course_title="人工智能导论",
+        segment_title="",
+        logo_path=None,
+        background_path=None,
+    )
+
+    with Image.open(output).convert("RGB") as rendered:
+        rail = rendered.getpixel((103, 270))
+        former_top_border = rendered.getpixel((480, 92))
+        assert rail[1] > rail[0] * 2
+        assert former_top_border != rail
+        assert former_top_border[2] > former_top_border[1] > former_top_border[0]
+
+
 def test_course_packaging_keeps_legacy_academic_template(temp_dir):
     from PIL import Image
 

@@ -572,8 +572,6 @@ def _render_title_card_layout(
     width, height = config.video_width, config.video_height
     reveal_stage = str(options.get("_reveal_stage") or "full")
     accent = palette["accent"]
-    left = round(width * 0.095)
-    right = round(width * 0.90)
     title = segment_title or course_title or "课程视频"
     organization = str(options.get("organization") or "").strip()
     instructor = str(options.get("instructor") or "").strip()
@@ -583,6 +581,15 @@ def _render_title_card_layout(
     intro_label = str(options.get("intro_label") or palette.get("label") or "课程视频").strip()
     outro_title = str(options.get("outro_title") or "").strip()
     outro_subtitle = str(options.get("outro_subtitle") or "").strip()
+    text_left, content_y, text_width = _content_box(
+        options, kind, width, height, default_x=15, default_y=36,
+        default_width=68,
+    )
+    rail_x = max(round(width * 0.035), text_left - round(width * 0.045))
+    rail_top = round(height * 0.20)
+    rail_bottom = round(height * 0.80)
+    corner_right = min(round(width * 0.92), text_left + text_width)
+    accent_rgb = _hex_to_rgb(accent)
 
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
@@ -590,52 +597,81 @@ def _render_title_card_layout(
         (0, 0, width, height),
         fill=(*_hex_to_rgb(palette["background"]), 112),
     )
-    overlay_draw.rectangle(
-        (left, round(height * 0.17), right, round(height * 0.83)),
-        outline=(*_hex_to_rgb(accent), 210),
-        width=max(3, width // 360),
+    glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow)
+    glow_draw.rounded_rectangle(
+        (
+            rail_x - round(width * 0.006),
+            rail_top,
+            rail_x + round(width * 0.006),
+            rail_bottom,
+        ),
+        radius=max(4, width // 240),
+        fill=(*accent_rgb, 150),
     )
-    overlay_draw.rectangle(
-        (left, round(height * 0.17), left + round(width * 0.012), round(height * 0.83)),
-        fill=(*_hex_to_rgb(accent), 230),
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(5, width // 150)))
+    overlay = Image.alpha_composite(overlay, glow)
+    overlay_draw = ImageDraw.Draw(overlay)
+    rail_width = max(4, width // 250)
+    overlay_draw.rounded_rectangle(
+        (rail_x, rail_top, rail_x + rail_width, rail_bottom),
+        radius=max(2, rail_width // 2),
+        fill=(*accent_rgb, 205),
+    )
+    corner_length = round(width * 0.075)
+    corner_height = round(height * 0.045)
+    corner_width = max(2, width // 520)
+    overlay_draw.line(
+        (corner_right - corner_length, rail_top, corner_right, rail_top),
+        fill=(*accent_rgb, 115),
+        width=corner_width,
+    )
+    overlay_draw.line(
+        (corner_right, rail_top, corner_right, rail_top + corner_height),
+        fill=(*accent_rgb, 115),
+        width=corner_width,
+    )
+    overlay_draw.line(
+        (rail_x, rail_bottom, rail_x + round(width * 0.06), rail_bottom),
+        fill=(*accent_rgb, 105),
+        width=corner_width,
     )
     image.alpha_composite(overlay) if image.mode == "RGBA" else None
     if image.mode != "RGBA":
         composited = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
         image.paste(composited)
-
-    draw.line(
-        (left, round(height * 0.78), right - round(width * 0.055), round(height * 0.78)),
-        fill=accent,
-        width=max(2, height // 220),
-    )
     if reveal_stage == "decor":
         return
 
-    title_font = _load_font(round(height * 0.068), bold=True)
-    subtitle_font = _load_font(round(height * 0.034), bold=False)
-    meta_font = _load_font(round(height * 0.026), bold=False)
-    label_font = _load_font(round(height * 0.024), bold=True)
-    text_left, content_y, text_width = _content_box(
-        options, kind, width, height, default_x=15, default_y=36,
-        default_width=68,
-    )
+    draw = ImageDraw.Draw(image)
+    title_font = _load_font(round(height * 0.074), bold=True)
+    subtitle_font = _load_font(round(height * 0.031), bold=False)
+    meta_font = _load_font(round(height * 0.024), bold=False)
+    label_font = _load_font(round(height * 0.021), bold=True)
 
     label = intro_label if kind == "intro" else str(options.get("outro_label") or "课程总结").strip()
-    draw.rounded_rectangle(
-        (
-            text_left,
-            round(height * 0.25),
-            text_left + round(width * 0.16),
-            round(height * 0.30),
-        ),
-        radius=max(6, height // 120),
-        fill=accent,
+    label_bbox = draw.textbbox((0, 0), label, font=label_font)
+    label_padding_x = round(width * 0.013)
+    label_padding_y = round(height * 0.008)
+    label_top = max(rail_top + round(height * 0.035), content_y - round(height * 0.12))
+    label_width = label_bbox[2] - label_bbox[0] + label_padding_x * 2
+    label_height = label_bbox[3] - label_bbox[1] + label_padding_y * 2
+    label_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    label_draw = ImageDraw.Draw(label_layer)
+    label_draw.rounded_rectangle(
+        (text_left, label_top, text_left + label_width, label_top + label_height),
+        radius=max(7, label_height // 3),
+        fill=(*accent_rgb, 34),
+        outline=(*accent_rgb, 118),
+        width=max(1, width // 960),
     )
+    composited = Image.alpha_composite(image.convert("RGBA"), label_layer).convert("RGB")
+    image.paste(composited)
+    draw = ImageDraw.Draw(image)
     draw.text(
-        (text_left + round(width * 0.018), round(height * 0.257)),
+        (text_left + label_padding_x, label_top + label_padding_y - label_bbox[1]),
         label,
-        fill=palette["background"],
+        fill=_blend_hex_colors(accent, palette["text"], 0.32),
         font=label_font,
     )
 
@@ -644,22 +680,69 @@ def _render_title_card_layout(
         y = content_y
         for line in _wrap_text(draw, title, title_font, text_width, max_lines=2):
             draw.text((text_left, y), line, fill=palette["text"], font=title_font)
-            y += round(height * 0.082)
+            y += round(height * 0.086)
+        draw.rounded_rectangle(
+            (
+                text_left,
+                y + round(height * 0.010),
+                text_left + round(width * 0.065),
+                y + round(height * 0.016),
+            ),
+            radius=max(2, height // 300),
+            fill=accent,
+        )
         subtitle = intro_subtitle or (course_title if segment_title and course_title else "")
         if subtitle:
-            draw.text((text_left, y + 10), subtitle, fill=palette["muted"], font=subtitle_font)
+            draw.text(
+                (text_left, y + round(height * 0.035)),
+                subtitle,
+                fill=palette["muted"],
+                font=subtitle_font,
+            )
         meta = _course_identity_meta(options, organization, instructor)
         if meta and reveal_stage == "full":
-            draw.text((text_left, round(height * 0.70)), meta, fill=palette["muted"], font=meta_font)
+            meta_y = round(height * 0.715)
+            dot_radius = max(3, height // 180)
+            draw.ellipse(
+                (text_left, meta_y + dot_radius, text_left + dot_radius * 2, meta_y + dot_radius * 3),
+                fill=accent,
+            )
+            draw.text(
+                (text_left + dot_radius * 4, meta_y),
+                meta,
+                fill=palette["muted"],
+                font=meta_font,
+            )
     else:
         title = outro_title or title
         y = content_y
         for line in _wrap_text(draw, outro_text, title_font, text_width, max_lines=2):
             draw.text((text_left, y), line, fill=palette["text"], font=title_font)
-            y += round(height * 0.082)
-        draw.text((text_left, y + 12), outro_subtitle or title, fill=palette["muted"], font=subtitle_font)
+            y += round(height * 0.086)
+        draw.rounded_rectangle(
+            (text_left, y + round(height * 0.010), text_left + round(width * 0.065), y + round(height * 0.016)),
+            radius=max(2, height // 300),
+            fill=accent,
+        )
+        draw.text(
+            (text_left, y + round(height * 0.035)),
+            outro_subtitle or title,
+            fill=palette["muted"],
+            font=subtitle_font,
+        )
         if organization and reveal_stage == "full":
-            draw.text((text_left, round(height * 0.70)), organization, fill=palette["muted"], font=meta_font)
+            meta_y = round(height * 0.715)
+            dot_radius = max(3, height // 180)
+            draw.ellipse(
+                (text_left, meta_y + dot_radius, text_left + dot_radius * 2, meta_y + dot_radius * 3),
+                fill=accent,
+            )
+            draw.text(
+                (text_left + dot_radius * 4, meta_y),
+                organization,
+                fill=palette["muted"],
+                font=meta_font,
+            )
 
     if reveal_stage == "full" and logo_path and logo_path.is_file():
         _paste_logo(image, logo_path, config, options)
@@ -810,6 +893,17 @@ def _hex_to_rgb(value: str) -> tuple[int, int, int]:
     if len(cleaned) != 6:
         return (0, 0, 0)
     return tuple(int(cleaned[index:index + 2], 16) for index in (0, 2, 4))
+
+
+def _blend_hex_colors(first: str, second: str, second_ratio: float) -> tuple[int, int, int]:
+    """Blend two palette colors for restrained accent text."""
+    ratio = max(0.0, min(1.0, float(second_ratio)))
+    first_rgb = _hex_to_rgb(first)
+    second_rgb = _hex_to_rgb(second)
+    return tuple(
+        round(first_rgb[index] * (1 - ratio) + second_rgb[index] * ratio)
+        for index in range(3)
+    )
 
 
 def _use_slide_background(options: dict) -> bool:

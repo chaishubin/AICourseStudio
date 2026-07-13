@@ -104,6 +104,25 @@ class TaskStore:
                 CREATE INDEX IF NOT EXISTS idx_accounts_role_active
                 ON accounts(role, active)
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS packaging_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    base_template TEXT NOT NULL,
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    builtin INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    created_by TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_packaging_templates_status
+                ON packaging_templates(enabled DESC, is_default DESC, builtin DESC, updated_at DESC)
+            """)
 
     def upsert(self, task_id: str, task: dict):
         now = time.time()
@@ -356,3 +375,126 @@ class TaskStore:
         if not isinstance(value, list):
             return []
         return [str(item) for item in value if item]
+
+    def ensure_packaging_templates(self, templates: list[dict]):
+        """Seed built-in presets without overwriting user-managed metadata."""
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            for template in templates:
+                connection.execute("""
+                    INSERT OR IGNORE INTO packaging_templates (
+                        id, name, description, base_template, config_json,
+                        builtin, enabled, is_default, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)
+                """, (
+                    template["id"],
+                    template["name"],
+                    template.get("description") or "",
+                    template.get("base_template") or template["id"],
+                    json.dumps(template.get("config") or {}, ensure_ascii=False),
+                    1 if template.get("is_default") else 0,
+                    template.get("created_by") or "system",
+                    now,
+                    now,
+                ))
+
+    def list_packaging_templates(self, include_disabled: bool = True) -> list[dict]:
+        where = "" if include_disabled else "WHERE enabled = 1"
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(f"""
+                SELECT id, name, description, base_template, config_json,
+                       builtin, enabled, is_default, created_by, created_at, updated_at
+                FROM packaging_templates
+                {where}
+                ORDER BY is_default DESC, builtin DESC, updated_at DESC, name ASC
+            """).fetchall()
+        return [self._packaging_template_row(row) for row in rows]
+
+    def get_packaging_template(self, template_id: str) -> dict | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute("""
+                SELECT id, name, description, base_template, config_json,
+                       builtin, enabled, is_default, created_by, created_at, updated_at
+                FROM packaging_templates
+                WHERE id = ?
+            """, (template_id,)).fetchone()
+        return self._packaging_template_row(row) if row else None
+
+    def create_packaging_template(self, template: dict):
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            if template.get("is_default"):
+                connection.execute("UPDATE packaging_templates SET is_default = 0")
+            connection.execute("""
+                INSERT INTO packaging_templates (
+                    id, name, description, base_template, config_json,
+                    builtin, enabled, is_default, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                template["id"],
+                template["name"],
+                template.get("description") or "",
+                template["base_template"],
+                json.dumps(template.get("config") or {}, ensure_ascii=False),
+                1 if template.get("builtin") else 0,
+                1 if template.get("enabled", True) else 0,
+                1 if template.get("is_default") else 0,
+                template.get("created_by"),
+                now,
+                now,
+            ))
+
+    def update_packaging_template(self, template_id: str, updates: dict):
+        allowed = {"name", "description", "base_template", "config_json", "enabled", "is_default"}
+        assignments = []
+        params = []
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            assignments.append(f"{key} = ?")
+            if key in {"enabled", "is_default"}:
+                value = 1 if value else 0
+            params.append(value)
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        params.extend([time.time(), template_id])
+        with self._lock, self._connect() as connection:
+            if updates.get("is_default"):
+                connection.execute("UPDATE packaging_templates SET is_default = 0")
+                if "enabled" not in updates:
+                    assignments.append("enabled = 1")
+                    params.insert(-2, 1)
+            connection.execute(
+                f"UPDATE packaging_templates SET {', '.join(assignments)} WHERE id = ?",
+                params,
+            )
+
+    def delete_packaging_template(self, template_id: str) -> bool:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT builtin FROM packaging_templates WHERE id = ?", (template_id,)
+            ).fetchone()
+            if not row or row["builtin"]:
+                return False
+            connection.execute("DELETE FROM packaging_templates WHERE id = ?", (template_id,))
+        return True
+
+    def _packaging_template_row(self, row) -> dict:
+        try:
+            config = json.loads(row["config_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            config = {}
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"],
+            "base_template": row["base_template"],
+            "config": config if isinstance(config, dict) else {},
+            "builtin": bool(row["builtin"]),
+            "enabled": bool(row["enabled"]),
+            "is_default": bool(row["is_default"]),
+            "created_by": row["created_by"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }

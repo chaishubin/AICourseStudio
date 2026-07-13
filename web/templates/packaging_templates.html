@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>包装模板管理 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=27">
+</head>
+<body>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand"><div class="brand-mark">AI</div><div><strong>Course Studio</strong><span>课程生产管理平台</span></div></div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item" href="{{ url_for('index') }}"><span class="nav-icon">▦</span><span>生产工作台</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#upload-module"><span class="nav-icon">⇧</span><span>素材与任务</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#course-preview-module"><span class="nav-icon">✎</span><span>内容审核</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#results-module"><span class="nav-icon">□</span><span>课程资产</span></a>
+                <a class="nav-item" href="{{ url_for('course_packaging_page') }}"><span class="nav-icon">◈</span><span>课程包装</span></a>
+                <a class="nav-item active" href="{{ url_for('packaging_templates_page') }}"><span class="nav-icon">▤</span><span>包装模板</span></a>
+                <a class="nav-item" href="{{ url_for('packaging_assets_page') }}"><span class="nav-icon">▧</span><span>包装素材</span></a>
+                <a class="nav-item" href="{{ url_for('data_management_page') }}"><span class="nav-icon">☷</span><span>数据管理</span></a>
+                <a class="nav-item" href="{{ url_for('operation_logs_page') }}"><span class="nav-icon">◴</span><span>操作日志</span></a>
+                {% if can_manage_accounts %}<a class="nav-item" href="{{ url_for('accounts_page') }}"><span class="nav-icon">◎</span><span>账号管理</span></a>{% endif %}
+                {% if can_view_debug %}<a class="nav-item" href="{{ url_for('debug_page') }}"><span class="nav-icon">◇</span><span>调试工作台</span></a>{% endif %}
+            </nav>
+            <div class="sidebar-meta"><span class="status-dot"></span><div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div></div>
+        </aside>
+        <div class="admin-main">
+            <header class="admin-topbar">
+                <div><p class="breadcrumb">AI 课程生产 / 课程包装 / 模板管理</p><h1>包装模板管理</h1></div>
+                <div class="topbar-actions"><span class="environment-badge"><span></span>共享模板库</span><span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span><div class="admin-avatar">{{ current_user[:1] | upper }}</div><form method="post" action="{{ url_for('logout') }}"><button class="logout-button" type="submit">退出登录</button></form></div>
+            </header>
+            <main class="content management-page packaging-templates-page">
+                <section class="workspace-intro packaging-page-intro">
+                    <div><h2>把成熟的包装方案沉淀为模板</h2><p>系统模板提供稳定基线；自定义模板可保存当前片头、片中、片尾的视觉、动效、声音和版式配置。</p></div>
+                    <div class="packaging-page-actions"><a class="btn-preview" href="{{ url_for('course_packaging_page') }}">返回包装设计</a><button id="packaging-template-create-toggle" class="btn-convert" type="button">新建模板</button></div>
+                </section>
+
+                <section id="packaging-template-create-panel" class="card packaging-template-create-panel" hidden>
+                    <div><span class="section-kicker">创建模板</span><h3>保存浏览器中的当前包装配置</h3><p>建议先在包装设计页调好预览，再回到这里保存为可复用模板。</p></div>
+                    <form id="packaging-template-create-form" class="packaging-template-form">
+                        <label>模板名称<input id="packaging-template-name" class="text-input" maxlength="50" required placeholder="例如：人工智能学院标准版"></label>
+                        <label>基础风格<select id="packaging-template-base" class="select-input"><option value="academic">高校课程</option><option value="university">高校片头</option><option value="credits">片尾鸣谢</option><option value="modern">现代培训</option><option value="minimal">简洁微课</option></select></label>
+                        <label class="packaging-template-description">模板说明<input id="packaging-template-description" class="text-input" maxlength="160" placeholder="适用课程、品牌或使用说明"></label>
+                        <div class="packaging-template-form-actions"><button class="btn-preview" id="packaging-template-create-cancel" type="button">取消</button><button class="btn-convert" type="submit">从当前配置创建</button></div>
+                    </form>
+                    <span id="packaging-template-create-status" class="packaging-preview-state" aria-live="polite"></span>
+                </section>
+
+                <section class="card management-card">
+                    <div class="section-heading"><div><span class="section-kicker">模板库</span><h3>课程包装模板</h3></div><span id="packaging-templates-count" class="packaging-preview-state">正在加载…</span></div>
+                    <div class="management-filters" aria-label="包装模板筛选">
+                        <label class="management-filter-field"><span>关键字</span><input id="packaging-template-search" class="select-input" type="search" placeholder="搜索名称或说明"></label>
+                        <label class="management-filter-field"><span>模板类型</span><select id="packaging-template-type" class="select-input"><option value="">全部类型</option><option value="builtin">系统模板</option><option value="custom">自定义模板</option></select></label>
+                        <label class="management-filter-field"><span>状态</span><select id="packaging-template-status" class="select-input"><option value="">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select></label>
+                        <button id="packaging-template-reset" class="btn-secondary" type="button">重置</button>
+                    </div>
+                    <div id="packaging-templates-grid" class="packaging-templates-grid" aria-live="polite"></div>
+                </section>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/packaging_templates.js') }}?v=1"></script>
+</body>
+</html>

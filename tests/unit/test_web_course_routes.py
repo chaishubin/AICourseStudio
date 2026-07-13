@@ -1408,7 +1408,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=36' in html
+    assert '/static/js/main.js?v=37' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -1445,7 +1445,60 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-copyright"' in html
     assert 'id="packaging-transition-seconds"' in html
     assert 'id="upload-area"' not in html
-    assert '/static/js/course_packaging.js?v=9' in html
+    assert '/static/js/course_packaging.js?v=11' in html
+
+
+def test_packaging_template_management_crud_and_render_resolution():
+    import web.app as web_app
+
+    client = web_app.app.test_client()
+    page = client.get('/packaging-templates')
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert '包装模板管理' in html
+    assert 'id="packaging-templates-grid"' in html
+    assert '/static/js/packaging_templates.js?v=1' in html
+
+    builtins = client.get('/api/course-packaging-templates?include_disabled=1')
+    assert builtins.status_code == 200
+    assert len(builtins.get_json()['templates']) == 5
+    assert builtins.get_json()['default_template_id'] == 'academic'
+
+    created = client.post('/api/course-packaging-templates', json={
+        'name': '学院蓝金模板',
+        'description': '用于人工智能学院课程',
+        'base_template': 'university',
+        'config': {
+            'packaging_intro_accent_color': '#1C64F2',
+            'packaging_intro_title': '学院精品课程',
+            'unrelated_option': 'ignored',
+        },
+    })
+    assert created.status_code == 201
+    template = created.get_json()['template']
+    assert template['builtin'] is False
+    assert template['config']['packaging_intro_accent_color'] == '#1C64F2'
+    assert 'unrelated_option' not in template['config']
+
+    resolved = web_app._course_packaging_options({
+        'packaging_template': template['id'],
+    })['course_packaging']
+    assert resolved['template'] == 'university'
+    assert resolved['template_id'] == template['id']
+    assert resolved['intro_accent_color'] == '#1C64F2'
+    assert resolved['intro_title'] == '学院精品课程'
+
+    made_default = client.patch(
+        f"/api/course-packaging-templates/{template['id']}",
+        json={'is_default': True},
+    )
+    assert made_default.status_code == 200
+    assert made_default.get_json()['template']['is_default'] is True
+
+    cannot_delete_builtin = client.delete('/api/course-packaging-templates/academic')
+    assert cannot_delete_builtin.status_code == 400
+    deleted = client.delete(f"/api/course-packaging-templates/{template['id']}")
+    assert deleted.status_code == 200
 
 
 def test_course_packaging_keeps_intro_and_outro_media_settings_separate(monkeypatch, temp_dir):

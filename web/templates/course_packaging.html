@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>课程包装 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=25">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=26">
 </head>
 <body>
     <div class="admin-shell">
@@ -19,6 +19,7 @@
                 <a class="nav-item" href="{{ url_for('index') }}#course-preview-module"><span class="nav-icon">✎</span><span>内容审核</span></a>
                 <a class="nav-item" href="{{ url_for('index') }}#results-module"><span class="nav-icon">□</span><span>课程资产</span></a>
                 <a class="nav-item active" href="{{ url_for('course_packaging_page') }}"><span class="nav-icon">◈</span><span>课程包装</span></a>
+                <a class="nav-item" href="{{ url_for('packaging_templates_page') }}"><span class="nav-icon">▤</span><span>包装模板</span></a>
                 <a class="nav-item" href="{{ url_for('packaging_assets_page') }}"><span class="nav-icon">▧</span><span>包装素材</span></a>
                 <a class="nav-item" href="{{ url_for('data_management_page') }}"><span class="nav-icon">☷</span><span>数据管理</span></a>
                 <a class="nav-item" href="{{ url_for('operation_logs_page') }}"><span class="nav-icon">◴</span><span>操作日志</span></a>
@@ -52,7 +53,7 @@
                 <section class="card packaging-manager packaging-manager-page" aria-labelledby="packaging-manager-title">
                     <div class="packaging-manager-header">
                         <div><span class="section-kicker">课程包装</span><h4 id="packaging-manager-title">模板与应用范围</h4><span>课程确认页只保留选择、启用和本课程常用字段。</span></div>
-                        <div class="packaging-page-actions"><a class="btn-preview" href="{{ url_for('packaging_assets_page') }}">管理包装素材</a><a class="btn-preview" href="{{ url_for('index') }}#course-preview-module">返回生产工作台</a></div>
+                        <div class="packaging-page-actions"><a class="btn-preview" href="{{ url_for('packaging_templates_page') }}">管理包装模板</a><a class="btn-preview" href="{{ url_for('packaging_assets_page') }}">管理包装素材</a><a class="btn-preview" href="{{ url_for('index') }}#course-preview-module">返回生产工作台</a></div>
                     </div>
                     <details class="packaging-global-settings" open>
                         <summary><span><strong>全局品牌与应用设置</strong><small>机构信息和默认包装规则，三段内容共用</small></span><span class="packaging-summary-action">展开 / 收起</span></summary>
@@ -146,6 +147,6 @@
             <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
         </div>
     </div>
-    <script src="{{ url_for('static', filename='js/course_packaging.js') }}?v=9"></script>
+    <script src="{{ url_for('static', filename='js/course_packaging.js') }}?v=11"></script>
 </body>
 </html>
