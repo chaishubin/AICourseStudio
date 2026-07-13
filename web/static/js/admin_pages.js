@@ -117,7 +117,7 @@ class AdminDataPages {
             }
             return `
                 <tr>
-                    <td><strong>${this.escape(task.original_name || '未知文件')}</strong><small>${this.escape(task.task_id || '')}</small></td>
+                    <td><strong>${this.escape(this.videoFileName(task))}</strong><small>${this.escape(task.task_id || '')}</small></td>
                     <td>${this.escape(task.owner_username || task.created_by || '-')}</td>
                     <td><span class="status-pill status-${this.escapeAttr(task.status || 'unknown')}">${this.escape(this.statusText(task))}</span></td>
                     <td>${Math.round(task.percentage || 0)}%</td>
@@ -161,6 +161,13 @@ class AdminDataPages {
                 if (!Number.isNaN(nextPage)) this.loadAssets(nextPage);
             });
         });
+    }
+
+    videoFileName(task) {
+        if (task?.video_name) return task.video_name;
+        const videoPath = String(task?.video_path || '').replace(/\\/g, '/');
+        if (videoPath) return videoPath.split('/').pop() || videoPath;
+        return '暂无视频文件';
     }
 
     reviewUrl(taskId) {

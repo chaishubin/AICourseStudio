@@ -353,6 +353,113 @@ def test_course_pipeline_burns_subtitles_into_video(temp_dir):
     assert run.call_args.kwargs["cwd"] == temp_dir
 
 
+def test_course_packaging_renders_course_template_images(temp_dir):
+    from PIL import Image
+
+    from vidppt.utils.course_packaging import _render_packaging_image
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+    )
+    options = {
+        "template": "university",
+        "organization": "测试大学",
+        "instructor": "王老师",
+        "outro_text": "感谢观看",
+        "use_slide_background": False,
+    }
+
+    intro = temp_dir / "intro.png"
+    _render_packaging_image(
+        intro,
+        config,
+        options,
+        kind="intro",
+        course_title="人工智能导论",
+        segment_title="第一讲 课程导入",
+        logo_path=None,
+        background_path=None,
+    )
+
+    with Image.open(intro) as rendered:
+        assert rendered.size == (960, 540)
+        assert len(rendered.getcolors(maxcolors=1_000_000)) > 1
+
+
+def test_course_packaging_keeps_legacy_academic_template(temp_dir):
+    from PIL import Image
+
+    from vidppt.utils.course_packaging import _render_packaging_image
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+    )
+    options = {
+        "template": "academic",
+        "organization": "测试大学",
+        "instructor": "王老师",
+        "outro_text": "感谢观看",
+        "use_slide_background": False,
+    }
+
+    intro = temp_dir / "academic.png"
+    _render_packaging_image(
+        intro,
+        config,
+        options,
+        kind="intro",
+        course_title="人工智能导论",
+        segment_title="",
+        logo_path=None,
+        background_path=None,
+    )
+
+    with Image.open(intro) as rendered:
+        assert rendered.size == (960, 540)
+        assert len(rendered.getcolors(maxcolors=1_000_000)) > 1
+
+
+def test_course_packaging_renders_credits_template_images(temp_dir):
+    from PIL import Image
+
+    from vidppt.utils.course_packaging import _render_packaging_image
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+    )
+    options = {
+        "template": "credits",
+        "organization": "测试大学",
+        "outro_text": "参考资料请见课程平台",
+        "use_slide_background": False,
+    }
+
+    outro = temp_dir / "outro.png"
+    _render_packaging_image(
+        outro,
+        config,
+        options,
+        kind="outro",
+        course_title="人工智能导论",
+        segment_title="",
+        logo_path=None,
+        background_path=None,
+    )
+
+    with Image.open(outro) as rendered:
+        assert rendered.size == (960, 540)
+        assert len(rendered.getcolors(maxcolors=1_000_000)) > 1
+
+
 def test_course_pipeline_scales_subtitle_design_units_for_video_resolution(temp_dir):
     from vidppt.course_pipeline import CoursePipeline
 
@@ -539,6 +646,43 @@ def test_manual_theme_overrides_content_and_auto_layouts_vary():
     assert course.metadata["visual_theme"] == "culture"
     assert renderer._resolve_layout(course.sections[1], 2) == "process"
     assert renderer._resolve_layout(course.sections[2], 3) == "framework"
+
+
+def test_pptx_sequence_marker_numbers_are_centered():
+    from pptx import Presentation
+    from pptx.enum.text import PP_ALIGN
+    from pptx.util import Inches
+
+    from vidppt.core.course import CourseSection
+    from vidppt.renderers.pptx_renderer import PPTXRenderer
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    renderer = PPTXRenderer()
+    renderer.subtitle_safe_area = None
+    renderer.footer_text = "AI COURSE STUDIO"
+
+    renderer._render_sequence(
+        slide,
+        CourseSection(
+            id="process",
+            title="实施步骤",
+            bullets=["需求分析", "方案设计"],
+        ),
+        1,
+        1,
+        "process",
+    )
+
+    number_box = next(
+        shape for shape in slide.shapes
+        if getattr(shape, "has_text_frame", False) and shape.text == "1"
+    )
+    assert number_box.left == Inches(1.62)
+    assert number_box.top == Inches(3.03)
+    assert number_box.width == Inches(0.5)
+    assert number_box.height == Inches(0.5)
+    assert number_box.text_frame.paragraphs[0].alignment == PP_ALIGN.CENTER
 
 
 def test_pptx_renderer_converts_subtitle_area_to_content_bounds():

@@ -294,6 +294,7 @@ class PPTXRenderer:
         self, slide, page: CourseSection, index: int, total: int, layout: str
     ) -> None:
         from pptx.enum.shapes import MSO_SHAPE
+        from pptx.enum.text import PP_ALIGN
 
         self._render_page_header(slide, page)
         bullets = (page.bullets[:5] or [page.title])
@@ -306,7 +307,11 @@ class PPTXRenderer:
             x = left + item_index * ((width - step_width) / max(1, count - 1))
             marker = self.TEAL if item_index % 2 == 0 else self.ORANGE
             self._shape(slide, MSO_SHAPE.OVAL, x + 0.72, y + 0.48, 0.5, 0.5, marker)
-            self._text(slide, str(item_index + 1), x + 0.72, y + 0.57, 0.5, 0.22, 10, self.WHITE, bold=True)
+            self._text(
+                slide, str(item_index + 1),
+                x + 0.72, y + 0.48, 0.5, 0.5,
+                10, self.WHITE, bold=True, align=PP_ALIGN.CENTER,
+            )
             card_y = y - 0.95 if layout == "timeline" and item_index % 2 == 0 else y + 1.1
             self._shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, card_y, step_width, 1.25, self.WHITE)
             self._text(slide, item, x + 0.18, card_y + 0.2, step_width - 0.36, 0.82, 14, self.INK, bold=True)
