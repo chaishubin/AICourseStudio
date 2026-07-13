@@ -635,6 +635,12 @@
                                 </fieldset>
                                 <fieldset>
                                     <legend>视觉样式</legend>
+                                    <label class="packaging-asset-field">自定义背景图
+                                        <input id="packaging-background-input" type="file" accept=".png,.jpg,.jpeg,.webp" hidden>
+                                        <button type="button" class="btn-preview" id="packaging-background-button">上传替换</button>
+                                        <button type="button" class="btn-preview" id="packaging-background-remove" hidden>恢复默认</button>
+                                        <small id="packaging-background-status">片头片尾共用，可恢复为 PPT 背景</small>
+                                    </label>
                                     <label>品牌色
                                         <input id="packaging-accent-color" class="color-input" type="color" value="#D6A239">
                                     </label>
@@ -658,6 +664,12 @@
                                 </fieldset>
                                 <fieldset>
                                     <legend>动态与声音</legend>
+                                    <label class="packaging-asset-field">自定义背景音乐
+                                        <input id="packaging-music-input" type="file" accept=".mp3,.wav,.m4a,.aac" hidden>
+                                        <button type="button" class="btn-preview" id="packaging-music-button">上传替换</button>
+                                        <button type="button" class="btn-preview" id="packaging-music-remove" hidden>恢复内置</button>
+                                        <small id="packaging-music-status">自动裁剪到片头片尾时长</small>
+                                    </label>
                                     <label>动效
                                         <select id="packaging-motion-style" class="select-input">
                                             <option value="zoom">缓慢推近</option>
@@ -851,7 +863,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=31"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=32"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

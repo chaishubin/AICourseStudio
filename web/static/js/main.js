@@ -10,6 +10,8 @@ class AICourseStudioApp {
             isConverting: false,
             activeBatchId: null,
             logoPath: null,
+            packagingBackgroundPath: null,
+            packagingMusicPath: null,
             activeEventSources: new Map()  // taskId → EventSource
         };
 
@@ -148,6 +150,14 @@ class AICourseStudioApp {
                 packagingLogoPosition: document.getElementById('packaging-logo-position'),
                 packagingMotionStyle: document.getElementById('packaging-motion-style'),
                 packagingMusicStyle: document.getElementById('packaging-music-style'),
+                packagingBackgroundInput: document.getElementById('packaging-background-input'),
+                packagingBackgroundButton: document.getElementById('packaging-background-button'),
+                packagingBackgroundRemove: document.getElementById('packaging-background-remove'),
+                packagingBackgroundStatus: document.getElementById('packaging-background-status'),
+                packagingMusicInput: document.getElementById('packaging-music-input'),
+                packagingMusicButton: document.getElementById('packaging-music-button'),
+                packagingMusicRemove: document.getElementById('packaging-music-remove'),
+                packagingMusicStatus: document.getElementById('packaging-music-status'),
                 advancedToggle: document.getElementById('advanced-toggle'),
                 workflowBadge: document.getElementById('workflow-badge'),
                 workflowDescription: document.getElementById('workflow-description'),
@@ -888,6 +898,9 @@ class AICourseStudioApp {
         this.elements.customVoice.value = customVoice;
         this.pendingVoiceSelection = strategy.selected_voice || strategy.voice || null;
         this.state.logoPath = strategy.school_logo_path || null;
+        this.state.packagingBackgroundPath = strategy.packaging_background_path || null;
+        this.state.packagingMusicPath = strategy.packaging_music_path || null;
+        this.syncPackagingAssetState();
         this.syncSubtitleStyleTemplateSelection();
         this.syncSubtitleFontPreview();
         this.syncSubtitlePreviewFromInputs();
@@ -1001,6 +1014,7 @@ class AICourseStudioApp {
             this.saveCurrentStrategy();
         });
         this.bindPackagingLayoutEditor();
+        this.bindPackagingAssetUploads();
         this.elements.uploadEditedPptBtn.addEventListener(
             'click', () => this.elements.editedPptInput.click()
         );
@@ -1635,6 +1649,8 @@ class AICourseStudioApp {
             packaging_logo_position: this.elements.packagingLogoPosition?.value || 'top-right',
             packaging_motion_style: this.elements.packagingMotionStyle?.value || 'zoom',
             packaging_music_style: this.elements.packagingMusicStyle?.value || 'warm',
+            packaging_background_path: this.state.packagingBackgroundPath,
+            packaging_music_path: this.state.packagingMusicPath,
             packaging_intro_content_x: this.packagingLayout.intro.x,
             packaging_intro_content_y: this.packagingLayout.intro.y,
             packaging_intro_content_width: this.packagingLayout.intro.width,
@@ -1649,6 +1665,70 @@ class AICourseStudioApp {
             intro: { x: 9.5, y: 30, width: 70 },
             outro: { x: 9.5, y: 34, width: 70 }
         };
+    }
+
+    bindPackagingAssetUploads() {
+        const bindings = [
+            ['background', this.elements.packagingBackgroundButton, this.elements.packagingBackgroundInput],
+            ['music', this.elements.packagingMusicButton, this.elements.packagingMusicInput]
+        ];
+        bindings.forEach(([kind, button, input]) => {
+            button?.addEventListener('click', () => input.click());
+            input?.addEventListener('change', async event => {
+                const file = event.target.files[0];
+                event.target.value = '';
+                if (file) await this.uploadPackagingAsset(kind, file);
+            });
+        });
+        this.elements.packagingBackgroundRemove?.addEventListener('click', () => {
+            this.state.packagingBackgroundPath = null;
+            this.syncPackagingAssetState();
+            this.refreshPackagingPreview();
+            this.saveCurrentStrategy();
+        });
+        this.elements.packagingMusicRemove?.addEventListener('click', () => {
+            this.state.packagingMusicPath = null;
+            this.syncPackagingAssetState();
+            this.saveCurrentStrategy();
+        });
+    }
+
+    async uploadPackagingAsset(kind, file) {
+        const formData = new FormData();
+        formData.append('kind', kind);
+        formData.append('asset', file);
+        const status = kind === 'background'
+            ? this.elements.packagingBackgroundStatus : this.elements.packagingMusicStatus;
+        status.textContent = '上传中...';
+        try {
+            const response = await fetch('/api/course-packaging-asset-upload', { method: 'POST', body: formData });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '素材上传失败');
+            if (kind === 'background') this.state.packagingBackgroundPath = result.asset_path;
+            else this.state.packagingMusicPath = result.asset_path;
+            if (kind === 'background' && this.elements.packagingBackgroundStyle) {
+                this.elements.packagingBackgroundStyle.value = 'ppt';
+            }
+            this.syncPackagingAssetState();
+            if (kind === 'background') this.refreshPackagingPreview();
+            this.saveCurrentStrategy();
+        } catch (error) {
+            status.textContent = error.message;
+            await window.VidPPTUI.alert(error.message, { type: 'error' });
+        }
+    }
+
+    syncPackagingAssetState() {
+        const hasBackground = Boolean(this.state.packagingBackgroundPath);
+        const hasMusic = Boolean(this.state.packagingMusicPath);
+        if (this.elements.packagingBackgroundRemove) this.elements.packagingBackgroundRemove.hidden = !hasBackground;
+        if (this.elements.packagingMusicRemove) this.elements.packagingMusicRemove.hidden = !hasMusic;
+        if (this.elements.packagingBackgroundStatus) {
+            this.elements.packagingBackgroundStatus.textContent = hasBackground ? '已使用自定义背景图' : '片头片尾共用，可恢复为 PPT 背景';
+        }
+        if (this.elements.packagingMusicStatus) {
+            this.elements.packagingMusicStatus.textContent = hasMusic ? '已使用自定义背景音乐' : '自动裁剪到片头片尾时长';
+        }
     }
 
     bindPackagingLayoutEditor() {
@@ -1764,6 +1844,7 @@ class AICourseStudioApp {
             packaging_accent_color: this.elements.packagingAccentColor?.value || '#D6A239',
             packaging_background_style: this.elements.packagingBackgroundStyle?.value || 'solid',
             packaging_logo_position: this.elements.packagingLogoPosition?.value || 'top-right',
+            packaging_background_path: this.state.packagingBackgroundPath || '',
             packaging_intro_content_x: String(this.packagingLayout.intro.x),
             packaging_intro_content_y: String(this.packagingLayout.intro.y),
             packaging_intro_content_width: String(this.packagingLayout.intro.width),

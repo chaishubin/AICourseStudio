@@ -1304,6 +1304,30 @@ def test_course_packaging_preview_image_endpoint():
     assert response.data.startswith(b"\x89PNG")
 
 
+def test_course_packaging_background_asset_can_be_uploaded(monkeypatch, temp_dir):
+    import web.app as web_app
+    from PIL import Image
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    payload = io.BytesIO()
+    Image.new("RGB", (320, 180), "#123456").save(payload, format="PNG")
+    payload.seek(0)
+
+    response = web_app.app.test_client().post(
+        "/api/course-packaging-asset-upload",
+        data={"kind": "background", "asset": (payload, "background.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    asset_path = Path(response.get_json()["asset_path"])
+    assert asset_path.is_file()
+    options = web_app._course_packaging_options({
+        "packaging_background_path": str(asset_path),
+    })["course_packaging"]
+    assert options["background_path"] == str(asset_path)
+
+
 def test_management_pages_are_separate_from_course_workspace():
     import web.app as web_app
 

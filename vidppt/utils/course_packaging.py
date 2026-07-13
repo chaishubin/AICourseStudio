@@ -161,22 +161,24 @@ def _render_packaging_clip(
         str(image_path),
     ]
     if enable_music:
-        for frequency in _music_frequencies(options):
-            command.extend([
-                "-f",
-                "lavfi",
-                "-t",
-                f"{duration:.2f}",
-                "-i",
-                f"sine=frequency={frequency}:sample_rate={config.audio_sample_rate}",
-            ])
-        audio_filter = (
-            "[1:a][2:a][3:a]"
-            "amix=inputs=3:duration=shortest,"
-            "volume=0.018,"
-            "afade=t=in:st=0:d=0.35,"
-            f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
-        )
+        music_path = Path(str(options.get("music_path") or ""))
+        if music_path.is_file():
+            command.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", str(music_path)])
+            audio_filter = (
+                "[1:a]volume=0.16,afade=t=in:st=0:d=0.35,"
+                f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
+            )
+        else:
+            for frequency in _music_frequencies(options):
+                command.extend([
+                    "-f", "lavfi", "-t", f"{duration:.2f}", "-i",
+                    f"sine=frequency={frequency}:sample_rate={config.audio_sample_rate}",
+                ])
+            audio_filter = (
+                "[1:a][2:a][3:a]amix=inputs=3:duration=shortest,volume=0.018,"
+                "afade=t=in:st=0:d=0.35,"
+                f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
+            )
         filter_complex = f"[0:v]{video_filter}[v];{audio_filter}"
     else:
         command.extend([
@@ -244,7 +246,7 @@ def _render_packaging_image(
         width,
         height,
         palette,
-        background_path if _use_slide_background(options) else None,
+        background_path if (_use_slide_background(options) or options.get("background_path")) else None,
         str(options.get("background_style") or "ppt").strip().lower(),
     )
     draw = ImageDraw.Draw(image)

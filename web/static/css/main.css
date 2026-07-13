@@ -2297,6 +2297,17 @@ body {
     height: 38px;
 }
 
+.packaging-manager-controls .packaging-asset-field {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.packaging-asset-field > small,
+.packaging-asset-field > :first-child {
+    grid-column: 1 / -1;
+}
+
 .packaging-preview-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

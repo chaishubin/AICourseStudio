@@ -137,6 +137,7 @@ UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'ppt', 'pptx'}
 ALLOWED_LOGO_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+ALLOWED_PACKAGING_AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'aac'}
 DEFAULT_STATE_FILE = OUTPUT_FOLDER / 'state.json'
 STATE_FILE = DEFAULT_STATE_FILE
 TASK_DB_FILE = Path(os.environ.get(
@@ -1000,6 +1001,12 @@ def _course_packaging_options(data: dict) -> dict:
     outro_text = str(
         data.get('packaging_outro_text', '感谢观看')
     ).strip()[:120] or '感谢观看'
+    background_path = _packaging_asset_path(
+        data.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
+    )
+    music_path = _packaging_asset_path(
+        data.get('packaging_music_path'), ALLOWED_PACKAGING_AUDIO_EXTENSIONS
+    )
     return {
         'course_packaging': {
             'enable_intro': bool(data.get('enable_intro', True)),
@@ -1014,6 +1021,8 @@ def _course_packaging_options(data: dict) -> dict:
             'organization': organization,
             'instructor': instructor,
             'outro_text': outro_text,
+            'background_path': background_path,
+            'music_path': music_path,
             'intro_label': str(data.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
             'intro_title': str(data.get('packaging_intro_title', '')).strip()[:80],
             'intro_subtitle': str(data.get('packaging_intro_subtitle', '')).strip()[:100],
@@ -1061,6 +1070,19 @@ def _packaging_percent(value, default: float, minimum: float = 0.0) -> float:
     except (TypeError, ValueError):
         number = default
     return round(max(minimum, min(100.0, number)), 2)
+
+
+def _packaging_asset_path(value, allowed_extensions: set[str]) -> str:
+    if not value:
+        return ''
+    path = Path(str(value))
+    if (
+        not path.is_file()
+        or path.parent.resolve() != UPLOAD_FOLDER.resolve()
+        or path.suffix.lower().lstrip('.') not in allowed_extensions
+    ):
+        raise ValueError('片头片尾素材路径无效，请重新上传')
+    return str(path)
 
 
 def _packaging_choice(value, allowed: set[str], default: str) -> str:
@@ -1627,6 +1649,37 @@ def upload_logo():
         logo_path.unlink(missing_ok=True)
         return jsonify({'error': 'Logo 图片无法识别或已损坏'}), 400
     return jsonify({'success': True, 'logo_path': str(logo_path)})
+
+
+@app.route('/api/course-packaging-asset-upload', methods=['POST'])
+def upload_course_packaging_asset():
+    """上传片头片尾共用的背景图或音乐素材。"""
+    from PIL import Image, UnidentifiedImageError
+
+    kind = str(request.form.get('kind') or '').strip().lower()
+    file = request.files.get('asset')
+    if kind not in {'background', 'music'} or not file or not file.filename:
+        return jsonify({'error': '未选择有效的包装素材'}), 400
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    allowed = ALLOWED_LOGO_EXTENSIONS if kind == 'background' else ALLOWED_PACKAGING_AUDIO_EXTENSIONS
+    if ext not in allowed:
+        return jsonify({'error': '背景仅支持 PNG/JPG/WebP，音乐仅支持 MP3/WAV/M4A/AAC'}), 400
+    file.seek(0, 2)
+    size = file.tell()
+    file.seek(0)
+    limit = 15 * 1024 * 1024 if kind == 'background' else 30 * 1024 * 1024
+    if size <= 0 or size > limit:
+        return jsonify({'error': f'素材文件不能为空且不能超过 {limit // 1024 // 1024}MB'}), 400
+    asset_path = UPLOAD_FOLDER / f"packaging_{kind}_{uuid.uuid4().hex}.{ext}"
+    file.save(asset_path)
+    if kind == 'background':
+        try:
+            with Image.open(asset_path) as image:
+                image.verify()
+        except (UnidentifiedImageError, OSError):
+            asset_path.unlink(missing_ok=True)
+            return jsonify({'error': '背景图片无法识别或已损坏'}), 400
+    return jsonify({'success': True, 'asset_path': str(asset_path), 'kind': kind})
 
 
 class WebProgressTracker:
@@ -2711,11 +2764,12 @@ def run_media_generation(task_id: str):
             packaging_options.get('enable_intro')
             or packaging_options.get('enable_outro')
         ):
+            custom_background = Path(packaging_options['background_path']) if packaging_options.get('background_path') else None
             intro_background = (
-                content.pages[0].slide_image if content.pages else None
+                custom_background or (content.pages[0].slide_image if content.pages else None)
             )
             outro_background = (
-                content.pages[-1].slide_image if content.pages else None
+                custom_background or (content.pages[-1].slide_image if content.pages else None)
             )
             report_video(99, '正在添加片头片尾')
             package_course_video(
@@ -2828,7 +2882,11 @@ def run_media_generation(task_id: str):
                         course_title=task.get('course_name') or stem,
                         segment_title=segment.get('title', ''),
                         logo_path=logo_path if logo_path and logo_path.is_file() else None,
-                        intro_background_path=segment_pages[0].slide_image,
+                        intro_background_path=(
+                            Path(packaging_options['background_path'])
+                            if packaging_options.get('background_path')
+                            else segment_pages[0].slide_image
+                        ),
                         outro_background_path=segment_pages[-1].slide_image,
                         cancel_check=cancel_event.is_set,
                     )
@@ -4547,6 +4605,16 @@ def course_packaging_preview_image():
         'outro_content_width': _packaging_percent(request.args.get('packaging_outro_content_width'), 70.0, 18.0),
         'use_slide_background': False,
     }
+    background_path = None
+    try:
+        candidate = _packaging_asset_path(
+            request.args.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
+        )
+        background_path = Path(candidate) if candidate else None
+        if candidate:
+            options['background_path'] = candidate
+    except ValueError:
+        pass
     config = ProcessConfig(
         input_path=Path('course-packaging-preview.pptx'),
         output_dir=Path(tempfile.gettempdir()),
@@ -4562,7 +4630,7 @@ def course_packaging_preview_image():
             course_title=str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例',
             segment_title=str(request.args.get('segment_title', '')).strip()[:80],
             logo_path=None,
-            background_path=None,
+            background_path=background_path,
         )
         data = BytesIO(Path(preview.name).read_bytes())
     data.seek(0)
