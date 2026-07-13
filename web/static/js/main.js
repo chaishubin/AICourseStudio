@@ -4187,11 +4187,16 @@ class AICourseStudioApp {
             row.innerHTML = `
                 <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}</span>
                 <select aria-label="讲解片段 ${index + 1} 对应位置">
+                    <option value="" ${cue.target_id ? '' : 'selected'}>整页（不聚焦）</option>
                     ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
                 </select>
             `;
             row.querySelector('select').addEventListener('change', event => {
-                card._focusCues[index] = { ...card._focusCues[index], target_id: event.target.value };
+                card._focusCues[index] = {
+                    ...card._focusCues[index],
+                    target_id: event.target.value,
+                    manual: true
+                };
                 this.syncCourseFocusCue(card, index);
                 this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
                 clearTimeout(this.previewAutoSaveTimer);

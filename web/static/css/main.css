@@ -4435,12 +4435,17 @@ a.table-action { display: inline-flex; align-items: center; text-decoration: non
     font-weight: 700;
 }
 .debug-runtime-log-card { margin-top: 18px; }
+.debug-server-log-card { margin-top: 18px; border-color: #cbd8f3; }
 .debug-runtime-heading { gap: 18px; }
 .debug-log-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .debug-log-actions .btn-primary-link { min-height: 34px; padding: 8px 12px; }
+.debug-auto-refresh { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; color: var(--color-text-2); font-size: 11px; font-weight: 700; }
+.debug-auto-refresh input { accent-color: var(--color-accent); }
 .debug-runtime-filters { display: grid; grid-template-columns: 1.4fr 1fr 180px; gap: 12px; margin-bottom: 12px; }
+.debug-server-filters { grid-template-columns: 1.4fr 1fr; }
 .debug-runtime-filters .debug-search { min-width: 0; }
 .debug-runtime-output { min-height: 360px; max-height: 680px; margin: 0; white-space: pre; }
+.debug-note-warning { border-color: #efd39d; background: #fff9ed; color: #8a5a12; }
 .debug-file-table { min-width: 720px; }
 .workspace-grid { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:18px; align-items:start; }
 .content-main { max-width:none; gap:14px; }.content-aside { position:sticky; top:94px; }

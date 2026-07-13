@@ -732,6 +732,38 @@ def test_retry_single_page_tts_only_removes_selected_audio(monkeypatch, temp_dir
     assert not (output_dir / "2" / "audio.mp3").exists()
 
 
+def test_resume_queued_video_retry_uses_media_checkpoint(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    source = temp_dir / "lesson.docx"
+    source.write_bytes(b"docx")
+    output_dir = temp_dir / "outputs" / "resume-video-task"
+    output_dir.mkdir(parents=True)
+    preview_path = output_dir / "preview.json"
+    preview_path.write_text(json.dumps({"pages": []}), encoding="utf-8")
+    task_id = "resume-video-task"
+    monkeypatch.setattr(web_app, "tasks", {
+        task_id: {
+            "status": "queued",
+            "file_path": str(source),
+            "output_dir": str(output_dir),
+            "preview_path": str(preview_path),
+            "retry_stage": "video",
+        },
+    })
+    monkeypatch.setattr(web_app, "progress_queues", {})
+    enqueued = []
+    monkeypatch.setattr(
+        web_app.conversion_queue,
+        "enqueue",
+        lambda func, *args: enqueued.append((func, args)),
+    )
+
+    web_app.resume_queued_tasks()
+
+    assert enqueued == [(web_app.run_media_generation, (task_id,))]
+
+
 def test_task_list_includes_source_path_for_preview_retry(monkeypatch, temp_dir):
     import web.app as web_app
 
@@ -1322,19 +1354,49 @@ def test_course_packaging_preview_image_endpoint():
     assert response.data.startswith(b"\x89PNG")
 
 
+def test_course_packaging_preview_image_uses_uploaded_school_logo(monkeypatch, temp_dir):
+    import web.app as web_app
+    import vidppt.utils.course_packaging as course_packaging
+    from PIL import Image
+
+    logo = temp_dir / "logo_preview.png"
+    Image.new("RGBA", (120, 40), "#1D4ED8").save(logo)
+    render_kwargs = {}
+
+    def fake_render(output, *_args, **kwargs):
+        render_kwargs.update(kwargs)
+        Image.new("RGB", (960, 540), "#FFFFFF").save(output)
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    monkeypatch.setattr(course_packaging, "_render_packaging_image", fake_render)
+    response = web_app.app.test_client().get(
+        "/api/course-packaging-preview-image",
+        query_string={"kind": "intro", "school_logo_path": str(logo)},
+    )
+
+    assert response.status_code == 200
+    assert render_kwargs["logo_path"] == logo
+
+
 def test_course_packaging_preview_video_endpoint(monkeypatch, temp_dir):
     import web.app as web_app
     import vidppt.utils.course_packaging as course_packaging
 
     render_calls = []
 
-    def fake_render(output, *_args, **_kwargs):
-        render_calls.append(output)
+    def fake_render(output, *_args, **kwargs):
+        render_calls.append((output, kwargs))
         output.write_bytes(b"fake mp4")
 
     monkeypatch.setattr(course_packaging, "_render_packaging_clip", fake_render)
     monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
-    query = {"kind": "intro", "packaging_enable_motion": "true"}
+    logo = temp_dir / "logo_preview.png"
+    logo.write_bytes(b"fake png")
+    query = {
+        "kind": "intro",
+        "packaging_enable_motion": "true",
+        "school_logo_path": str(logo),
+    }
     response = web_app.app.test_client().get(
         "/api/course-packaging-preview-video",
         query_string=query,
@@ -1353,6 +1415,7 @@ def test_course_packaging_preview_video_endpoint(monkeypatch, temp_dir):
     assert range_response.data == b"fake"
     assert range_response.headers["Content-Range"] == "bytes 0-3/8"
     assert len(render_calls) == 1
+    assert render_calls[0][1]["logo_path"] == logo
 
 
 def test_course_packaging_background_asset_can_be_uploaded(monkeypatch, temp_dir):
@@ -1443,6 +1506,7 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-outro-tab"' in html
     assert 'id="packaging-intro-panel"' in html
     assert 'data-packaging-presets="intro"' in html
+    assert 'data-packaging-preset-status="intro"' in html
     assert 'data-packaging-source="intro"' in html
     assert 'id="packaging-intro-primary-color"' in html
     assert 'id="packaging-intro-text-color"' in html
@@ -1457,6 +1521,8 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-mid-video-library"' in html
     assert 'id="packaging-intro-music-library"' in html
     assert 'id="packaging-outro-music-library"' in html
+    assert 'packaging-intro-music-style' not in html
+    assert '音乐风格' not in html
     assert 'id="packaging-intro-background-input"' in html
     assert 'id="packaging-outro-background-input"' in html
     assert 'id="packaging-intro-video-input"' in html
@@ -1467,7 +1533,7 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-copyright"' in html
     assert 'id="packaging-transition-seconds"' in html
     assert 'id="upload-area"' not in html
-    assert '/static/js/course_packaging.js?v=13' in html
+    assert '/static/js/course_packaging.js?v=16' in html
 
 
 def test_packaging_template_management_crud_and_render_resolution():
@@ -1642,11 +1708,13 @@ def test_management_pages_are_separate_from_course_workspace():
     assert 'id="debug-task-detail"' in debug_page
     assert 'id="debug-diagnostics"' in debug_page
     assert 'id="debug-runtime-output"' in debug_page
+    assert 'id="debug-server-output"' in debug_page
+    assert '下载完整服务器日志' in debug_page
     assert '下载完整日志' in debug_page
     assert 'IP 地址' in debug_page
     assert 'id="upload-area"' not in debug_page
     assert 'js/debug.js' in debug_page
-    assert '/static/js/debug.js?v=3' in debug_page
+    assert '/static/js/debug.js?v=4' in debug_page
 
 
 def test_accounts_page_is_separate_admin_page():
@@ -1744,6 +1812,42 @@ def test_debug_runtime_logs_are_filterable_and_redacted(monkeypatch, temp_dir):
     assert 'attachment; filename="vidppt-runtime-full.log"' in downloaded.headers['Content-Disposition']
     assert 'task-b' in downloaded_text
     assert 'secret-value' not in downloaded_text
+
+
+def test_debug_server_logs_are_read_only_filterable_and_redacted(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    log_file = temp_dir / 'server.log'
+    log_file.write_text(
+        '===== VidPPT server started =====\n'
+        '127.0.0.1 GET /api/tasks 200\n'
+        'task=server-task password=unsafe-value\n'
+        'Traceback: example failure\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(web_app, '_server_log_files', lambda: [log_file])
+
+    response = web_app.app.test_client().get(
+        '/api/debug/server-logs?task_id=server-task'
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload['available'] is True
+    assert payload['source'] == 'container_stdout_stderr'
+    assert payload['matched_count'] == 1
+    assert 'unsafe-value' not in payload['lines'][0]
+    assert 'password=[已隐藏]' in payload['lines'][0]
+    assert response.headers['Cache-Control'] == 'no-store'
+
+    downloaded = web_app.app.test_client().get(
+        '/api/debug/server-logs?download=1'
+    )
+    downloaded_text = downloaded.get_data(as_text=True)
+    assert downloaded.status_code == 200
+    assert 'filename="vidppt-server-full.log"' in downloaded.headers['Content-Disposition']
+    assert 'Traceback: example failure' in downloaded_text
+    assert 'unsafe-value' not in downloaded_text
 
 
 def test_debug_overview_includes_admin_diagnostics(monkeypatch):

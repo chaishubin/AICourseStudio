@@ -18,6 +18,15 @@ class DebugWorkbench {
         this.runtimeRefresh = document.getElementById('debug-runtime-refresh');
         this.runtimeCopy = document.getElementById('debug-runtime-copy');
         this.runtimeDownload = document.getElementById('debug-runtime-download');
+        this.serverOutput = document.getElementById('debug-server-output');
+        this.serverNote = document.getElementById('debug-server-note');
+        this.serverSearch = document.getElementById('debug-server-search');
+        this.serverTask = document.getElementById('debug-server-task');
+        this.serverRefresh = document.getElementById('debug-server-refresh');
+        this.serverCopy = document.getElementById('debug-server-copy');
+        this.serverDownload = document.getElementById('debug-server-download');
+        this.serverAutoRefresh = document.getElementById('debug-server-auto-refresh');
+        this.serverLoading = false;
         this.selectedTaskId = null;
         this.init();
     }
@@ -30,9 +39,17 @@ class DebugWorkbench {
         this.runtimeTask?.addEventListener('input', () => this.loadRuntimeLogs());
         this.runtimeLevel?.addEventListener('change', () => this.loadRuntimeLogs());
         this.runtimeCopy?.addEventListener('click', () => this.copyRuntimeLogs());
+        this.serverRefresh?.addEventListener('click', () => this.loadServerLogs());
+        this.serverSearch?.addEventListener('input', () => this.loadServerLogs());
+        this.serverTask?.addEventListener('input', () => this.loadServerLogs());
+        this.serverCopy?.addEventListener('click', () => this.copyServerLogs());
         this.loadOverview();
         this.loadLogs();
         this.loadRuntimeLogs();
+        this.loadServerLogs();
+        window.setInterval(() => {
+            if (this.serverAutoRefresh?.checked && !document.hidden) this.loadServerLogs();
+        }, 3000);
     }
 
     async loadOverview() {
@@ -146,7 +163,9 @@ class DebugWorkbench {
     async loadTask(taskId) {
         this.selectedTaskId = taskId;
         if (this.runtimeTask) this.runtimeTask.value = taskId;
+        if (this.serverTask) this.serverTask.value = taskId;
         this.loadRuntimeLogs();
+        this.loadServerLogs();
         this.detailTitle.textContent = taskId;
         this.detail.innerHTML = '<div class="debug-empty">正在读取任务详情...</div>';
         this.taskBody?.querySelectorAll('[data-task-id]').forEach(row => {
@@ -323,6 +342,55 @@ class DebugWorkbench {
         try {
             await navigator.clipboard.writeText(this.runtimeOutput?.textContent || '');
             window.VidPPTUI?.toast('当前日志已复制', { type: 'success' });
+        } catch (error) {
+            window.VidPPTUI?.toast('复制失败，请手动选择日志文本', { type: 'error' });
+        }
+    }
+
+    serverParams(includeDownload = false) {
+        const params = new URLSearchParams({ limit: '1500' });
+        const keyword = (this.serverSearch?.value || '').trim();
+        const taskId = (this.serverTask?.value || '').trim();
+        if (keyword) params.set('q', keyword);
+        if (taskId) params.set('task_id', taskId);
+        if (includeDownload) params.set('download', '1');
+        return params;
+    }
+
+    async loadServerLogs() {
+        if (!this.serverOutput || this.serverLoading) return;
+        this.serverLoading = true;
+        this.serverRefresh.disabled = true;
+        const nearBottom = this.serverOutput.scrollHeight - this.serverOutput.scrollTop - this.serverOutput.clientHeight < 80;
+        const previousTop = this.serverOutput.scrollTop;
+        try {
+            const response = await fetch(`/api/debug/server-logs?${this.serverParams().toString()}`, {
+                cache: 'no-store'
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '读取服务器日志失败');
+            this.serverOutput.textContent = (data.lines || []).join('\n') || '暂无服务器日志。';
+            const shown = (data.lines || []).length;
+            const prefix = data.truncated
+                ? `共匹配 ${data.matched_count} 行，页面显示最近 ${shown} 行。`
+                : `共匹配 ${data.matched_count} 行。`;
+            this.serverNote.textContent = `${prefix} ${data.note || ''}`;
+            this.serverNote.classList.toggle('debug-note-warning', !data.available);
+            this.serverDownload.href = `/api/debug/server-logs?${this.serverParams(true).toString()}`;
+            if (nearBottom) this.serverOutput.scrollTop = this.serverOutput.scrollHeight;
+            else this.serverOutput.scrollTop = previousTop;
+        } catch (error) {
+            this.serverOutput.textContent = error.message;
+        } finally {
+            this.serverLoading = false;
+            this.serverRefresh.disabled = false;
+        }
+    }
+
+    async copyServerLogs() {
+        try {
+            await navigator.clipboard.writeText(this.serverOutput?.textContent || '');
+            window.VidPPTUI?.toast('当前服务器日志已复制', { type: 'success' });
         } catch (error) {
             window.VidPPTUI?.toast('复制失败，请手动选择日志文本', { type: 'error' });
         }

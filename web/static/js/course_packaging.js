@@ -76,10 +76,7 @@ class CoursePackagingDesigner {
             packaging_outro_logo_y: 'packaging-outro-logo-y',
             packaging_intro_motion_style: 'packaging-intro-motion-style',
             packaging_mid_motion_style: 'packaging-mid-motion-style',
-            packaging_outro_motion_style: 'packaging-outro-motion-style',
-            packaging_intro_music_style: 'packaging-intro-music-style',
-            packaging_mid_music_style: 'packaging-mid-music-style',
-            packaging_outro_music_style: 'packaging-outro-music-style'
+            packaging_outro_motion_style: 'packaging-outro-motion-style'
         };
         this.checkboxes = {
             enable_intro: 'enable-intro',
@@ -198,7 +195,7 @@ class CoursePackagingDesigner {
         document.querySelectorAll('.packaging-manager-page input, .packaging-manager-page select').forEach(control => {
             if (control.type !== 'file') control.addEventListener('change', () => {
                 this.markDirty();
-                if (/-(primary|accent|text)-color$/.test(control.id)) {
+                if (/-(primary|accent|text)-color$/.test(control.id) || /-motion-style$/.test(control.id)) {
                     const side = control.id.split('-')[1];
                     this.element(`packaging-${side}-visual-preset`).value = 'custom';
                 }
@@ -361,6 +358,12 @@ class CoursePackagingDesigner {
             document.querySelectorAll(`[data-packaging-presets="${side}"] [data-preset]`).forEach(button => {
                 button.classList.toggle('is-active', button.dataset.preset === preset);
             });
+            const presetStatus = document.querySelector(`[data-packaging-preset-status="${side}"]`);
+            if (presetStatus) {
+                presetStatus.textContent = preset === 'custom'
+                    ? '已自定义 · 当前设置已覆盖视觉方案'
+                    : '一次应用协调的背景、配色和动效';
+            }
             const source = this.element(`packaging-${side}-background-source`)?.value || 'ppt';
             document.querySelectorAll(`[data-packaging-source="${side}"] [data-value]`).forEach(button => {
                 button.classList.toggle('is-active', button.dataset.value === source);
@@ -386,7 +389,7 @@ class CoursePackagingDesigner {
 
     copyCurrentStyle() {
         const source = this.activeSide;
-        const fieldSuffixes = ['visual-preset', 'background-source', 'primary-color', 'accent-color', 'text-color', 'background-style', 'logo-position', 'logo-x', 'logo-y', 'motion-style', 'music-style'];
+        const fieldSuffixes = ['visual-preset', 'background-source', 'primary-color', 'accent-color', 'text-color', 'background-style', 'logo-position', 'logo-x', 'logo-y', 'motion-style'];
         const checkboxSuffixes = ['use-slide-background', 'enable-motion', 'enable-music'];
         ['intro', 'mid', 'outro'].filter(side => side !== source).forEach(side => {
             fieldSuffixes.forEach(suffix => {
@@ -408,7 +411,7 @@ class CoursePackagingDesigner {
         this.element(`packaging-${side}-accent-color`).value = button.dataset.accent;
         this.element(`packaging-${side}-text-color`).value = button.dataset.text;
         this.element(`packaging-${side}-motion-style`).value = button.dataset.motion;
-        this.setBackgroundSource(side, button.dataset.source, button.dataset.style);
+        this.setBackgroundSource(side, button.dataset.source, button.dataset.style, true);
         this.markDirty();
         this.syncDesignerState();
         this.refreshPreview(side);
@@ -424,8 +427,9 @@ class CoursePackagingDesigner {
         this.refreshPreview(side);
     }
 
-    setBackgroundSource(side, source, style = null) {
+    setBackgroundSource(side, source, style = null, preservePreset = false) {
         this.element(`packaging-${side}-background-source`).value = source;
+        if (!preservePreset) this.element(`packaging-${side}-visual-preset`).value = 'custom';
         const backgroundStyle = this.element(`packaging-${side}-background-style`);
         const usePpt = this.element(`packaging-${side}-use-slide-background`);
         if (style) backgroundStyle.value = style;
@@ -595,9 +599,11 @@ class CoursePackagingDesigner {
 
     previewUrl(kind, media = 'video') {
         const values = this.collect();
+        const schoolLogoPath = this.storedStrategy().school_logo_path || null;
         const params = new URLSearchParams({
             kind,
             ...Object.fromEntries(Object.entries(values).filter(([, value]) => value !== null)),
+            ...(schoolLogoPath ? { school_logo_path: schoolLogoPath } : {}),
             course_title: '人工智能课程示例',
             segment_title: kind === 'intro' ? '第一讲 课程导入' : ''
         });

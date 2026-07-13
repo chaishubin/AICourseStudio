@@ -24,6 +24,9 @@ services:
       VIDPPT_MEMORY_LIMIT: ${VIDPPT_MEMORY_LIMIT:-80}
       VIDPPT_MIN_DISK_GB: ${VIDPPT_MIN_DISK_GB:-2}
       VIDPPT_RESOURCE_CHECK_INTERVAL: ${VIDPPT_RESOURCE_CHECK_INTERVAL:-5}
+      VIDPPT_SERVER_LOG_FILE: ${VIDPPT_SERVER_LOG_FILE:-/app/web/outputs/_system/server.log}
+      VIDPPT_SERVER_LOG_MAX_BYTES: ${VIDPPT_SERVER_LOG_MAX_BYTES:-52428800}
+      VIDPPT_SERVER_LOG_BACKUPS: ${VIDPPT_SERVER_LOG_BACKUPS:-5}
     volumes:
       - ../web/uploads:/app/web/uploads
       - ../web/outputs:/app/web/outputs

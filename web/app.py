@@ -51,8 +51,10 @@ from vidppt.core.course import Course, CourseSection, KnowledgePoint
 from vidppt.review import CourseReviewError, CourseReviewer
 from vidppt.utils.subtitle_rules import normalize_subtitle_text
 from vidppt.utils.focus_guidance import (
+    FOCUS_CUES_VERSION,
     build_focus_cues,
     extract_presentation_focus_targets,
+    normalize_focus_targets,
     normalize_focus_cues,
 )
 from vidppt.utils.progress import ProcessStage
@@ -156,6 +158,10 @@ TASK_DB_FILE = Path(os.environ.get(
 VOICE_PREVIEW_FOLDER = OUTPUT_FOLDER / 'voice_previews'
 RUNTIME_LOG_FOLDER = OUTPUT_FOLDER / '_system'
 RUNTIME_LOG_FILE = RUNTIME_LOG_FOLDER / 'vidppt-runtime.log'
+SERVER_LOG_FILE = Path(os.environ.get(
+    'VIDPPT_SERVER_LOG_FILE',
+    str(RUNTIME_LOG_FOLDER / 'server.log'),
+))
 VOICE_PREVIEW_TEXT = "你好，欢迎使用 AI 课程工作室，这是当前音色的试听效果。"
 SUBTITLE_FONT_FALLBACKS = [
     'Noto Sans CJK SC',
@@ -848,6 +854,15 @@ def _runtime_log_files() -> list[Path]:
     )
 
 
+def _server_log_files() -> list[Path]:
+    """返回容器启动器镜像的 stdout/stderr 日志，按时间从旧到新排列。"""
+    candidates = [Path(path) for path in glob.glob(f'{SERVER_LOG_FILE}*')]
+    return sorted(
+        (path for path in candidates if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+
 _LOG_SECRET_PATTERN = re.compile(
     r'''(?i)((?:["']?(?:api[_-]?key|access[_-]?token|secret(?:[_-]?key)?|password|authorization|token)["']?\s*[:=]\s*["']?))([^"'\s,;}]+)'''
 )
@@ -891,6 +906,38 @@ def _read_runtime_log_lines(limit: int = 1000, keyword: str = '', level: str = '
         'matched_count': total_matched,
         'truncated': total_matched > len(matched),
         'files': len(_runtime_log_files()),
+    }
+
+
+def _read_server_log_lines(limit: int = 1500, keyword: str = '', task_id: str = '') -> dict:
+    """读取容器 stdout/stderr 尾部，包含启动信息、请求输出和 traceback。"""
+    limit = max(1, min(limit, 5000))
+    matched = []
+    total_matched = 0
+    keyword_lower = keyword.lower()
+    task_lower = task_id.lower()
+    files = _server_log_files()
+    for path in files:
+        try:
+            with path.open('r', encoding='utf-8', errors='replace') as stream:
+                for raw_line in stream:
+                    line = _redact_log_text(raw_line.rstrip('\n'))
+                    lower = line.lower()
+                    if keyword_lower and keyword_lower not in lower:
+                        continue
+                    if task_lower and task_lower not in lower:
+                        continue
+                    total_matched += 1
+                    matched.append(line)
+                    if len(matched) > limit:
+                        matched.pop(0)
+        except OSError:
+            continue
+    return {
+        'lines': matched,
+        'matched_count': total_matched,
+        'truncated': total_matched > len(matched),
+        'files': len(files),
     }
 
 
@@ -2703,27 +2750,44 @@ def _persist_preview(task_id: str, preview: dict) -> None:
 
 
 def _ensure_preview_focus(preview: dict) -> bool:
-    """Backfill focus data for previews created before focus guidance existed."""
+    """Backfill targets and migrate stale automatic focus mappings."""
     pages = preview.get('pages', [])
-    if not pages or all('focus_targets' in page for page in pages):
+    if not pages:
         return False
-    presentation_path = preview.get('presentation_path')
-    if not presentation_path or Path(presentation_path).suffix.lower() != '.pptx':
-        return False
-    try:
-        targets_by_page = extract_presentation_focus_targets(Path(presentation_path))
-    except Exception as exc:
-        logger.warning(f'补充讲解焦点失败: {exc}')
-        return False
+    targets_by_page = []
+    if any('focus_targets' not in page for page in pages):
+        presentation_path = preview.get('presentation_path')
+        if not presentation_path or Path(presentation_path).suffix.lower() != '.pptx':
+            return False
+        try:
+            targets_by_page = extract_presentation_focus_targets(Path(presentation_path))
+        except Exception as exc:
+            logger.warning(f'补充讲解焦点失败: {exc}')
+            return False
+    changed = False
     for page in pages:
         try:
             page_index = int(page.get('page_number', 0)) - 1
         except (TypeError, ValueError):
             continue
-        targets = targets_by_page[page_index] if 0 <= page_index < len(targets_by_page) else []
-        page['focus_targets'] = targets
-        page['focus_cues'] = build_focus_cues(page.get('script', ''), targets)
-    return True
+        if 'focus_targets' not in page:
+            page['focus_targets'] = (
+                targets_by_page[page_index]
+                if 0 <= page_index < len(targets_by_page) else []
+            )
+            changed = True
+        if page.get('focus_cues_version') != FOCUS_CUES_VERSION:
+            page['focus_targets'] = normalize_focus_targets(
+                page.get('focus_targets', [])
+            )
+            page['focus_cues'] = normalize_focus_cues(
+                page.get('focus_cues'),
+                page.get('script', ''),
+                page.get('focus_targets', []),
+            )
+            page['focus_cues_version'] = FOCUS_CUES_VERSION
+            changed = True
+    return changed
 
 
 def _quality_mode_for_task(task: dict | None) -> str:
@@ -4853,6 +4917,7 @@ def debug_overview():
         'task_db_file': _path_info(TASK_DB_FILE),
         'voice_preview_folder': _path_info(VOICE_PREVIEW_FOLDER),
         'runtime_log_file': _path_info(RUNTIME_LOG_FILE),
+        'server_log_file': _path_info(SERVER_LOG_FILE),
     }
     env_status = _debug_env_status()
     tools = _debug_tool_status()
@@ -4993,6 +5058,58 @@ def debug_runtime_logs():
         'note': '页面显示最近匹配的日志；“下载完整日志”会输出保留期内所有轮换日志，并应用当前筛选条件。',
     })
     return jsonify(payload)
+
+
+@app.route('/api/debug/server-logs')
+def debug_server_logs():
+    """检索或下载容器 Web 进程的 stdout/stderr 镜像日志。"""
+    blocked = _require_super_admin()
+    if blocked:
+        return blocked
+    keyword = (request.args.get('q') or '').strip()
+    task_id = (request.args.get('task_id') or '').strip()
+    if request.args.get('download') == '1':
+        files = _server_log_files()
+
+        def generate():
+            for path in files:
+                yield f'===== {path.name} =====\n'
+                try:
+                    with path.open('r', encoding='utf-8', errors='replace') as stream:
+                        for raw_line in stream:
+                            line = _redact_log_text(raw_line.rstrip('\n'))
+                            lower = line.lower()
+                            if keyword and keyword.lower() not in lower:
+                                continue
+                            if task_id and task_id.lower() not in lower:
+                                continue
+                            yield f'{line}\n'
+                except OSError as exc:
+                    yield f'[服务器日志文件读取失败：{exc}]\n'
+
+        response = Response(generate(), mimetype='text/plain; charset=utf-8')
+        response.headers['Content-Disposition'] = 'attachment; filename="vidppt-server-full.log"'
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    try:
+        limit = int(request.args.get('limit', 1500))
+    except (TypeError, ValueError):
+        limit = 1500
+    payload = _read_server_log_lines(limit, keyword, task_id)
+    available = bool(payload['files'])
+    payload.update({
+        'available': available,
+        'log_path': str(SERVER_LOG_FILE),
+        'source': 'container_stdout_stderr',
+        'note': (
+            '此处是容器 Web 进程真实 stdout/stderr 的只读镜像，页面自动刷新不会执行服务器命令。'
+            if available else
+            '服务器日志尚未生成；需要使用新版容器启动器重建并启动服务后才会开始记录。'
+        ),
+    })
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.route('/api/active-task')
@@ -5306,6 +5423,7 @@ def course_packaging_preview_image():
         f'{kind}_logo_y': _packaging_percent(args.get(f'packaging_{kind}_logo_y'), 10.0),
     })
     background_path = None
+    logo_path = None
     try:
         candidate = _packaging_asset_path(
             args.get(f'packaging_{kind}_background_path') or args.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
@@ -5313,6 +5431,11 @@ def course_packaging_preview_image():
         background_path = Path(candidate) if candidate else None
         if candidate:
             options[f'{kind}_background_path'] = candidate
+    except ValueError:
+        pass
+    try:
+        candidate = _packaging_asset_path(args.get('school_logo_path'), ALLOWED_LOGO_EXTENSIONS)
+        logo_path = Path(candidate) if candidate else None
     except ValueError:
         pass
     config = ProcessConfig(
@@ -5329,7 +5452,7 @@ def course_packaging_preview_image():
             kind=kind,
             course_title=str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例',
             segment_title=str(request.args.get('segment_title', '')).strip()[:80],
-            logo_path=None,
+            logo_path=logo_path,
             background_path=background_path,
         )
         data = BytesIO(Path(preview.name).read_bytes())
@@ -5362,9 +5485,13 @@ def course_packaging_preview_video():
             preview_args[key] = str(preview_args[key]).strip().lower() in {'1', 'true', 'yes', 'on'}
     try:
         options = _course_packaging_options(preview_args)['course_packaging']
+        logo_candidate = _packaging_asset_path(
+            preview_args.get('school_logo_path'), ALLOWED_LOGO_EXTENSIONS
+        )
     except (TypeError, ValueError) as error:
         return jsonify({'error': str(error)}), 400
     background_path = Path(options['background_path']) if options.get('background_path') else None
+    logo_path = Path(logo_candidate) if logo_candidate else None
     config = ProcessConfig(
         input_path=Path('course-packaging-preview.pptx'),
         output_dir=Path(tempfile.gettempdir()),
@@ -5374,7 +5501,7 @@ def course_packaging_preview_video():
     course_title = str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例'
     segment_title = str(request.args.get('segment_title', '')).strip()[:80]
     cache_payload = {
-        'version': 6,
+        'version': 7,
         'kind': kind,
         'options': options,
         'course_title': course_title,
@@ -5386,6 +5513,9 @@ def course_packaging_preview_video():
         if asset_path.is_file():
             stat = asset_path.stat()
             cache_payload[f'{asset_key}_file'] = [stat.st_size, stat.st_mtime_ns]
+    if logo_path and logo_path.is_file():
+        stat = logo_path.stat()
+        cache_payload['school_logo_file'] = [stat.st_size, stat.st_mtime_ns]
     cache_key = hashlib.sha256(
         json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
     ).hexdigest()
@@ -5405,7 +5535,7 @@ def course_packaging_preview_video():
                     kind=kind,
                     course_title=course_title,
                     segment_title=segment_title,
-                    logo_path=None,
+                    logo_path=logo_path,
                     background_path=background_path,
                 )
                 temporary_path.replace(cache_path)
@@ -5637,6 +5767,14 @@ def resume_queued_tasks():
             continue
         strategy = task.get('strategy') or {}
         progress_queues[task_id] = Queue()
+        if (
+            task.get('retry_stage') in {'page_tts', 'tts', 'video', 'media'}
+            and task.get('preview_path')
+            and Path(task['preview_path']).exists()
+        ):
+            conversion_queue.enqueue(run_media_generation, task_id)
+            resumed += 1
+            continue
         suffix = Path(file_path).suffix.lower()
         if suffix in {'.docx', '.pdf'}:
             conversion_queue.enqueue(

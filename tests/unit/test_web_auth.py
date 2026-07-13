@@ -128,6 +128,27 @@ def test_super_admin_sees_all_tasks(monkeypatch):
     }
 
 
+def test_server_logs_require_debug_permission(monkeypatch):
+    import web.app as app_module
+
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, '_server_log_files', lambda: [])
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+        sess['permissions'] = []
+
+    denied = client.get('/api/debug/server-logs')
+    assert denied.status_code == 403
+
+    with client.session_transaction() as sess:
+        sess['permissions'] = ['view_debug']
+    allowed = client.get('/api/debug/server-logs')
+    assert allowed.status_code == 200
+
+
 def test_tasks_default_order_by_created_at_desc(monkeypatch):
     import web.app as app_module
 

@@ -52,6 +52,7 @@ RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple &&
 # 7. 复制项目代码
 COPY vidppt/ vidppt/
 COPY web/ web/
+COPY docker/run_web.py docker/run_web.py
 
 # 8. 创建上传/输出目录
 RUN mkdir -p /app/web/uploads /app/web/outputs
@@ -60,4 +61,4 @@ RUN mkdir -p /app/web/uploads /app/web/outputs
 EXPOSE 5000
 
 # 10. 启动 Web 服务
-CMD ["python3", "web/app.py", "5000"]
+CMD ["python3", "-u", "docker/run_web.py"]

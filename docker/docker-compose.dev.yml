@@ -2,7 +2,7 @@ services:
   vidppt:
     environment:
       VIDPPT_DEVELOPMENT: "true"
-      VIDPPT_RELOAD: "true"
+      VIDPPT_RELOAD: "${VIDPPT_RELOAD:-true}"
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - ../web:/app/web

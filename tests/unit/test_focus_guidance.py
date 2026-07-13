@@ -4,9 +4,11 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from vidppt.utils.focus_guidance import (
+    FOCUS_CUES_VERSION,
     build_focus_cues,
     extract_presentation_focus_targets,
     focus_timeline,
+    normalize_focus_targets,
     normalize_focus_cues,
 )
 from vidppt.utils.video_composer import VideoComposer
@@ -23,6 +25,8 @@ def test_extract_targets_and_match_narration(tmp_path: Path):
     first.text = "明确学习目标"
     second = slide.shapes.add_textbox(Inches(6.5), Inches(2), Inches(5), Inches(0.8))
     second.text = "检查学习结果"
+    layout_label = slide.shapes.add_textbox(Inches(0.8), Inches(5), Inches(2), Inches(0.5))
+    layout_label.text = "封面页"
     path = tmp_path / "focus.pptx"
     presentation.save(path)
 
@@ -34,6 +38,7 @@ def test_extract_targets_and_match_narration(tmp_path: Path):
     assert cues[0]["target_id"] != cues[1]["target_id"]
     assert next(item for item in targets if item["id"] == cues[0]["target_id"])["text"] == "明确学习目标"
     assert next(item for item in targets if item["id"] == cues[1]["target_id"])["text"] == "检查学习结果"
+    assert all(item["text"] != "封面页" for item in targets)
 
 
 def test_normalize_focus_cues_preserves_valid_manual_target():
@@ -42,13 +47,51 @@ def test_normalize_focus_cues_preserves_valid_manual_target():
         {"id": "second", "text": "结果", "role": "content"},
     ]
     cues = normalize_focus_cues(
-        [{"text": "旧文本", "target_id": "second"}],
+        [{"text": "现在讲目标", "target_id": "second", "manual": True}],
         "现在讲目标。",
         targets,
     )
 
     assert cues[0]["text"] == "现在讲目标"
     assert cues[0]["target_id"] == "second"
+    assert cues[0]["manual"] is True
+
+
+def test_low_similarity_narration_keeps_whole_slide_instead_of_forcing_target():
+    targets = [
+        {"id": "summary", "text": "课程介绍与学习目标", "role": "content"},
+    ]
+
+    cues = build_focus_cues("答案可能和多数人的直觉相反。", targets)
+
+    assert cues[0]["target_id"] == ""
+
+
+def test_normalize_focus_targets_removes_layout_labels_and_sorts_visually():
+    targets = [
+        {"id": "second", "text": "第二项", "x": 0.1, "y": 0.6},
+        {"id": "label", "text": "封面页", "x": 0.1, "y": 0.2},
+        {"id": "first", "text": "第一项", "x": 0.1, "y": 0.4},
+    ]
+
+    normalized = normalize_focus_targets(targets)
+
+    assert [target["id"] for target in normalized] == ["first", "second"]
+
+
+def test_normalize_focus_cues_recomputes_old_automatic_choices():
+    targets = [
+        {"id": "wrong", "text": "课程介绍", "role": "content"},
+        {"id": "right", "text": "检查学习结果", "role": "content"},
+    ]
+
+    cues = normalize_focus_cues(
+        [{"text": "检查学习结果", "target_id": "wrong"}],
+        "随后检查学习结果。",
+        targets,
+    )
+
+    assert cues[0]["target_id"] == "right"
 
 
 def test_focus_timeline_uses_real_page_duration_and_weights():
@@ -64,6 +107,42 @@ def test_focus_timeline_uses_real_page_duration_and_weights():
     assert timeline[0]["end"] == 2
     assert timeline[1]["start"] == 2
     assert timeline[1]["end"] == 8
+
+
+def test_focus_timeline_preserves_unfocused_time_gaps():
+    timeline = focus_timeline(
+        [
+            {"text": "聚焦", "target_id": "first", "weight": 1},
+            {"text": "整页", "target_id": "", "weight": 1},
+            {"text": "再次聚焦", "target_id": "second", "weight": 2},
+        ],
+        8.0,
+    )
+
+    assert [(cue["start"], cue["end"]) for cue in timeline] == [
+        (0, 2), (2, 4), (4, 8),
+    ]
+
+
+def test_existing_preview_focus_cues_are_migrated():
+    import web.app as web_app
+
+    preview = {"pages": [{
+        "page_number": 1,
+        "script": "答案可能和多数人的直觉相反。",
+        "focus_targets": [
+            {"id": "summary", "text": "课程介绍与学习目标", "role": "content"},
+        ],
+        "focus_cues": [
+            {"text": "答案可能和多数人的直觉相反", "target_id": "summary"},
+        ],
+    }]}
+
+    changed = web_app._ensure_preview_focus(preview)
+
+    assert changed is True
+    assert preview["pages"][0]["focus_cues_version"] == FOCUS_CUES_VERSION
+    assert preview["pages"][0]["focus_cues"][0]["target_id"] == ""
 
 
 def test_video_focus_layers_follow_cue_timeline():

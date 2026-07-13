@@ -11,7 +11,17 @@ from pptx import Presentation
 from .subtitle_rules import subtitle_chunks
 
 
-_IGNORED_TEXT = {"AI COURSE STUDIO", "课程内容", "课程导入"}
+FOCUS_CUES_VERSION = 3
+_MIN_FOCUS_SIMILARITY = 0.22
+_IGNORED_TEXT = {
+    "AI COURSE STUDIO",
+    "课程内容",
+    "课程导入",
+    "封面页",
+    "内容页",
+    "过渡页",
+    "结束页",
+}
 
 
 def extract_presentation_focus_targets(presentation_path: Path) -> list[list[dict]]:
@@ -48,8 +58,20 @@ def extract_presentation_focus_targets(presentation_path: Path) -> list[list[dic
                 "height": round(height, 5),
                 "role": "title" if y < 0.24 else "content",
             })
-        pages.append(_deduplicate_targets(targets))
+        pages.append(normalize_focus_targets(targets))
     return pages
+
+
+def normalize_focus_targets(targets: list[dict]) -> list[dict]:
+    """Remove layout labels and keep targets in visual reading order."""
+    focusable = [
+        target for target in targets
+        if isinstance(target, dict) and _is_focusable_text(str(target.get("text", "")))
+    ]
+    return sorted(
+        _deduplicate_targets(focusable),
+        key=lambda target: (round(float(target.get("y", 0)), 2), float(target.get("x", 0))),
+    )
 
 
 def build_focus_cues(script: str, targets: list[dict]) -> list[dict]:
@@ -61,24 +83,21 @@ def build_focus_cues(script: str, targets: list[dict]) -> list[dict]:
     candidates = content_targets or targets
     cues = []
     previous_index = 0
-    for unit_index, unit in enumerate(units):
+    for unit in units:
         scored = []
         for target_index, target in enumerate(candidates):
-            score = _text_similarity(unit, str(target.get("text", "")))
             if target_index < previous_index:
-                score -= 0.12
+                continue
+            score = _text_similarity(unit, str(target.get("text", "")))
             scored.append((score, target_index, target))
         score, target_index, target = max(scored, key=lambda item: item[0])
-        if score < 0.18:
-            target_index = min(
-                len(candidates) - 1,
-                round(unit_index * len(candidates) / max(1, len(units))),
-            )
-            target = candidates[target_index]
-        previous_index = max(previous_index, target_index)
+        target_id = ""
+        if score >= _MIN_FOCUS_SIMILARITY:
+            target_id = target["id"]
+            previous_index = target_index
         cues.append({
             "text": unit,
-            "target_id": target["id"],
+            "target_id": target_id,
             "weight": max(1, len(_compact_text(unit))),
         })
     return cues
@@ -89,19 +108,29 @@ def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dic
     automatic = build_focus_cues(script, targets)
     if not isinstance(raw_cues, list) or not automatic:
         return automatic
-    valid_ids = {str(target.get("id")) for target in targets}
-    for index, cue in enumerate(automatic):
-        if index >= len(raw_cues) or not isinstance(raw_cues[index], dict):
+    valid_ids = {str(target.get("id")) for target in targets} | {""}
+    manual_cues = [
+        cue for cue in raw_cues
+        if isinstance(cue, dict) and cue.get("manual") is True
+    ]
+    for cue in automatic:
+        matches = [
+            (_text_similarity(cue["text"], str(raw.get("text", ""))), raw)
+            for raw in manual_cues
+            if str(raw.get("target_id") or "") in valid_ids
+        ]
+        if not matches:
             continue
-        target_id = str(raw_cues[index].get("target_id") or "")
-        if target_id in valid_ids:
-            cue["target_id"] = target_id
+        similarity, raw = max(matches, key=lambda item: item[0])
+        if similarity >= 0.55:
+            cue["target_id"] = str(raw.get("target_id") or "")
+            cue["manual"] = True
     return automatic
 
 
 def focus_timeline(cues: list[dict], duration: float) -> list[dict]:
     """Convert cue weights into page-local start/end timestamps."""
-    valid = [cue for cue in cues if cue.get("target_id")]
+    valid = [cue for cue in cues if isinstance(cue, dict)]
     if not valid or duration <= 0:
         return []
     weights = [max(1, int(cue.get("weight") or len(str(cue.get("text", ""))))) for cue in valid]
@@ -130,8 +159,8 @@ def _deduplicate_targets(targets: list[dict]) -> list[dict]:
     for target in targets:
         key = (
             _compact_text(target["text"]),
-            round(target["x"], 2),
-            round(target["y"], 2),
+            round(float(target.get("x", 0)), 2),
+            round(float(target.get("y", 0)), 2),
         )
         if key in seen:
             continue

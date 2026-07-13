@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>调试工作台 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=23">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=24">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -143,6 +143,28 @@
                     </article>
                 </section>
 
+                <section class="card management-card debug-server-log-card">
+                    <div class="section-heading debug-runtime-heading">
+                        <div>
+                            <span class="section-kicker">服务器日志</span>
+                            <h3>容器 stdout / stderr</h3>
+                            <p class="debug-heading-help">等同于 Web 服务在 Docker 控制台中的实际输出，包含启动信息、请求记录、print 输出和异常堆栈。</p>
+                        </div>
+                        <div class="debug-log-actions">
+                            <label class="debug-auto-refresh"><input id="debug-server-auto-refresh" type="checkbox" checked><span>每 3 秒刷新</span></label>
+                            <button id="debug-server-refresh" class="btn-secondary" type="button">立即刷新</button>
+                            <button id="debug-server-copy" class="btn-secondary" type="button">复制当前结果</button>
+                            <a id="debug-server-download" class="btn-primary-link" href="/api/debug/server-logs?download=1">下载完整服务器日志</a>
+                        </div>
+                    </div>
+                    <div class="debug-runtime-filters debug-server-filters">
+                        <label class="debug-search"><span>关键词</span><input id="debug-server-search" class="select-input" type="search" placeholder="Traceback / ERROR / 请求路径"></label>
+                        <label class="debug-search"><span>任务 ID</span><input id="debug-server-task" class="select-input" type="search" placeholder="可粘贴任务 ID 精确查找"></label>
+                    </div>
+                    <div id="debug-server-note" class="debug-note"></div>
+                    <pre id="debug-server-output" class="debug-json debug-runtime-output">正在读取服务器日志...</pre>
+                </section>
+
                 <section class="card management-card debug-log-card">
                     <div class="section-heading">
                         <div><span class="section-kicker">操作审计</span><h3>账号操作记录</h3><p class="debug-heading-help">用于追查谁在什么时间做了什么，不等同于程序运行日志。</p></div>
@@ -196,6 +218,6 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/debug.js') }}?v=3"></script>
+    <script src="{{ url_for('static', filename='js/debug.js') }}?v=4"></script>
 </body>
 </html>
