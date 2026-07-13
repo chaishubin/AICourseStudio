@@ -1,5 +1,6 @@
 """将 Course 渲染为具有课程主题、可编辑文本和逐页备注的 PPTX。"""
 
+import unicodedata
 from pathlib import Path
 
 from ..core.course import Course, CourseSection
@@ -18,6 +19,27 @@ class PPTXRenderer:
     MUTED = "60708A"
     LINE = "DCE3EF"
     FONT = "Noto Sans CJK SC"
+    SYMBOL_FONT = "DejaVu Sans"
+    # 彩色 Emoji 字形在 LibreOffice/PowerPoint 的 PPTX 渲染链路中经常无法回退，
+    # 转成语义相同的单色 Unicode 符号后再显式指定符号字体。
+    PRESENTATION_SYMBOL_REPLACEMENTS = str.maketrans({
+        "✅": "✓",
+        "❎": "✗",
+        "❌": "✗",
+        "✔": "✓",
+        "✘": "✗",
+        "✖": "✗",
+        "🚫": "⊘",
+        "⛔": "⊘",
+        "⭐": "★",
+        "👉": "→",
+        "🔹": "◆",
+        "🔸": "◇",
+        "📌": "◆",
+        "🎯": "◎",
+        "\ufe0e": "",
+        "\ufe0f": "",
+    })
     THEMES = {
         "industry": ("16212F", "276B8A", "E28B32", "F4F6F7"),
         "technology": ("101D42", "2864DC", "16B8A6", "F4F7FC"),
@@ -608,15 +630,61 @@ class PPTXRenderer:
         frame.margin_top = frame.margin_bottom = 0
         frame.vertical_anchor = MSO_ANCHOR.MIDDLE
         paragraph = frame.paragraphs[0]
-        paragraph.text = str(text)
+        normalized_text = self._normalize_presentation_symbols(text)
         paragraph.alignment = align or PP_ALIGN.LEFT
         paragraph.space_after = Pt(0)
-        run = paragraph.runs[0]
-        run.font.name = self.FONT
-        run.font.size = Pt(size)
-        run.font.bold = bold
-        run.font.color.rgb = RGBColor.from_string(color)
+        for index, (segment, font_name) in enumerate(self._font_segments(normalized_text)):
+            run = paragraph.runs[0] if index == 0 and paragraph.runs else paragraph.add_run()
+            run.text = segment
+            run.font.name = font_name
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.color.rgb = RGBColor.from_string(color)
         return box
+
+    @classmethod
+    def _normalize_presentation_symbols(cls, text) -> str:
+        """把常见 Emoji 状态图标转换为跨 Office 渲染器稳定的单色符号。"""
+        normalized = str(text).translate(cls.PRESENTATION_SYMBOL_REPLACEMENTS)
+        safe_characters = []
+        for character in normalized:
+            if character == "\u200d":
+                continue
+            if ord(character) > 0xFFFF and unicodedata.category(character) in {"Sk", "So"}:
+                # 非 BMP Emoji 普遍依赖彩色字体和组合字形。语义通常已由后续文字
+                # 表达，因此统一降级为稳定的项目符号，并合并 Emoji 组合序列。
+                if not safe_characters or safe_characters[-1] != "◆":
+                    safe_characters.append("◆")
+                continue
+            safe_characters.append(character)
+        return "".join(safe_characters)
+
+    @classmethod
+    def _font_segments(cls, text: str):
+        """按普通文本/符号拆分 run，避免整段中文字体吞掉符号字体回退。"""
+        if not text:
+            return [("", cls.FONT)]
+        segments = []
+        start = 0
+        current_font = cls._font_for_character(text[0])
+        for index, character in enumerate(text[1:], 1):
+            font_name = cls._font_for_character(character)
+            if font_name != current_font:
+                segments.append((text[start:index], current_font))
+                start = index
+                current_font = font_name
+        segments.append((text[start:], current_font))
+        return segments
+
+    @classmethod
+    def _font_for_character(cls, character: str) -> str:
+        # Sc/Sk 中的货币、修饰符通常与正文连续显示更协调；Sm/So 才是此处
+        # 需要显式回退的数学符号、箭头、勾叉、星号和图形标记。
+        return (
+            cls.SYMBOL_FONT
+            if unicodedata.category(character) in {"Sm", "So"}
+            else cls.FONT
+        )
 
     def _footer(self, slide, index: int, total: int, dark: bool = False) -> None:
         from pptx.enum.shapes import MSO_SHAPE

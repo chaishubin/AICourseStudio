@@ -34,6 +34,7 @@ def test_extract_targets_and_match_narration(tmp_path: Path):
     cues = build_focus_cues("首先明确学习目标。随后检查学习结果。", targets)
 
     assert len(targets) == 3
+    assert all(target["id"].startswith("p1-a") for target in targets)
     assert len(cues) == 2
     assert cues[0]["target_id"] != cues[1]["target_id"]
     assert next(item for item in targets if item["id"] == cues[0]["target_id"])["text"] == "明确学习目标"
@@ -57,7 +58,21 @@ def test_normalize_focus_cues_preserves_valid_manual_target():
     assert cues[0]["manual"] is True
 
 
-def test_low_similarity_narration_keeps_whole_slide_instead_of_forcing_target():
+def test_normalize_focus_cues_preserves_llm_annotation_when_script_is_unchanged():
+    targets = [{"id": "case", "text": "实践案例", "role": "content"}]
+    raw = [{
+        "text": "我们先看一个真实场景",
+        "target_id": "case",
+        "weight": 10,
+        "source": "llm",
+    }]
+
+    cues = normalize_focus_cues(raw, "我们先看一个真实场景。", targets)
+
+    assert cues == raw
+
+
+def test_low_similarity_narration_uses_transcript_without_wrong_box():
     targets = [
         {"id": "summary", "text": "课程介绍与学习目标", "role": "content"},
     ]
@@ -65,6 +80,29 @@ def test_low_similarity_narration_keeps_whole_slide_instead_of_forcing_target():
     cues = build_focus_cues("答案可能和多数人的直觉相反。", targets)
 
     assert cues[0]["target_id"] == ""
+    assert cues[0]["confidence"] < 0.34
+
+
+def test_llm_focus_annotation_is_preferred_over_similarity_matching():
+    targets = [
+        {"id": "first", "text": "学习目标", "role": "content"},
+        {"id": "second", "text": "实践案例", "role": "content"},
+    ]
+
+    cues = build_focus_cues(
+        "我们先看一个真实场景。",
+        targets,
+        [{"text": "我们先看一个真实场景", "target_text": "实践案例"}],
+    )
+
+    assert cues == [{
+        "text": "我们先看一个真实场景",
+        "target_id": "second",
+        "anchor_id": "second",
+        "weight": 10,
+        "source": "llm",
+        "confidence": 1.0,
+    }]
 
 
 def test_normalize_focus_targets_removes_layout_labels_and_sorts_visually():
@@ -124,6 +162,20 @@ def test_focus_timeline_preserves_unfocused_time_gaps():
     ]
 
 
+def test_focus_timeline_prefers_real_segment_audio_timestamps():
+    timeline = focus_timeline(
+        [
+            {"text": "第一段", "target_id": "first", "start": 0, "end": 1.7},
+            {"text": "第二段", "target_id": "second", "start": 1.7, "end": 5.2},
+        ],
+        5.2,
+    )
+
+    assert [(cue["start"], cue["end"]) for cue in timeline] == [
+        (0.0, 1.7), (1.7, 5.2),
+    ]
+
+
 def test_existing_preview_focus_cues_are_migrated():
     import web.app as web_app
 
@@ -167,4 +219,29 @@ def test_video_focus_layers_follow_cue_timeline():
         assert all(layer.duration == 3.5 for layer in layers)
     finally:
         for layer in layers:
+            layer.close()
+
+
+def test_video_focus_layers_support_spotlight_and_underline_styles():
+    targets = [{
+        "id": "point",
+        "x": 0.2,
+        "y": 0.2,
+        "width": 0.4,
+        "height": 0.2,
+    }]
+    cues = [{"text": "讲解", "target_id": "point", "weight": 1}]
+    generated = []
+    try:
+        spotlight = VideoComposer._focus_layers(
+            targets, cues, 2, 1280, 720, 0, 0, "spotlight"
+        )
+        underline = VideoComposer._focus_layers(
+            targets, cues, 2, 1280, 720, 0, 0, "underline"
+        )
+        generated.extend(spotlight + underline)
+        assert len(spotlight) == 5
+        assert len(underline) == 2
+    finally:
+        for layer in generated:
             layer.close()

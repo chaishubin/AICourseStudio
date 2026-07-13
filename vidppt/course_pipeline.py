@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .core.course import Course
+from .core.cue_timeline import (
+    build_cue_timeline,
+    page_cues_from_timeline,
+    write_cue_timeline,
+)
 from .core.interfaces import LLMEngine
 from .core.models import ProcessConfig
 from .generation import CourseBuilder
@@ -163,8 +168,32 @@ class CoursePipeline:
             course_page.duration = duration
             timed_pages.append((course_page, duration))
 
+        cue_timeline = build_cue_timeline([
+            {
+                "page_number": index,
+                "slide_id": course_page.id,
+                "script": course_page.script,
+                "duration": duration,
+                "cues": course_page.metadata.get("focus_cues", []),
+            }
+            for index, (course_page, duration) in enumerate(timed_pages, 1)
+        ])
+        cue_timeline_path = write_cue_timeline(
+            cue_timeline, output_dir / "cue_timeline.json"
+        )
+        course.metadata["cue_timeline_path"] = str(cue_timeline_path)
+        course.metadata["cue_timeline_version"] = cue_timeline["version"]
+        for index, (page, course_page) in enumerate(
+            zip(content.pages, course.sections), 1
+        ):
+            local_cues = page_cues_from_timeline(cue_timeline, index)
+            page.metadata["focus_cues"] = local_cues
+            course_page.metadata["cue_timeline"] = local_cues
+
         subtitles = self.subtitle_renderer.render_course(
-            timed_pages, output_dir / f"{presentation.stem}.srt"
+            timed_pages,
+            output_dir / f"{presentation.stem}.srt",
+            cue_timeline=cue_timeline,
         )
         if not media_config.enable_video:
             return subtitles, None

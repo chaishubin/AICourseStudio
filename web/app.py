@@ -19,6 +19,7 @@ import secrets
 import subprocess
 import tempfile
 import glob
+from difflib import SequenceMatcher
 from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
@@ -48,6 +49,13 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from vidppt import Pipeline, ProcessConfig
 from vidppt.core.course import Course, CourseSection, KnowledgePoint
+from vidppt.core.cue_timeline import (
+    build_cue_timeline,
+    page_cues_from_timeline,
+    shift_cue_timeline,
+    slice_cue_timeline,
+    write_cue_timeline,
+)
 from vidppt.review import CourseReviewError, CourseReviewer
 from vidppt.utils.subtitle_rules import normalize_subtitle_text
 from vidppt.utils.focus_guidance import (
@@ -617,6 +625,7 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'course_json_path': task.get('course_json_path'),
         'presentation_path': task.get('presentation_path'),
         'subtitles_path': task.get('subtitles_path'),
+        'cue_timeline_path': task.get('cue_timeline_path'),
         'preview_path': task.get('preview_path'),
         'video_segments': task.get('video_segments', []),
         'error': task.get('error'),
@@ -1143,6 +1152,13 @@ def _subtitle_options(data: dict) -> dict:
         'subtitle_outline_width': outline_width,
         'subtitle_outline_color': color('subtitle_outline_color', '#000000'),
     }
+
+
+def _focus_highlight_style(data: dict) -> str:
+    style = str(data.get('focus_highlight_style', 'outline')).strip().lower()
+    if style not in {'outline', 'spotlight', 'underline'}:
+        raise ValueError('不支持的讲解焦点标注方式')
+    return style
 
 
 def _video_options(data: dict) -> dict:
@@ -2493,6 +2509,15 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             page.slide_image = image
         progress.update('render', len(slide_images), len(slide_images), f'渲染完成，共 {len(slide_images)} 页')
 
+        focus_targets_by_page = []
+        if Path(file_path).suffix.lower() == '.pptx':
+            try:
+                focus_targets_by_page = extract_presentation_focus_targets(
+                    Path(file_path)
+                )
+            except Exception as exc:
+                logger.warning(f'提取 PPT 讲解焦点候选失败: {exc}')
+
         # 4c. LLM 文本摘要
         if llm_enabled:
             progress.set_stage('llm', 'LLM 文本摘要...')
@@ -2525,7 +2550,24 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                         original_texts[i] if i < total_pages
                         else "（无，当前为最后一页）"
                     )
-                    page.text = llm_provider.summarize(
+                    page_targets = (
+                        focus_targets_by_page[i - 1]
+                        if i <= len(focus_targets_by_page) else []
+                    )
+                    focus_instruction = ""
+                    if page_targets:
+                        target_lines = "\n".join(
+                            f'- {target["anchor_id"]}: {target.get("text", "")}'
+                            for target in page_targets
+                        )
+                        focus_instruction = (
+                            "\n请只输出 JSON：{\"script\":\"可直接配音的完整讲稿\","
+                            "\"focus_cues\":[{\"text\":\"连续讲解片段\","
+                            "\"anchor_id\":\"对应锚点ID\"}]}。focus_cues 要覆盖完整讲稿；"
+                            "概括、过渡和举例也必须选择最相关候选，不允许空目标。"
+                            f"\n当前页焦点候选：\n{target_lines}"
+                        )
+                    raw_summary = llm_provider.summarize(
                         (
                             f"上一页原文：\n{previous_text}\n\n"
                             f"上一页已生成讲稿：\n{previous_script or '（无）'}\n\n"
@@ -2536,8 +2578,11 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                             "你是课程讲稿编辑。结合前后页理解当前页在整套课程中的位置，"
                             "让开头承接上一页、结尾自然引向下一页；避免重复上一页已经讲过的内容，"
                             "也不要提前展开下一页。只输出当前页可直接配音的讲稿，不要标题、说明或标记。"
-                            + refinement_prompt
+                            + refinement_prompt + focus_instruction
                         ),
+                    )
+                    page.text, page.metadata['focus_cues'] = _parse_page_focus_response(
+                        raw_summary
                     )
                     previous_script = page.text
                     progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
@@ -2561,6 +2606,16 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     'image_path': str(page.slide_image),
                     'script': page.text,
                     'original_script': page.text,
+                    'focus_targets': (
+                        focus_targets_by_page[page.page_number - 1]
+                        if page.page_number <= len(focus_targets_by_page) else []
+                    ),
+                    'focus_cues': build_focus_cues(
+                        page.text,
+                        focus_targets_by_page[page.page_number - 1]
+                        if page.page_number <= len(focus_targets_by_page) else [],
+                        page.metadata.get('focus_cues'),
+                    ),
                 }
                 for page in content.pages
             ],
@@ -2687,6 +2742,7 @@ def run_course_generation(
                         section.script or section.title,
                         focus_targets_by_page[page.page_number - 1]
                         if page.page_number <= len(focus_targets_by_page) else [],
+                        section.metadata.get('focus_cues'),
                     ),
                 }
                 for page, section in zip(preview_content.pages, result.course.sections)
@@ -2711,6 +2767,22 @@ def _page_title(text: str, page_number: int) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         first_line = lines[1] if len(lines) > 1 else ''
     return first_line[:80] or f'第 {page_number} 页'
+
+
+def _parse_page_focus_response(raw: str) -> tuple[str, list[dict]]:
+    """Accept structured focus output while remaining compatible with plain text LLMs."""
+    text = str(raw or '').strip()
+    start, end = text.find('{'), text.rfind('}')
+    if start >= 0 and end > start:
+        try:
+            payload = json.loads(text[start:end + 1])
+            script = str(payload.get('script') or '').strip()
+            cues = payload.get('focus_cues')
+            if script:
+                return script, cues if isinstance(cues, list) else []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    return text, []
 
 
 def _preview_file(task_id: str) -> Path:
@@ -2892,6 +2964,105 @@ def _preview_page(preview: dict, page_number: int) -> dict | None:
     )
 
 
+def _focus_cues_cover_script(cues: list[dict], script: str) -> bool:
+    cue_text = ''.join(
+        str(cue.get('text') or '') for cue in cues if isinstance(cue, dict)
+    )
+    compact = lambda value: re.sub(  # noqa: E731
+        r'[^\w\u3400-\u9fff]+', '', str(value or '')
+    ).lower()
+    left, right = compact(cue_text), compact(script)
+    if not left or not right:
+        return False
+    return SequenceMatcher(None, left, right).ratio() >= 0.86
+
+
+def _generate_audio_with_focus_segments(
+    content,
+    config: ProcessConfig,
+    *,
+    cancel_check=None,
+) -> None:
+    """Generate cue audio independently and persist its real page-local timeline."""
+    from moviepy import AudioFileClip, concatenate_audioclips
+    from vidppt.core.models import DocumentContent, PageContent
+    from vidppt.utils.progress import ProgressTracker
+
+    segmented = []
+    regular_pages = []
+    segment_pages = []
+    for page in content.pages:
+        cues = [
+            cue for cue in page.metadata.get('focus_cues', [])
+            if isinstance(cue, dict) and str(cue.get('text') or '').strip()
+        ]
+        if cues and _focus_cues_cover_script(cues, page.text):
+            page_segments = []
+            for cue in cues:
+                segment_page = PageContent(
+                    page_number=len(segment_pages) + 1,
+                    text=str(cue['text']).strip(),
+                )
+                segment_pages.append(segment_page)
+                page_segments.append((cue, segment_page))
+            segmented.append((page, page_segments))
+        else:
+            regular_pages.append(page)
+
+    if segment_pages:
+        segment_config = ProcessConfig(**{
+            **config.__dict__,
+            'output_dir': config.output_dir / '_focus_segments',
+            'save_intermediate': True,
+            'skip_existing': False,
+        })
+        Pipeline(segment_config)._generate_audio(
+            DocumentContent(pages=segment_pages),
+            ProgressTracker(total_pages=len(segment_pages)),
+        )
+
+    for page, page_segments in segmented:
+        if cancel_check and cancel_check():
+            raise InterruptedError("用户停止了生成")
+        if any(
+            not segment.audio or not segment.audio.exists()
+            for _, segment in page_segments
+        ):
+            regular_pages.append(page)
+            continue
+        clips = []
+        cursor = 0.0
+        try:
+            for cue, segment in page_segments:
+                clip = AudioFileClip(str(segment.audio))
+                clips.append(clip)
+                cue_duration = float(clip.duration)
+                cue['start'] = round(cursor, 3)
+                cursor += cue_duration
+                cue['end'] = round(cursor, 3)
+                cue['duration'] = round(cue_duration, 3)
+                cue['timing_source'] = 'segment_audio'
+            page_audio = config.output_dir / str(page.page_number) / 'audio.mp3'
+            page_audio.parent.mkdir(parents=True, exist_ok=True)
+            combined = concatenate_audioclips(clips)
+            try:
+                combined.write_audiofile(
+                    str(page_audio), codec='libmp3lame', logger=None
+                )
+            finally:
+                combined.close()
+            page.audio = page_audio
+        finally:
+            for clip in clips:
+                clip.close()
+
+    if regular_pages:
+        Pipeline(config)._generate_audio(
+            DocumentContent(pages=regular_pages),
+            ProgressTracker(total_pages=len(regular_pages)),
+        )
+
+
 def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
     """为课程准视频预览生成或复用单页完整配音。"""
     task = tasks.get(task_id)
@@ -2899,16 +3070,25 @@ def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
         raise FileNotFoundError("任务不存在")
     output_dir = Path(task['output_dir'])
     audio_path = output_dir / str(page_number) / 'audio.mp3'
-    if audio_path.exists() and audio_path.stat().st_size > 0:
+    preview = _read_preview(task_id)
+    page = _preview_page(preview, page_number)
+    if not page:
+        raise FileNotFoundError("页面不存在")
+    focus_cues = page.get('focus_cues') or []
+    has_real_timing = bool(focus_cues) and all(
+        cue.get('timing_source') == 'segment_audio'
+        for cue in focus_cues if isinstance(cue, dict)
+    )
+    if (
+        audio_path.exists()
+        and audio_path.stat().st_size > 0
+        and (not focus_cues or has_real_timing)
+    ):
         return audio_path
 
     lock = _preview_audio_locks.setdefault(task_id, threading.Lock())
     with lock:
-        if audio_path.exists() and audio_path.stat().st_size > 0:
-            return audio_path
-
         from vidppt.core.models import DocumentContent, PageContent
-        from vidppt.utils.progress import ProgressTracker
 
         preview = _read_preview(task_id)
         page = _preview_page(preview, page_number)
@@ -2937,11 +3117,16 @@ def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
                 page_number=page_number,
                 text=script,
                 slide_image=Path(page['image_path']),
+                metadata={'focus_cues': page.get('focus_cues', [])},
             )
         ])
-        Pipeline(config)._generate_audio(content, ProgressTracker(total_pages=1))
+        _generate_audio_with_focus_segments(content, config)
         if not audio_path.exists() or audio_path.stat().st_size == 0:
             raise RuntimeError(f"第 {page_number} 页配音生成失败")
+        page['focus_cues'] = content.pages[0].metadata.get(
+            'focus_cues', page.get('focus_cues', [])
+        )
+        _persist_preview(task_id, preview)
         return audio_path
 
 
@@ -3282,6 +3467,9 @@ def run_media_generation(task_id: str):
                     'focus_targets': page.get('focus_targets', []),
                     'focus_cues': page.get('focus_cues', []),
                     'focus_highlight': options.get('focus_highlight', True),
+                    'focus_highlight_style': options.get(
+                        'focus_highlight_style', 'outline'
+                    ),
                 },
             )
             for page in preview.get('pages', [])
@@ -3290,8 +3478,10 @@ def run_media_generation(task_id: str):
         progress.set_stage('tts', '根据确认后的讲稿生成配音...')
         if cancel_event.is_set():
             raise InterruptedError("用户停止了生成")
-        Pipeline(config)._generate_audio(
-            content, ProgressTracker(total_pages=len(content.pages))
+        _generate_audio_with_focus_segments(
+            content,
+            config,
+            cancel_check=cancel_event.is_set,
         )
         if cancel_event.is_set():
             raise InterruptedError("用户停止了生成")
@@ -3319,6 +3509,23 @@ def run_media_generation(task_id: str):
             int(page.page_number): round(float(duration), 2)
             for page, (_, duration) in zip(content.pages, timed_pages)
         }
+        cue_timeline = build_cue_timeline([
+            {
+                'page_number': int(page.page_number),
+                'slide_id': f'slide-{page.page_number}',
+                'script': page.text,
+                'duration': durations_by_page[int(page.page_number)],
+                'cues': page.metadata.get('focus_cues', []),
+            }
+            for page in content.pages
+        ])
+        cue_timeline_path = write_cue_timeline(
+            cue_timeline, config.output_dir / 'cue_timeline.json'
+        )
+        for page in content.pages:
+            page.metadata['focus_cues'] = page_cues_from_timeline(
+                cue_timeline, int(page.page_number)
+            )
         for page in preview.get('pages', []):
             try:
                 page_number = int(page.get('page_number'))
@@ -3327,14 +3534,45 @@ def run_media_generation(task_id: str):
             if page_number in durations_by_page:
                 page['duration'] = durations_by_page[page_number]
                 page['estimated_seconds'] = durations_by_page[page_number]
+            generated_page = next(
+                (
+                    item for item in content.pages
+                    if int(item.page_number) == page_number
+                ),
+                None,
+            )
+            if generated_page is not None:
+                page['focus_cues'] = generated_page.metadata.get(
+                    'focus_cues', page.get('focus_cues', [])
+                )
+        preview['cue_timeline_path'] = str(cue_timeline_path)
+        preview['cue_timeline_version'] = cue_timeline['version']
         duration_estimate = _duration_estimate_payload(preview)
         preview['duration_estimate'] = duration_estimate
         preview['lesson_segments'] = duration_estimate['segments']
         _persist_preview(task_id, preview)
+        task['cue_timeline_path'] = str(cue_timeline_path)
+
+        course_json_path = preview.get('course_json_path')
+        if course_json_path and Path(course_json_path).is_file():
+            course_path = Path(course_json_path)
+            course = Course.from_dict(json.loads(course_path.read_text(encoding='utf-8')))
+            course.metadata['cue_timeline_path'] = str(cue_timeline_path)
+            course.metadata['cue_timeline_version'] = cue_timeline['version']
+            for page_number, section in enumerate(course.sections, 1):
+                section.metadata['cue_timeline'] = page_cues_from_timeline(
+                    cue_timeline, page_number
+                )
+            course_path.write_text(
+                json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
 
         stem = _safe_filename_stem(task.get('course_name')) or Path(task['file_path']).stem
         subtitles = SubtitleRenderer().render_course(
-            timed_pages, config.output_dir / f'{stem}.srt'
+            timed_pages,
+            config.output_dir / f'{stem}.srt',
+            cue_timeline=cue_timeline,
         )
         progress.set_stage(
             'video',
@@ -3407,6 +3645,27 @@ def run_media_generation(task_id: str):
             or (packaging_options.get('enable_mid') and len(packaging_segment_durations) > 1)
             or packaging_options.get('enable_outro')
         ):
+            intro_seconds = (
+                float(
+                    packaging_options.get('intro_duration_seconds')
+                    or packaging_options.get('duration_seconds')
+                    or 4
+                )
+                if packaging_options.get('enable_intro') else 0.0
+            )
+            mid_seconds = (
+                float(packaging_options.get('mid_duration_seconds') or 2.5)
+                if packaging_options.get('enable_mid')
+                and len(packaging_segment_durations) > 1 else 0.0
+            )
+            outro_seconds = (
+                float(
+                    packaging_options.get('outro_duration_seconds')
+                    or packaging_options.get('duration_seconds')
+                    or 4
+                )
+                if packaging_options.get('enable_outro') else 0.0
+            )
             custom_background = Path(packaging_options['background_path']) if packaging_options.get('background_path') else None
             intro_background = (
                 custom_background or (content.pages[0].slide_image if content.pages else None)
@@ -3431,18 +3690,22 @@ def run_media_generation(task_id: str):
                 segment_durations=packaging_segment_durations,
                 cancel_check=cancel_event.is_set,
             )
+            write_cue_timeline(
+                shift_cue_timeline(
+                    cue_timeline,
+                    intro_seconds=intro_seconds,
+                    segment_durations=packaging_segment_durations,
+                    mid_seconds=mid_seconds,
+                    outro_seconds=outro_seconds,
+                ),
+                cue_timeline_path,
+            )
             if not config.burn_subtitles:
                 shift_srt_for_packaging(
                     subtitles,
-                    intro_seconds=(
-                        float(packaging_options.get('intro_duration_seconds') or packaging_options.get('duration_seconds') or 4)
-                        if packaging_options.get('enable_intro') else 0
-                    ),
+                    intro_seconds=intro_seconds,
                     segment_durations=packaging_segment_durations,
-                    mid_seconds=(
-                        float(packaging_options.get('mid_duration_seconds') or 2.5)
-                        if packaging_options.get('enable_mid') and len(packaging_segment_durations) > 1 else 0
-                    ),
+                    mid_seconds=mid_seconds,
                 )
         progress.update('video', 100, 100, '视频生成完成')
         segment_artifacts = []
@@ -3484,8 +3747,17 @@ def run_media_generation(task_id: str):
                     f"{stem}_{index:02d}_{segment_title}"
                     if segment_title else f"{stem}_{index:02d}_pages_{start_page}_{end_page}"
                 )
+                segment_cue_timeline = slice_cue_timeline(
+                    cue_timeline, start_page, end_page
+                )
+                segment_cue_timeline_path = write_cue_timeline(
+                    segment_cue_timeline,
+                    segment_dir / f'{segment_stem}.cue_timeline.json',
+                )
                 segment_subtitles = SubtitleRenderer().render_course(
-                    segment_timed_pages, segment_dir / f'{segment_stem}.srt'
+                    segment_timed_pages,
+                    segment_dir / f'{segment_stem}.srt',
+                    cue_timeline=segment_cue_timeline,
                 )
                 segment_base = segment_dir / f'{segment_stem}.base.mp4'
                 segment_video = segment_dir / f'{segment_stem}.mp4'
@@ -3528,6 +3800,14 @@ def run_media_generation(task_id: str):
                     packaging_options.get('enable_intro')
                     or packaging_options.get('enable_outro')
                 ):
+                    segment_intro_seconds = (
+                        float(
+                            packaging_options.get('intro_duration_seconds')
+                            or packaging_options.get('duration_seconds')
+                            or 4
+                        )
+                        if packaging_options.get('enable_intro') else 0.0
+                    )
                     package_course_video(
                         segment_video,
                         segment_video,
@@ -3547,10 +3827,23 @@ def run_media_generation(task_id: str):
                         outro_background_path=segment_pages[-1].slide_image,
                         cancel_check=cancel_event.is_set,
                     )
+                    write_cue_timeline(
+                        shift_cue_timeline(
+                            segment_cue_timeline,
+                            intro_seconds=segment_intro_seconds,
+                        ),
+                        segment_cue_timeline_path,
+                    )
+                    if not config.burn_subtitles and segment_intro_seconds:
+                        shift_srt_for_packaging(
+                            segment_subtitles,
+                            intro_seconds=segment_intro_seconds,
+                        )
                 segment_artifacts.append({
                     **segment,
                     'video_path': str(segment_video),
                     'subtitles_path': str(segment_subtitles),
+                    'cue_timeline_path': str(segment_cue_timeline_path),
                 })
             progress.update('video', 100, 100, '分段视频生成完成')
         progress.complete(
@@ -3558,6 +3851,7 @@ def run_media_generation(task_id: str):
             course_json_path=preview.get('course_json_path'),
             presentation_path=preview.get('presentation_path'),
             subtitles_path=str(subtitles),
+            cue_timeline_path=str(cue_timeline_path),
             video_segments=segment_artifacts,
         )
     except InterruptedError as e:
@@ -3669,6 +3963,7 @@ def convert_ppt():
         subtitle_options = _subtitle_options(data)
         video_options = _video_options(data)
         packaging_options = _course_packaging_options(data)
+        focus_highlight_style = _focus_highlight_style(data)
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
     batch_id = str(data.get('batch_id') or uuid.uuid4().hex)
@@ -3727,6 +4022,7 @@ def convert_ppt():
         'school_logo_path': school_logo_path,
         'visual_theme': visual_theme,
         'burn_subtitles': burn_subtitles,
+        'focus_highlight_style': focus_highlight_style,
         **video_options,
         **subtitle_options,
         **packaging_options,
@@ -3760,6 +4056,7 @@ def convert_ppt():
             'tts_rate': tts_rate,
             'render_engine': render_engine,
             'burn_subtitles': burn_subtitles,
+            'focus_highlight_style': focus_highlight_style,
             **video_options,
             **subtitle_options,
             **packaging_options,
@@ -3908,6 +4205,9 @@ def ensure_course_preview_audio(task_id):
         'success': True,
         'page_number': page_number,
         'audio_url': _page_audio_url(task_id, page_number, audio_path),
+        'focus_cues': (
+            _preview_page(_read_preview(task_id), page_number) or {}
+        ).get('focus_cues', []),
     })
 
 
@@ -4157,6 +4457,7 @@ def continue_course(task_id):
         subtitle_options = _subtitle_options(data)
         video_options = _video_options(data)
         packaging_options = _course_packaging_options(data)
+        focus_highlight_style = _focus_highlight_style(data)
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -4195,6 +4496,7 @@ def continue_course(task_id):
                 'tts_rate': tts_rate,
                 'burn_subtitles': burn_subtitles,
                 'focus_highlight': bool(data.get('focus_highlight', True)),
+                'focus_highlight_style': focus_highlight_style,
                 **video_options,
                 **subtitle_options,
                 **packaging_options,
@@ -4204,6 +4506,7 @@ def continue_course(task_id):
                 **task.get('media_options', {}),
                 'burn_subtitles': burn_subtitles,
                 'focus_highlight': bool(data.get('focus_highlight', True)),
+                'focus_highlight_style': focus_highlight_style,
                 **video_options,
                 **subtitle_options,
                 **packaging_options,
@@ -4607,6 +4910,7 @@ def get_status(task_id):
         'course_json_path': task.get('course_json_path'),
         'presentation_path': task.get('presentation_path'),
         'subtitles_path': task.get('subtitles_path'),
+        'cue_timeline_path': task.get('cue_timeline_path'),
         'preview_path': task.get('preview_path'),
         'stage': task.get('stage'),
         'percentage': task.get('percentage', 0),
@@ -4961,6 +5265,7 @@ def debug_task_detail(task_id):
         'course_json': task.get('course_json_path') or (str(Path(output_dir) / 'course.json') if output_dir else None),
         'presentation': task.get('presentation_path'),
         'subtitles': task.get('subtitles_path'),
+        'cue_timeline': task.get('cue_timeline_path'),
         'video': task.get('video_path'),
     }
     state_entry = next(
@@ -4989,25 +5294,38 @@ def debug_logs():
     if blocked:
         return blocked
     try:
-        limit = int(request.args.get('limit', 200))
+        page = max(1, int(request.args.get('page', 1)))
     except (TypeError, ValueError):
-        limit = 200
+        page = 1
+    try:
+        page_size = int(request.args.get(
+            'page_size',
+            request.args.get('limit', 20),
+        ))
+    except (TypeError, ValueError):
+        page_size = 20
+    page_size = max(1, min(page_size, 200))
     keyword = (request.args.get('q') or '').strip().lower()
     try:
-        logs = task_store.list_operation_logs(limit=limit)
+        total = task_store.count_operation_logs(keyword=keyword)
+        total_pages = max(1, math.ceil(total / page_size))
+        page = min(page, total_pages)
+        logs = task_store.list_operation_logs(
+            keyword=keyword,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
     except Exception as exc:
         logger.exception(f'读取调试日志失败: {exc}')
         return jsonify({'error': '读取调试日志失败'}), 500
-    if keyword:
-        logs = [
-            log for log in logs
-            if keyword in ' '.join(str(log.get(key) or '') for key in (
-                'actor', 'role', 'action', 'task_id', 'target_name', 'message',
-                'ip_address',
-            )).lower()
-        ]
     return jsonify({
         'logs': logs,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'total': total,
+            'total_pages': total_pages,
+        },
         'note': '此处是账号操作审计；下方“完整运行日志”用于查看任务处理和服务异常。',
     })
 

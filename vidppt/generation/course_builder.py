@@ -28,6 +28,7 @@ COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适�
     "layout": "cover|section|title_and_content|two_column|comparison|process|timeline|framework|key_point|card_grid|summary",
     "bullets": ["页面可见要点，每项简短"],
     "script": "适合口语讲解的逐页讲稿，不要机械朗读要点",
+    "focus_cues": [{"text": "讲稿中的连续讲解片段", "anchor": "title|bullet-1|bullet-2"}],
     "notes": "给讲师的补充备注",
     "image_prompt": "适合本页、无文字插图的主体和场景描述；无需插图时留空"
   }]
@@ -38,6 +39,8 @@ COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适�
 3. 根据内容关系选择版式：对照关系用 comparison，步骤用 process，阶段演进用 timeline，
    体系结构用 framework，单一核心结论用 key_point，图文内容用 two_column；
 4. 不要让所有正文页使用同一种版式，相邻页面应有合理的视觉节奏。
+5. focus_cues 必须覆盖整页讲稿，anchor 必须引用本页稳定内容锚点：title 或 bullet-N；
+   即使讲稿是概括、过渡或举例，也要选择最相关锚点，不要自行复述可见文字或输出空目标。
 """
 
 SUBTITLE_SAFE_AREA_PROMPT = """视频会烧录字幕，PPT 设计必须预留字幕安全区：
@@ -115,6 +118,11 @@ class CourseBuilder:
                         )
                         for point_index, bullet in enumerate(bullets, 1)
                     ],
+                    metadata={
+                        "focus_cues": _normalize_llm_focus_cues(
+                            slide.get("focus_cues"), title, bullets
+                        ),
+                    },
                 )
             )
 
@@ -205,6 +213,35 @@ def _normalize_design_spec(value) -> dict:
         "density": density if density in allowed_densities else "medium",
         "visual_language": str(value.get("visual_language", "")).strip()[:200],
     }
+
+
+def _normalize_llm_focus_cues(
+    value, title: str, bullets: list[str]
+) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    cues = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        anchor = str(item.get("anchor") or "").strip().lower()
+        target_text = title if anchor == "title" else ""
+        match = re.fullmatch(r"bullet-(\d+)", anchor)
+        if match:
+            index = int(match.group(1)) - 1
+            target_text = bullets[index] if 0 <= index < len(bullets) else ""
+        if not target_text:
+            target_text = str(
+                item.get("target_text") or item.get("target") or ""
+            ).strip()
+        if text and target_text:
+            cues.append({
+                "text": text,
+                "anchor": anchor or "legacy",
+                "target_text": target_text,
+            })
+    return cues
 
 
 def _paragraphs_to_bullets(paragraphs: list[str], limit: int = 6) -> list[str]:

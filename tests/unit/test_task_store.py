@@ -80,6 +80,22 @@ def test_task_store_paginates_operation_logs(temp_dir):
     assert [log["action"] for log in logs] == ["action-1", "action-0"]
 
 
+def test_task_store_filters_operation_logs_before_pagination(temp_dir):
+    store = TaskStore(temp_dir / "tasks.db")
+    for index in range(5):
+        store.add_operation_log({
+            "actor": "teacher",
+            "action": "preview_task" if index < 3 else "login",
+            "ip_address": f"203.0.113.{index}",
+            "created_at": 1000 + index,
+        })
+
+    logs = store.list_operation_logs(keyword="PREVIEW", limit=2, offset=1)
+
+    assert store.count_operation_logs(keyword="preview") == 3
+    assert [log["ip_address"] for log in logs] == ["203.0.113.1", "203.0.113.0"]
+
+
 def test_task_store_migrates_operation_log_ip_columns(temp_dir):
     db_path = temp_dir / "legacy.db"
     import sqlite3

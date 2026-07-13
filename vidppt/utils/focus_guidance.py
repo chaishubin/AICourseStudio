@@ -11,8 +11,8 @@ from pptx import Presentation
 from .subtitle_rules import subtitle_chunks
 
 
-FOCUS_CUES_VERSION = 3
-_MIN_FOCUS_SIMILARITY = 0.22
+FOCUS_CUES_VERSION = 5
+_MIN_VISIBLE_FOCUS_CONFIDENCE = 0.34
 _IGNORED_TEXT = {
     "AI COURSE STUDIO",
     "课程内容",
@@ -30,7 +30,7 @@ def extract_presentation_focus_targets(presentation_path: Path) -> list[list[dic
     slide_width = max(1, int(presentation.slide_width))
     slide_height = max(1, int(presentation.slide_height))
     pages: list[list[dict]] = []
-    for slide in presentation.slides:
+    for slide_number, slide in enumerate(presentation.slides, 1):
         targets = []
         for shape_index, shape in enumerate(slide.shapes, 1):
             if not getattr(shape, "has_text_frame", False):
@@ -49,8 +49,11 @@ def extract_presentation_focus_targets(presentation_path: Path) -> list[list[dic
                 width = max(0.01, 1 - x)
             if y + height > 1:
                 height = max(0.01, 1 - y)
+            anchor_id = f"p{slide_number}-a{shape_index}"
             targets.append({
-                "id": f"shape-{shape_index}",
+                "id": anchor_id,
+                "anchor_id": anchor_id,
+                "shape_id": f"shape-{shape_index}",
                 "text": text[:160],
                 "x": round(x, 5),
                 "y": round(y, 5),
@@ -74,11 +77,18 @@ def normalize_focus_targets(targets: list[dict]) -> list[dict]:
     )
 
 
-def build_focus_cues(script: str, targets: list[dict]) -> list[dict]:
-    """Match semantic narration chunks to slide targets with monotonic fallback."""
+def build_focus_cues(
+    script: str,
+    targets: list[dict],
+    annotated_cues: list[dict] | None = None,
+) -> list[dict]:
+    """Resolve AI annotations first, then deterministically match remaining narration."""
     units = _narration_units(script)
     if not units or not targets:
         return []
+    annotated = _resolve_annotated_cues(annotated_cues, targets)
+    if annotated:
+        return annotated
     content_targets = [target for target in targets if target.get("role") != "title"]
     candidates = content_targets or targets
     cues = []
@@ -91,16 +101,76 @@ def build_focus_cues(script: str, targets: list[dict]) -> list[dict]:
             score = _text_similarity(unit, str(target.get("text", "")))
             scored.append((score, target_index, target))
         score, target_index, target = max(scored, key=lambda item: item[0])
-        target_id = ""
-        if score >= _MIN_FOCUS_SIMILARITY:
-            target_id = target["id"]
+        target_id = target["id"] if score >= _MIN_VISIBLE_FOCUS_CONFIDENCE else ""
+        if target_id:
             previous_index = target_index
         cues.append({
             "text": unit,
             "target_id": target_id,
             "weight": max(1, len(_compact_text(unit))),
+            "confidence": round(min(1.0, score), 3),
+            "source": "fallback",
         })
     return cues
+
+
+def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
+    """Turn LLM target text/id annotations into stable PPT shape ids."""
+    if not isinstance(raw_cues, list):
+        return []
+    targets_by_id = {str(target.get("id")): target for target in targets}
+    resolved = []
+    for raw in raw_cues:
+        if not isinstance(raw, dict):
+            continue
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            continue
+        target_id = str(
+            raw.get("anchor_id") or raw.get("target_id") or ""
+        ).strip()
+        annotated_anchor_id = target_id
+        target = targets_by_id.get(target_id)
+        confidence = 0.98 if target is not None else 0.0
+        if target is not None:
+            chosen_score = _text_similarity(text, str(target.get("text", "")))
+            best_score = max(
+                _text_similarity(text, str(item.get("text", "")))
+                for item in targets
+            )
+            if best_score >= 0.45 and best_score - chosen_score >= 0.2:
+                target_id = ""
+                confidence = 0.25
+        if target is None:
+            target_text = str(
+                raw.get("target_text") or raw.get("target") or ""
+            ).strip()
+            if not target_text:
+                continue
+            target = max(
+                targets,
+                key=lambda item: _text_similarity(
+                    target_text, str(item.get("text", ""))
+                ),
+            )
+            target_id = str(target.get("id") or "")
+            confidence = _text_similarity(
+                target_text, str(target.get("text", ""))
+            )
+            annotated_anchor_id = target_id
+            if confidence < _MIN_VISIBLE_FOCUS_CONFIDENCE:
+                target_id = ""
+        if not annotated_anchor_id:
+            continue
+        resolved.append({
+            "text": text,
+            "target_id": target_id,
+            "anchor_id": annotated_anchor_id,
+            "weight": max(1, len(_compact_text(text))),
+            "source": "llm",
+            "confidence": round(min(1.0, confidence), 3),
+        })
+    return resolved
 
 
 def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dict]:
@@ -109,22 +179,47 @@ def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dic
     if not isinstance(raw_cues, list) or not automatic:
         return automatic
     valid_ids = {str(target.get("id")) for target in targets} | {""}
-    manual_cues = [
+    persistent_cues = [
         cue for cue in raw_cues
-        if isinstance(cue, dict) and cue.get("manual") is True
+        if isinstance(cue, dict)
+        and (cue.get("manual") is True or cue.get("source") == "llm")
+        and str(cue.get("target_id") or "") in valid_ids
     ]
+    if (
+        persistent_cues
+        and _compact_text(
+            "".join(str(cue.get("text", "")) for cue in persistent_cues)
+        )
+        == _compact_text(script)
+    ):
+        return [
+            {
+                **cue,
+                "target_id": str(cue.get("target_id") or ""),
+                "weight": max(
+                    1,
+                    int(
+                        cue.get("weight")
+                        or len(_compact_text(cue.get("text", "")))
+                    ),
+                ),
+            }
+            for cue in persistent_cues
+        ]
     for cue in automatic:
         matches = [
             (_text_similarity(cue["text"], str(raw.get("text", ""))), raw)
-            for raw in manual_cues
-            if str(raw.get("target_id") or "") in valid_ids
+            for raw in persistent_cues
         ]
         if not matches:
             continue
         similarity, raw = max(matches, key=lambda item: item[0])
         if similarity >= 0.55:
             cue["target_id"] = str(raw.get("target_id") or "")
-            cue["manual"] = True
+            if raw.get("manual") is True:
+                cue["manual"] = True
+            if raw.get("source") == "llm":
+                cue["source"] = "llm"
     return automatic
 
 
@@ -133,6 +228,20 @@ def focus_timeline(cues: list[dict], duration: float) -> list[dict]:
     valid = [cue for cue in cues if isinstance(cue, dict)]
     if not valid or duration <= 0:
         return []
+    timed = []
+    for cue in valid:
+        try:
+            start = max(0.0, float(cue.get("start")))
+            end = min(duration, float(cue.get("end")))
+        except (TypeError, ValueError):
+            timed = []
+            break
+        if end <= start:
+            timed = []
+            break
+        timed.append({**cue, "start": start, "end": end})
+    if len(timed) == len(valid):
+        return timed
     weights = [max(1, int(cue.get("weight") or len(str(cue.get("text", ""))))) for cue in valid]
     total_weight = sum(weights)
     cursor = 0.0

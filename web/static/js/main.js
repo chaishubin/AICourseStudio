@@ -76,6 +76,7 @@ class AICourseStudioApp {
                 ttsSentencePause: document.getElementById('tts-sentence-pause'),
                 burnSubtitles: document.getElementById('burn-subtitles'),
                 focusHighlight: document.getElementById('focus-highlight'),
+                focusHighlightStyle: document.getElementById('focus-highlight-style'),
                 subtitleStyleTemplate: document.getElementById('subtitle-style-template'),
                 subtitlePreset: document.getElementById('subtitle-preset'),
                 subtitleX: document.getElementById('subtitle-x'),
@@ -1004,6 +1005,13 @@ class AICourseStudioApp {
         this.elements.unreviewedOnly.addEventListener(
             'change', () => this.filterPreviewPages()
         );
+        this.elements.focusHighlightStyle?.addEventListener('change', () => {
+            this.elements.coursePreviewPages
+                ?.querySelectorAll('.course-focus-overlays')
+                .forEach(root => {
+                    root.dataset.focusStyle = this.elements.focusHighlightStyle.value;
+                });
+        });
         this.elements.aiReviewSampleBtn.addEventListener(
             'click', () => this.runCourseReview('sample')
         );
@@ -1381,6 +1389,7 @@ class AICourseStudioApp {
             courseJsonPath: null,
             presentationPath: null,
             subtitlesPath: null,
+            cueTimelinePath: null,
             sourceFileExists: false,
             error: null,
             selected: true,
@@ -2585,6 +2594,7 @@ class AICourseStudioApp {
                             courseJsonPath: data.course_json_path || null,
                             presentationPath: data.presentation_path || null,
                             subtitlesPath: data.subtitles_path || null,
+                            cueTimelinePath: data.cue_timeline_path || null,
                             videoSegments: data.video_segments || []
                         });
                         this.renderFileList();
@@ -2955,6 +2965,7 @@ class AICourseStudioApp {
             item.courseJsonPath,
             item.presentationPath,
             item.subtitlesPath,
+            item.cueTimelinePath,
             item.previewPath,
             JSON.stringify(item.videoSegments || [])
         ].map(value => value || '').join('|');
@@ -3255,15 +3266,20 @@ class AICourseStudioApp {
             ['课程 JSON', item.courseJsonPath],
             ['可编辑 PPT', item.presentationPath],
             ['字幕 SRT', item.subtitlesPath],
+            ['音画时间轴 JSON', item.cueTimelinePath],
             ['课程视频', item.videoPath]
         ].filter(([, path]) => path);
-        const segmentLinks = (item.videoSegments || [])
-            .filter(segment => segment.video_path)
-            .map(segment => [
-                `第 ${segment.id} 段`,
-                segment.video_path,
-                `${segment.start_page}-${segment.end_page}`
-            ]);
+        const segmentLinks = (item.videoSegments || []).flatMap(segment => {
+            const range = `${segment.start_page}-${segment.end_page}`;
+            return [
+                segment.video_path
+                    ? [`第 ${segment.id} 段`, segment.video_path, range]
+                    : null,
+                segment.cue_timeline_path
+                    ? [`第 ${segment.id} 段时间轴`, segment.cue_timeline_path, range]
+                    : null
+            ].filter(Boolean);
+        });
         if (!artifacts.length && !segmentLinks.length) return '';
         return `<div class="artifact-links">${artifacts.map(([label, path]) =>
             `<a class="artifact-link" href="/api/download?task_id=${encodeURIComponent(item.taskId)}&path=${encodeURIComponent(path)}">${label}</a>`
@@ -3356,6 +3372,7 @@ class AICourseStudioApp {
                     courseJsonPath: t.course_json_path || null,
                     presentationPath: t.presentation_path || null,
                     subtitlesPath: t.subtitles_path || null,
+                    cueTimelinePath: t.cue_timeline_path || null,
                     videoSegments: t.video_segments || [],
                     previewPath: t.preview_path || null,
                     error: t.error || null,
@@ -3497,6 +3514,7 @@ class AICourseStudioApp {
                     <button type="button" class="btn-preview course-preview-page-play">播放本页预览</button>
                     <button type="button" class="btn-secondary course-preview-page-stop" disabled>停止</button>
                     <span class="course-preview-page-player-status">使用本页讲稿预览 PPT、字幕和配音</span>
+                    <span class="course-focus-now" aria-live="polite">当前讲解位置将在播放时显示</span>
                 </div>
                 <div class="course-preview-editor">
                     <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}${segmentLabel}</div>
@@ -4059,6 +4077,10 @@ class AICourseStudioApp {
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '预览音频生成失败');
             if (!this.coursePreviewPlaying) return;
+            if (card && Array.isArray(data.focus_cues)) {
+                card._focusCues = data.focus_cues;
+                this.renderCourseFocusEditor(card);
+            }
             await this.playCoursePreviewAudio(data.audio_url, pageNumber, title);
         } catch (error) {
             this.stopCoursePreviewPlayback('预览失败');
@@ -4137,6 +4159,11 @@ class AICourseStudioApp {
         if (target) {
             target.classList.remove('playing-preview');
             target.querySelectorAll('.course-focus-target.active').forEach(node => node.classList.remove('active'));
+            const now = target.querySelector('.course-focus-now');
+            if (now) {
+                now.textContent = '当前讲解位置将在播放时显示';
+                now.classList.remove('low-confidence');
+            }
             this.updatePageSubtitleSample(target);
         }
         if (!card) {
@@ -4163,6 +4190,7 @@ class AICourseStudioApp {
         const targets = card._focusTargets || [];
         const cues = card._focusCues || [];
         if (!overlayRoot || !editor) return;
+        overlayRoot.dataset.focusStyle = this.elements.focusHighlightStyle?.value || 'outline';
         overlayRoot.innerHTML = '';
         targets.forEach(target => {
             const box = document.createElement('button');
@@ -4184,10 +4212,13 @@ class AICourseStudioApp {
         cues.forEach((cue, index) => {
             const row = document.createElement('label');
             row.className = 'course-focus-cue-row';
+            const cueMode = cue.target_id
+                ? (cue.timing_source === 'segment_audio' ? '锚点 · 真实音频时间' : '锚点 · 待生成时间')
+                : '仅同步讲稿 · 不强行框选';
             row.innerHTML = `
-                <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}</span>
+                <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}<small>${cueMode}</small></span>
                 <select aria-label="讲解片段 ${index + 1} 对应位置">
-                    <option value="" ${cue.target_id ? '' : 'selected'}>整页（不聚焦）</option>
+                    <option value="" ${cue.target_id ? '' : 'selected'}>手动设为整页（不聚焦）</option>
                     ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
                 </select>
             `;
@@ -4195,6 +4226,9 @@ class AICourseStudioApp {
                 card._focusCues[index] = {
                     ...card._focusCues[index],
                     target_id: event.target.value,
+                    anchor_id: event.target.value,
+                    confidence: 1,
+                    source: 'manual',
                     manual: true
                 };
                 this.syncCourseFocusCue(card, index);
@@ -4216,11 +4250,33 @@ class AICourseStudioApp {
         card.querySelectorAll('.course-focus-target').forEach(node => {
             node.classList.toggle('active', Boolean(cue) && node.dataset.targetId === cue.target_id);
         });
+        const now = card.querySelector('.course-focus-now');
+        if (now) {
+            if (!cue) {
+                now.textContent = '当前讲解位置将在播放时显示';
+                now.classList.remove('low-confidence');
+            } else {
+                const confidence = Number(cue.confidence);
+                const precise = Boolean(cue.target_id) && (!Number.isFinite(confidence) || confidence >= 0.34);
+                now.textContent = `${precise ? '当前知识点' : '当前讲解'}：${cue.text || '未命名片段'}`;
+                now.classList.toggle('low-confidence', !precise);
+            }
+        }
     }
 
     syncCourseFocusByTime(card, currentTime, duration) {
         const cues = card?._focusCues || [];
         if (!cues.length || !duration) return;
+        const timedIndex = cues.findIndex(cue => (
+            Number.isFinite(Number(cue.start))
+            && Number.isFinite(Number(cue.end))
+            && currentTime >= Number(cue.start)
+            && currentTime < Number(cue.end)
+        ));
+        if (timedIndex >= 0) {
+            this.syncCourseFocusCue(card, timedIndex);
+            return;
+        }
         const weights = cues.map(cue => Math.max(1, Number(cue.weight) || String(cue.text || '').length));
         const position = Math.max(0, Math.min(1, currentTime / duration));
         const threshold = position * weights.reduce((sum, weight) => sum + weight, 0);
@@ -4693,6 +4749,7 @@ class AICourseStudioApp {
                     tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
                     burn_subtitles: this.elements.burnSubtitles.checked,
                     focus_highlight: this.elements.focusHighlight?.checked !== false,
+                    focus_highlight_style: this.elements.focusHighlightStyle?.value || 'outline',
                     ...this.collectCoursePackagingOptions(),
                     ...this.collectVideoOptions(),
                     ...this.collectSubtitleOptions()
@@ -4759,6 +4816,7 @@ class AICourseStudioApp {
                 courseJsonPath: null,
                 presentationPath: null,
                 subtitlesPath: null,
+                cueTimelinePath: null,
                 previewPath: null,
                 videoPath: null,
                 error: null

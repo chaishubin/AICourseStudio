@@ -130,6 +130,7 @@ body {
     height: 28px;
     border-radius: 50%;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
     font-size: 14px;
@@ -3576,6 +3577,7 @@ body {
 .course-preview-page-player {
     grid-area: player;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     min-width: 0;
@@ -3603,6 +3605,16 @@ body {
 .course-preview-page.preview-audio-active .course-preview-page-player {
     border-color: rgba(41, 151, 255, .45);
     background: rgba(41, 151, 255, .08);
+}
+
+.course-focus-now {
+    flex-basis: 100%;
+    color: var(--color-text-2);
+    font-size: 12px;
+}
+
+.course-focus-now.low-confidence {
+    color: #b45309;
 }
 
 .course-preview-slide-canvas.subtitle-risk-medium {
@@ -3643,6 +3655,20 @@ body {
     background: rgba(255, 193, 7, .16);
     box-shadow: 0 0 0 3px rgba(255, 255, 255, .62), 0 8px 24px rgba(0, 0, 0, .22);
     opacity: 1;
+}
+
+.course-focus-overlays[data-focus-style="spotlight"] .course-focus-target.active {
+    border-color: rgba(255, 255, 255, .92);
+    background: rgba(255, 255, 255, .08);
+    box-shadow: 0 0 0 9999px rgba(8, 15, 28, .48), 0 0 22px rgba(255, 255, 255, .38);
+}
+
+.course-focus-overlays[data-focus-style="underline"] .course-focus-target.active {
+    border: 0;
+    border-bottom: 5px solid rgba(255, 174, 31, .96);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: 0 5px 10px rgba(255, 174, 31, .34);
 }
 
 .subtitle-safe-area {
@@ -3825,6 +3851,13 @@ body {
     white-space: nowrap;
 }
 
+.course-focus-cue-row > span small {
+    display: block;
+    margin-top: 2px;
+    color: var(--color-text-3);
+    font-size: 10px;
+}
+
 .course-focus-cue-row select {
     min-width: 0;
     border: 1px solid var(--color-border);
@@ -3847,6 +3880,19 @@ body {
     color: var(--color-text-2);
     font-size: 12px;
     white-space: nowrap;
+}
+
+.focus-style-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--color-text-2);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.focus-style-field .select-input {
+    min-width: 118px;
 }
 
 .course-preview-page-meta {

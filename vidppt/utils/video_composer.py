@@ -112,6 +112,7 @@ class VideoComposer:
                     height,
                     (config.video_width - width) // 2,
                     (config.video_height - height) // 2,
+                    metadata.get("focus_highlight_style", "outline"),
                 )
             )
         clip = CompositeVideoClip(
@@ -132,8 +133,9 @@ class VideoComposer:
         image_height: int,
         image_left: int,
         image_top: int,
+        style: str = "outline",
     ) -> list:
-        """Create understated time-bound highlight boxes above the slide image."""
+        """Create time-bound outline, spotlight, or underline focus layers."""
         targets_by_id = {str(target.get("id")): target for target in targets}
         timeline = focus_timeline(cues, duration)
         merged = []
@@ -174,11 +176,45 @@ class VideoComposer:
                 )
 
             border = max(3, min(7, round(min(image_width, image_height) * 0.004)))
-            layers.append(focus_clip((width, height), (255, 190, 30), 0.13, (x, y)))
-            layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y)))
-            layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y + height - border)))
-            layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x, y)))
-            layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x + width - border, y)))
+            if style == "spotlight":
+                shade = (8, 15, 28)
+                regions = [
+                    ((image_width, max(0, y - image_top)), (image_left, image_top)),
+                    (
+                        (image_width, max(0, image_top + image_height - (y + height))),
+                        (image_left, y + height),
+                    ),
+                    ((max(0, x - image_left), height), (image_left, y)),
+                    (
+                        (max(0, image_left + image_width - (x + width)), height),
+                        (x + width, y),
+                    ),
+                ]
+                layers.extend(
+                    focus_clip(size, shade, 0.48, position)
+                    for size, position in regions
+                    if size[0] > 0 and size[1] > 0
+                )
+                layers.append(focus_clip(
+                    (width, border), (255, 255, 255), 0.88,
+                    (x, y + height - border),
+                ))
+            elif style == "underline":
+                layers.append(focus_clip(
+                    (width, border), (255, 174, 31), 0.96,
+                    (x, y + height - border),
+                ))
+                glow_height = min(height, border * 3)
+                layers.append(focus_clip(
+                    (width, glow_height), (255, 190, 30), 0.18,
+                    (x, y + height - glow_height),
+                ))
+            else:
+                layers.append(focus_clip((width, height), (255, 190, 30), 0.13, (x, y)))
+                layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y)))
+                layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y + height - border)))
+                layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x, y)))
+                layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x + width - border, y)))
         return layers
 
     @staticmethod

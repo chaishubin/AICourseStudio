@@ -10,7 +10,7 @@ ENV PYTHONUTF8=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     locales \
-    fonts-noto-cjk fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
+    fonts-noto-cjk fonts-dejavu-core fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
     libreoffice-impress libreoffice-common \
     libreoffice-writer libreoffice-gtk3 \
     poppler-utils \

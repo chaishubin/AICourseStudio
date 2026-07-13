@@ -213,16 +213,29 @@ class TaskStore:
         self,
         *,
         actor: str | None = None,
+        keyword: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 500))
         offset = max(0, int(offset))
         params: list = []
-        where = ""
+        clauses: list[str] = []
         if actor:
-            where = "WHERE actor = ?"
+            clauses.append("actor = ?")
             params.append(actor)
+        keyword = str(keyword or "").strip().lower()
+        if keyword:
+            clauses.append("""
+                INSTR(LOWER(
+                    COALESCE(actor, '') || ' ' || COALESCE(role, '') || ' ' ||
+                    COALESCE(action, '') || ' ' || COALESCE(task_id, '') || ' ' ||
+                    COALESCE(target_name, '') || ' ' || COALESCE(message, '') || ' ' ||
+                    COALESCE(ip_address, '')
+                ), ?) > 0
+            """)
+            params.append(keyword)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.extend([limit, offset])
         with self._lock, self._connect() as connection:
             rows = connection.execute(f"""
@@ -230,7 +243,7 @@ class TaskStore:
                        message, ip_address, user_agent, created_at
                 FROM operation_logs
                 {where}
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT ? OFFSET ?
             """, params).fetchall()
         return [
@@ -250,12 +263,29 @@ class TaskStore:
             for row in rows
         ]
 
-    def count_operation_logs(self, *, actor: str | None = None) -> int:
+    def count_operation_logs(
+        self,
+        *,
+        actor: str | None = None,
+        keyword: str | None = None,
+    ) -> int:
         params: list = []
-        where = ""
+        clauses: list[str] = []
         if actor:
-            where = "WHERE actor = ?"
+            clauses.append("actor = ?")
             params.append(actor)
+        keyword = str(keyword or "").strip().lower()
+        if keyword:
+            clauses.append("""
+                INSTR(LOWER(
+                    COALESCE(actor, '') || ' ' || COALESCE(role, '') || ' ' ||
+                    COALESCE(action, '') || ' ' || COALESCE(task_id, '') || ' ' ||
+                    COALESCE(target_name, '') || ' ' || COALESCE(message, '') || ' ' ||
+                    COALESCE(ip_address, '')
+                ), ?) > 0
+            """)
+            params.append(keyword)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._lock, self._connect() as connection:
             row = connection.execute(f"""
                 SELECT COUNT(*) AS total

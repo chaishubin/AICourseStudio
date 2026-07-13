@@ -7,6 +7,10 @@ class DebugWorkbench {
         this.logBody = document.getElementById('debug-log-body');
         this.logNote = document.getElementById('debug-log-note');
         this.logSearch = document.getElementById('debug-log-search');
+        this.logPagination = document.getElementById('debug-log-pagination');
+        this.logPage = 1;
+        this.logPageSize = 20;
+        this.logPaginationState = { page: 1, page_size: 20, total: 0, total_pages: 1 };
         this.refreshBtn = document.getElementById('debug-refresh-btn');
         this.diagnostics = document.getElementById('debug-diagnostics');
         this.healthBadge = document.getElementById('debug-health-badge');
@@ -33,7 +37,7 @@ class DebugWorkbench {
 
     init() {
         this.refreshBtn?.addEventListener('click', () => this.loadOverview());
-        this.logSearch?.addEventListener('input', () => this.loadLogs());
+        this.logSearch?.addEventListener('input', () => this.loadLogs(1));
         this.runtimeRefresh?.addEventListener('click', () => this.loadRuntimeLogs());
         this.runtimeSearch?.addEventListener('input', () => this.loadRuntimeLogs());
         this.runtimeTask?.addEventListener('input', () => this.loadRuntimeLogs());
@@ -274,18 +278,31 @@ class DebugWorkbench {
         `;
     }
 
-    async loadLogs() {
+    async loadLogs(page = this.logPage) {
+        this.logPage = page;
         try {
-            const params = new URLSearchParams({ limit: '200' });
+            const params = new URLSearchParams({
+                page: String(this.logPage),
+                page_size: String(this.logPageSize)
+            });
             const keyword = (this.logSearch?.value || '').trim();
             if (keyword) params.set('q', keyword);
             const response = await fetch(`/api/debug/logs?${params.toString()}`);
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '读取日志失败');
             this.logNote.textContent = data.note || '';
+            this.logPaginationState = data.pagination || {
+                page: this.logPage,
+                page_size: this.logPageSize,
+                total: (data.logs || []).length,
+                total_pages: 1
+            };
+            this.logPage = this.logPaginationState.page || 1;
             this.renderLogs(data.logs || []);
+            this.renderLogPagination();
         } catch (error) {
             this.logBody.innerHTML = `<tr><td colspan="6" class="table-empty">${this.escape(error.message)}</td></tr>`;
+            if (this.logPagination) this.logPagination.hidden = true;
         }
     }
 
@@ -304,6 +321,33 @@ class DebugWorkbench {
                 <td>${log.success ? '成功' : '失败'}</td>
             </tr>
         `).join('');
+    }
+
+    renderLogPagination() {
+        if (!this.logPagination) return;
+        const { page, page_size: pageSize, total, total_pages: totalPages } = this.logPaginationState;
+        if (!total || totalPages <= 1) {
+            this.logPagination.hidden = !total;
+            this.logPagination.innerHTML = total ? `<span>共 ${total} 条</span>` : '';
+            return;
+        }
+        const start = (page - 1) * pageSize + 1;
+        const end = Math.min(page * pageSize, total);
+        this.logPagination.hidden = false;
+        this.logPagination.innerHTML = `
+            <span>第 ${start}-${end} 条，共 ${total} 条</span>
+            <div class="pagination-actions">
+                <button type="button" class="table-action" data-debug-log-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+                <span>${page} / ${totalPages}</span>
+                <button type="button" class="table-action" data-debug-log-page="${page + 1}" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+            </div>
+        `;
+        this.logPagination.querySelectorAll('[data-debug-log-page]').forEach(button => {
+            button.addEventListener('click', () => {
+                const nextPage = Number(button.dataset.debugLogPage);
+                if (!Number.isNaN(nextPage)) this.loadLogs(nextPage);
+            });
+        });
     }
 
     runtimeParams(includeDownload = false) {

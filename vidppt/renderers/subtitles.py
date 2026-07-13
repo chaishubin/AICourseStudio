@@ -11,7 +11,15 @@ from ..utils.subtitle_rules import (
 
 
 class SubtitleRenderer:
-    def render_page(self, page: CourseSection, duration: float, output_path: Path) -> Path:
+    def render_page(
+        self,
+        page: CourseSection,
+        duration: float,
+        output_path: Path,
+        cue_timeline: dict | None = None,
+    ) -> Path:
+        if cue_timeline and cue_timeline.get("cues"):
+            return self._render_timeline(cue_timeline, output_path)
         sentences = _subtitle_chunks(page.script)
         if not sentences:
             sentences = [page.script.strip() or page.title]
@@ -37,8 +45,11 @@ class SubtitleRenderer:
         self,
         pages: list[tuple[CourseSection, float]],
         output_path: Path,
+        cue_timeline: dict | None = None,
     ) -> Path:
         """生成覆盖整门课程时间轴的 SRT。"""
+        if cue_timeline and cue_timeline.get("cues"):
+            return self._render_timeline(cue_timeline, output_path)
         cursor = 0.0
         index = 1
         entries = []
@@ -64,6 +75,44 @@ class SubtitleRenderer:
                 page_cursor = end
                 index += 1
             cursor += duration
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("\n".join(entries), encoding="utf-8")
+        return output_path
+
+    def _render_timeline(self, timeline: dict, output_path: Path) -> Path:
+        """Render subtitles inside canonical cue boundaries."""
+        index = 1
+        entries = []
+        cues = sorted(
+            timeline.get("cues", []), key=lambda cue: float(cue.get("start", 0))
+        )
+        for cue in cues:
+            start = float(cue.get("start", 0))
+            end = float(cue.get("end", start))
+            if end <= start:
+                continue
+            chunks = _subtitle_chunks(str(cue.get("text") or ""))
+            if not chunks:
+                continue
+            weights = [max(1, len(chunk)) for chunk in chunks]
+            total_weight = sum(weights)
+            cursor = start
+            for chunk_index, (chunk, weight) in enumerate(
+                zip(chunks, weights), 1
+            ):
+                chunk_end = (
+                    end
+                    if chunk_index == len(chunks)
+                    else cursor + (end - start) * weight / total_weight
+                )
+                entries.append(
+                    f"{index}\n{_srt_time(cursor)} --> {_srt_time(chunk_end)}\n"
+                    f"{_wrap_subtitle(chunk)}\n"
+                )
+                cursor = chunk_end
+                index += 1
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)

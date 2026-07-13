@@ -6,6 +6,12 @@ from unittest.mock import patch
 import pytest
 
 from vidppt.core.course import Course
+from vidppt.core.cue_timeline import (
+    build_cue_timeline,
+    page_cues_from_timeline,
+    shift_cue_timeline,
+    slice_cue_timeline,
+)
 from vidppt.core.models import ProcessConfig
 from vidppt.generation.course_builder import CourseBuilder
 from vidppt.ingestion.models import SourceDocument, SourceSection
@@ -61,6 +67,7 @@ def test_llm_builder_accepts_json_code_fence(temp_dir):
                 "layout": "cover",
                 "bullets": [],
                 "script": "欢迎学习。",
+                "focus_cues": [{"text": "欢迎学习", "anchor": "title"}],
                 "notes": "开场"
               }]
             }
@@ -77,6 +84,9 @@ def test_llm_builder_accepts_json_code_fence(temp_dir):
     assert course.title == "AI 课程"
     assert course.audience == "初学者"
     assert course.sections[0].script == "欢迎学习。"
+    assert course.sections[0].metadata["focus_cues"] == [
+        {"text": "欢迎学习", "anchor": "title", "target_text": "封面"}
+    ]
     assert course.metadata["design_spec"]["theme"] == "technology"
     assert course.metadata["design_spec"]["visual_language"] == "网络节点与数据流"
 
@@ -159,6 +169,74 @@ def test_subtitle_renderer_builds_course_timeline(temp_dir):
     assert "00:00:04,000 --> 00:00:06,000" in text
     assert "第三句" in text
     assert "第三句。" not in text
+
+
+def test_cue_timeline_normalizes_page_cues_and_global_offsets():
+    timeline = build_cue_timeline([
+        {
+            "page_number": 1,
+            "slide_id": "slide-1",
+            "script": "第一段。第二段。",
+            "duration": 4.0,
+            "cues": [
+                {"text": "第一段", "start": 0, "end": 1.5, "target_id": "p1-a2"},
+                {"text": "第二段", "start": 1.5, "end": 4.0, "target_id": "p1-a3"},
+            ],
+        },
+        {
+            "page_number": 2,
+            "slide_id": "slide-2",
+            "script": "第三段。",
+            "duration": 2.0,
+            "cues": [],
+        },
+    ])
+
+    assert timeline["duration"] == 6.0
+    assert timeline["cues"][0]["cue_id"] == "cue-001-01"
+    assert timeline["cues"][0]["target_ids"] == ["p1-a2"]
+    assert timeline["cues"][2]["start"] == 4.0
+    assert timeline["cues"][2]["end"] == 6.0
+    assert page_cues_from_timeline(timeline, 1)[1]["start"] == 1.5
+    assert slice_cue_timeline(timeline, 2, 2)["cues"][0]["start"] == 0.0
+
+    packaged = shift_cue_timeline(
+        timeline,
+        intro_seconds=3,
+        segment_durations=[4, 2],
+        mid_seconds=1,
+        outro_seconds=2,
+    )
+    assert packaged["cues"][0]["start"] == 3.0
+    assert packaged["cues"][2]["start"] == 8.0
+    assert packaged["duration"] == 12.0
+
+
+def test_subtitle_renderer_reuses_real_cue_boundaries(temp_dir):
+    course = Course.from_dict({
+        "title": "课程",
+        "sections": [{"id": "1", "title": "一", "script": "第一段。第二段。"}],
+    })
+    timeline = build_cue_timeline([{
+        "page_number": 1,
+        "slide_id": "slide-1",
+        "script": "第一段。第二段。",
+        "duration": 5.0,
+        "cues": [
+            {"text": "第一段", "start": 0, "end": 1.5},
+            {"text": "第二段", "start": 1.5, "end": 5.0},
+        ],
+    }])
+
+    output = SubtitleRenderer().render_course(
+        [(course.sections[0], 5.0)],
+        temp_dir / "timeline.srt",
+        cue_timeline=timeline,
+    )
+    text = output.read_text(encoding="utf-8")
+
+    assert "00:00:00,000 --> 00:00:01,500" in text
+    assert "00:00:01,500 --> 00:00:05,000" in text
 
 
 def test_subtitle_renderer_splits_long_script_into_readable_cues(temp_dir):

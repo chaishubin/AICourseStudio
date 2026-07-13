@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=25">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=29">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -613,6 +613,13 @@
                                 <input type="checkbox" id="focus-highlight" checked>
                                 视频中启用讲解焦点跟随
                             </label>
+                            <label class="focus-style-field">标注方式
+                                <select id="focus-highlight-style" class="select-input">
+                                    <option value="outline">框选高亮</option>
+                                    <option value="spotlight">聚光突出</option>
+                                    <option value="underline">下划线提示</option>
+                                </select>
+                            </label>
                         </div>
                         <div class="course-subtitle-grid">
                             <div class="course-subtitle-controls">
@@ -760,7 +767,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=39"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=42"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

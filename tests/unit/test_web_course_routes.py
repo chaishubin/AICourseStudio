@@ -1326,6 +1326,83 @@ def test_index_contains_editable_course_preview():
     assert '这里是字幕位置' not in html
     assert '在每页 PPT 上检查字幕，并让声音讲到哪里、画面就提示到哪里' in html
     assert 'id="focus-highlight"' in html
+    assert 'id="focus-highlight-style"' in html
+    assert '聚光突出' in html
+    assert '下划线提示' in html
+
+
+def test_focus_highlight_style_validation():
+    import web.app as web_app
+
+    assert web_app._focus_highlight_style({}) == "outline"
+    assert web_app._focus_highlight_style({"focus_highlight_style": "spotlight"}) == "spotlight"
+    try:
+        web_app._focus_highlight_style({"focus_highlight_style": "blink"})
+    except ValueError as exc:
+        assert "不支持的讲解焦点标注方式" in str(exc)
+    else:
+        raise AssertionError("invalid focus style should be rejected")
+
+
+def test_segmented_focus_audio_persists_real_cue_timeline(monkeypatch, temp_dir):
+    import moviepy
+    import web.app as web_app
+    from vidppt.core.models import DocumentContent, PageContent, ProcessConfig
+
+    class FakePipeline:
+        def __init__(self, config):
+            self.config = config
+
+        def _generate_audio(self, content, progress):
+            for page in content.pages:
+                path = self.config.output_dir / str(page.page_number) / "audio.mp3"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"segment")
+                page.audio = path
+
+    class FakeAudioClip:
+        def __init__(self, path):
+            self.duration = 1.25 if "/1/" in path else 2.5
+
+        def close(self):
+            pass
+
+    class FakeCombined:
+        def write_audiofile(self, path, **kwargs):
+            Path(path).write_bytes(b"combined")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(web_app, "Pipeline", FakePipeline)
+    monkeypatch.setattr(moviepy, "AudioFileClip", FakeAudioClip)
+    monkeypatch.setattr(moviepy, "concatenate_audioclips", lambda clips: FakeCombined())
+
+    cues = [
+        {"text": "先介绍学习目标", "target_id": "p1-a2"},
+        {"text": "再说明实践案例", "target_id": "p1-a3"},
+    ]
+    page = PageContent(
+        page_number=1,
+        text="先介绍学习目标。再说明实践案例。",
+        metadata={"focus_cues": cues},
+    )
+    config = ProcessConfig(
+        input_path=temp_dir / "lesson.pptx",
+        output_dir=temp_dir,
+        save_intermediate=True,
+    )
+
+    web_app._generate_audio_with_focus_segments(
+        DocumentContent(pages=[page]), config
+    )
+
+    assert page.audio == temp_dir / "1" / "audio.mp3"
+    assert page.audio.read_bytes() == b"combined"
+    assert [(cue["start"], cue["end"]) for cue in cues] == [
+        (0.0, 1.25), (1.25, 3.75),
+    ]
+    assert all(cue["timing_source"] == "segment_audio" for cue in cues)
 
 
 def test_course_packaging_preview_image_endpoint():
@@ -1487,7 +1564,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=39' in html
+    assert '/static/js/main.js?v=42' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -1714,7 +1791,8 @@ def test_management_pages_are_separate_from_course_workspace():
     assert 'IP 地址' in debug_page
     assert 'id="upload-area"' not in debug_page
     assert 'js/debug.js' in debug_page
-    assert '/static/js/debug.js?v=4' in debug_page
+    assert '/static/js/debug.js?v=5' in debug_page
+    assert 'id="debug-log-pagination"' in debug_page
 
 
 def test_accounts_page_is_separate_admin_page():
@@ -1780,6 +1858,37 @@ def test_debug_logs_can_filter_by_ip_address():
     assert response.status_code == 200
     assert len(logs) == 1
     assert logs[0]["ip_address"] == "203.0.113.21"
+
+
+def test_debug_logs_support_filtered_pagination(monkeypatch, temp_dir):
+    import web.app as web_app
+    from web.task_store import TaskStore
+
+    store = TaskStore(temp_dir / "tasks.db")
+    for index in range(5):
+        store.add_operation_log({
+            "actor": "teacher",
+            "action": "preview_task" if index < 4 else "login",
+            "created_at": 1000 + index,
+        })
+    monkeypatch.setattr(web_app, "task_store", store)
+
+    response = web_app.app.test_client().get(
+        "/api/debug/logs?q=preview&page=2&page_size=2"
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["pagination"] == {
+        "page": 2,
+        "page_size": 2,
+        "total": 4,
+        "total_pages": 2,
+    }
+    assert [log["action"] for log in payload["logs"]] == [
+        "preview_task",
+        "preview_task",
+    ]
 
 
 def test_debug_runtime_logs_are_filterable_and_redacted(monkeypatch, temp_dir):
