@@ -214,14 +214,16 @@ class TaskStore:
         *,
         actor: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
         params: list = []
         where = ""
         if actor:
             where = "WHERE actor = ?"
             params.append(actor)
-        params.append(limit)
+        params.extend([limit, offset])
         with self._lock, self._connect() as connection:
             rows = connection.execute(f"""
                 SELECT id, actor, role, action, task_id, target_name, success,
@@ -229,7 +231,7 @@ class TaskStore:
                 FROM operation_logs
                 {where}
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
             """, params).fetchall()
         return [
             {
@@ -247,6 +249,20 @@ class TaskStore:
             }
             for row in rows
         ]
+
+    def count_operation_logs(self, *, actor: str | None = None) -> int:
+        params: list = []
+        where = ""
+        if actor:
+            where = "WHERE actor = ?"
+            params.append(actor)
+        with self._lock, self._connect() as connection:
+            row = connection.execute(f"""
+                SELECT COUNT(*) AS total
+                FROM operation_logs
+                {where}
+            """, params).fetchone()
+        return int(row["total"] or 0)
 
     def ensure_account(self, account: dict):
         now = time.time()

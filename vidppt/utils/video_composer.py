@@ -8,12 +8,14 @@ from typing import Callable, Optional
 from loguru import logger
 from moviepy import (
     AudioFileClip,
+    ColorClip,
     CompositeVideoClip,
     ImageClip,
     concatenate_videoclips,
 )
 
 from ..core.models import DocumentContent, ProcessConfig
+from .focus_guidance import focus_timeline
 
 
 class _MoviePyProgressLogger:
@@ -84,6 +86,7 @@ class VideoComposer:
         duration: float,
         config: ProcessConfig,
         audio_clip: AudioFileClip | None = None,
+        metadata: dict | None = None,
     ):
         """等比缩放课件并置于标准 16:9 画布，避免非标准分辨率或画面拉伸。"""
         image = ImageClip(str(image_path))
@@ -98,14 +101,85 @@ class VideoComposer:
             .with_duration(duration)
             .with_position("center")
         )
+        layers = [image]
+        if metadata and metadata.get("focus_highlight", True):
+            layers.extend(
+                VideoComposer._focus_layers(
+                    metadata.get("focus_targets", []),
+                    metadata.get("focus_cues", []),
+                    duration,
+                    width,
+                    height,
+                    (config.video_width - width) // 2,
+                    (config.video_height - height) // 2,
+                )
+            )
         clip = CompositeVideoClip(
-            [image],
+            layers,
             size=(config.video_width, config.video_height),
             bg_color=(0, 0, 0),
         ).with_duration(duration)
         if audio_clip is not None:
             clip = clip.with_audio(audio_clip)
         return clip
+
+    @staticmethod
+    def _focus_layers(
+        targets: list[dict],
+        cues: list[dict],
+        duration: float,
+        image_width: int,
+        image_height: int,
+        image_left: int,
+        image_top: int,
+    ) -> list:
+        """Create understated time-bound highlight boxes above the slide image."""
+        targets_by_id = {str(target.get("id")): target for target in targets}
+        timeline = focus_timeline(cues, duration)
+        merged = []
+        for cue in timeline:
+            if (
+                merged
+                and merged[-1]["target_id"] == cue["target_id"]
+                and abs(merged[-1]["end"] - cue["start"]) < 0.01
+            ):
+                merged[-1]["end"] = cue["end"]
+            else:
+                merged.append(dict(cue))
+
+        layers = []
+        for cue in merged:
+            target = targets_by_id.get(str(cue.get("target_id")))
+            if not target:
+                continue
+            padding = 10
+            x = image_left + round(float(target.get("x", 0)) * image_width) - padding
+            y = image_top + round(float(target.get("y", 0)) * image_height) - padding
+            width = round(float(target.get("width", 0)) * image_width) + padding * 2
+            height = round(float(target.get("height", 0)) * image_height) + padding * 2
+            x = max(image_left, min(image_left + image_width - 2, x))
+            y = max(image_top, min(image_top + image_height - 2, y))
+            width = max(2, min(image_left + image_width - x, width))
+            height = max(2, min(image_top + image_height - y, height))
+            start = max(0.0, float(cue["start"]))
+            cue_duration = max(0.04, float(cue["end"]) - start)
+
+            def focus_clip(size, color, opacity, position):
+                return (
+                    ColorClip(size=size, color=color)
+                    .with_opacity(opacity)
+                    .with_start(start)
+                    .with_duration(cue_duration)
+                    .with_position(position)
+                )
+
+            border = max(3, min(7, round(min(image_width, image_height) * 0.004)))
+            layers.append(focus_clip((width, height), (255, 190, 30), 0.13, (x, y)))
+            layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y)))
+            layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y + height - border)))
+            layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x, y)))
+            layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x + width - border, y)))
+        return layers
 
     @staticmethod
     def compose(
@@ -164,6 +238,7 @@ class VideoComposer:
                 duration,
                 config,
                 audio_clip,
+                page.metadata,
             )
             clips.append(image_clip)
             logger.debug(f"第 {page.page_number} 页 片段时长: {duration:.1f}s")

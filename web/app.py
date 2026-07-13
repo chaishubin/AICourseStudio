@@ -50,6 +50,11 @@ from vidppt import Pipeline, ProcessConfig
 from vidppt.core.course import Course, CourseSection, KnowledgePoint
 from vidppt.review import CourseReviewError, CourseReviewer
 from vidppt.utils.subtitle_rules import normalize_subtitle_text
+from vidppt.utils.focus_guidance import (
+    build_focus_cues,
+    extract_presentation_focus_targets,
+    normalize_focus_cues,
+)
 from vidppt.utils.progress import ProcessStage
 
 # 导入处理器以触发注册
@@ -2614,6 +2619,9 @@ def run_course_generation(
         if len(preview_content.pages) != len(result.course.sections):
             raise RuntimeError("生成 PPT 页数与课程讲稿数量不一致")
 
+        focus_targets_by_page = extract_presentation_focus_targets(
+            result.presentation
+        )
         preview_path = _write_preview(
             task_id,
             source_type='lesson_plan',
@@ -2624,6 +2632,15 @@ def run_course_generation(
                     'image_path': str(page.slide_image),
                     'script': section.script or section.title,
                     'original_script': section.script or section.title,
+                    'focus_targets': (
+                        focus_targets_by_page[page.page_number - 1]
+                        if page.page_number <= len(focus_targets_by_page) else []
+                    ),
+                    'focus_cues': build_focus_cues(
+                        section.script or section.title,
+                        focus_targets_by_page[page.page_number - 1]
+                        if page.page_number <= len(focus_targets_by_page) else [],
+                    ),
                 }
                 for page, section in zip(preview_content.pages, result.course.sections)
             ],
@@ -2683,6 +2700,30 @@ def _persist_preview(task_id: str, preview: dict) -> None:
         json.dumps(preview, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
+
+
+def _ensure_preview_focus(preview: dict) -> bool:
+    """Backfill focus data for previews created before focus guidance existed."""
+    pages = preview.get('pages', [])
+    if not pages or all('focus_targets' in page for page in pages):
+        return False
+    presentation_path = preview.get('presentation_path')
+    if not presentation_path or Path(presentation_path).suffix.lower() != '.pptx':
+        return False
+    try:
+        targets_by_page = extract_presentation_focus_targets(Path(presentation_path))
+    except Exception as exc:
+        logger.warning(f'补充讲解焦点失败: {exc}')
+        return False
+    for page in pages:
+        try:
+            page_index = int(page.get('page_number', 0)) - 1
+        except (TypeError, ValueError):
+            continue
+        targets = targets_by_page[page_index] if 0 <= page_index < len(targets_by_page) else []
+        page['focus_targets'] = targets
+        page['focus_cues'] = build_focus_cues(page.get('script', ''), targets)
+    return True
 
 
 def _quality_mode_for_task(task: dict | None) -> str:
@@ -3056,6 +3097,11 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         for item in updates
         if 'page_number' in item and 'reviewed' in item
     }
+    focus_cues_by_page = {
+        int(item['page_number']): item.get('focus_cues')
+        for item in updates
+        if 'page_number' in item and 'focus_cues' in item
+    }
     for page in preview.get('pages', []):
         page_number = int(page['page_number'])
         if page_number in by_page:
@@ -3064,6 +3110,11 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             page['script'] = by_page[page_number]
         if page_number in reviewed_by_page:
             page['reviewed'] = reviewed_by_page[page_number]
+        page['focus_cues'] = normalize_focus_cues(
+            focus_cues_by_page.get(page_number, page.get('focus_cues')),
+            page.get('script', ''),
+            page.get('focus_targets', []),
+        )
     if not any(page.get('script', '').strip() for page in preview.get('pages', [])):
         raise ValueError("至少需要保留一页非空讲稿")
     if changed_pages and preview.get('ai_review'):
@@ -3139,6 +3190,8 @@ def run_media_generation(task_id: str):
 
         task = tasks[task_id]
         preview = _read_preview(task_id)
+        if _ensure_preview_focus(preview):
+            _persist_preview(task_id, preview)
         options = task.get('media_options', {})
         config = ProcessConfig(
             input_path=Path(task['file_path']),
@@ -3162,7 +3215,10 @@ def run_media_generation(task_id: str):
                 slide_image=Path(page['image_path']),
                 metadata={
                     'lesson_segment': page.get('lesson_segment'),
-                } if page.get('lesson_segment') else {},
+                    'focus_targets': page.get('focus_targets', []),
+                    'focus_cues': page.get('focus_cues', []),
+                    'focus_highlight': options.get('focus_highlight', True),
+                },
             )
             for page in preview.get('pages', [])
         ])
@@ -3683,6 +3739,8 @@ def get_course_preview(task_id):
         preview = _read_preview(task_id)
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         return jsonify({'error': str(exc)}), 404
+    if _ensure_preview_focus(preview):
+        _persist_preview(task_id, preview)
     preview['pages'] = [
         {
             **page,
@@ -3935,10 +3993,19 @@ def course_presentation(task_id):
             int(page['page_number']): page
             for page in preview.get('pages', [])
         }
+        try:
+            focus_targets_by_page = extract_presentation_focus_targets(reviewed_path)
+        except Exception as exc:
+            logger.warning(f'讲解焦点解析失败，保留无焦点预览: {exc}')
+            focus_targets_by_page = []
         refreshed_pages = []
         for page in content.pages:
             previous = old_pages.get(page.page_number, {})
             script = previous.get('script', page.text)
+            focus_targets = (
+                focus_targets_by_page[page.page_number - 1]
+                if page.page_number <= len(focus_targets_by_page) else []
+            )
             refreshed_pages.append({
                 'page_number': page.page_number,
                 'title': _page_title(page.text, page.page_number),
@@ -3946,6 +4013,8 @@ def course_presentation(task_id):
                 'script': script,
                 'original_script': previous.get('original_script', page.text),
                 'reviewed': False,
+                'focus_targets': focus_targets,
+                'focus_cues': build_focus_cues(script, focus_targets),
             })
         if not refreshed_pages:
             raise ValueError('上传的 PPTX 不包含可渲染页面')
@@ -4061,6 +4130,7 @@ def continue_course(task_id):
                 ),
                 'tts_rate': tts_rate,
                 'burn_subtitles': burn_subtitles,
+                'focus_highlight': bool(data.get('focus_highlight', True)),
                 **video_options,
                 **subtitle_options,
                 **packaging_options,
@@ -4069,6 +4139,7 @@ def continue_course(task_id):
             task['media_options'] = {
                 **task.get('media_options', {}),
                 'burn_subtitles': burn_subtitles,
+                'focus_highlight': bool(data.get('focus_highlight', True)),
                 **video_options,
                 **subtitle_options,
                 **packaging_options,
@@ -4581,17 +4652,38 @@ def get_tasks():
 def get_operation_logs():
     """返回当前用户可见的操作日志。"""
     try:
-        limit = int(request.args.get('limit', 100))
+        page = max(1, int(request.args.get('page', 1)))
     except (TypeError, ValueError):
-        limit = 100
+        page = 1
+    try:
+        page_size = int(request.args.get(
+            'page_size',
+            request.args.get('limit', 20),
+        ))
+    except (TypeError, ValueError):
+        page_size = 20
+    page_size = max(1, min(page_size, 500))
     actor = None if has_permission('view_operation_logs') else current_user_context()['username']
     try:
-        logs = task_store.list_operation_logs(actor=actor, limit=limit)
+        total = task_store.count_operation_logs(actor=actor)
+        total_pages = max(1, math.ceil(total / page_size))
+        page = min(page, total_pages)
+        logs = task_store.list_operation_logs(
+            actor=actor,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
     except Exception as exc:
         logger.exception(f'读取操作日志失败: {exc}')
         return jsonify({'error': '读取操作日志失败'}), 500
     return jsonify({
         'logs': logs,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'total': total,
+            'total_pages': total_pages,
+        },
         'current_user': current_user_context(),
         'is_super_admin': is_super_admin(),
     })
@@ -5282,7 +5374,7 @@ def course_packaging_preview_video():
     course_title = str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例'
     segment_title = str(request.args.get('segment_title', '')).strip()[:80]
     cache_payload = {
-        'version': 5,
+        'version': 6,
         'kind': kind,
         'options': options,
         'course_title': course_title,

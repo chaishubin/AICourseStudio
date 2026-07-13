@@ -350,6 +350,42 @@ def test_user_with_log_permission_sees_all_operation_logs(monkeypatch, temp_dir)
     }
 
 
+def test_operation_logs_support_pagination(monkeypatch, temp_dir):
+    import web.app as app_module
+    from web.task_store import TaskStore
+
+    store = TaskStore(temp_dir / 'tasks.db')
+    for index in range(5):
+        store.add_operation_log({
+            'actor': 'teacher',
+            'role': 'user',
+            'action': f'action-{index}',
+            'created_at': 1000 + index,
+        })
+    monkeypatch.setitem(app_module.app.config, 'LOGIN_DISABLED', False)
+    monkeypatch.setattr(app_module, 'task_store', store)
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess['authenticated'] = True
+        sess['username'] = 'teacher'
+        sess['role'] = 'user'
+
+    response = client.get('/api/operation-logs?page=2&page_size=2')
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['pagination'] == {
+        'page': 2,
+        'page_size': 2,
+        'total': 5,
+        'total_pages': 3,
+    }
+    assert [log['action'] for log in payload['logs']] == [
+        'action-2',
+        'action-1',
+    ]
+
+
 def test_view_all_permission_does_not_allow_managing_other_tasks(monkeypatch, temp_dir):
     import web.app as app_module
 

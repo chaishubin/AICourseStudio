@@ -438,6 +438,7 @@ class PPTXRenderer:
     ) -> None:
         """按主题将正文组织为编辑式、自然式或商务式信息卡。"""
         from pptx.enum.shapes import MSO_SHAPE
+        from pptx.enum.text import PP_ALIGN
 
         bullets = page.bullets[:6] or [page.title]
         rows = (len(bullets) + columns - 1) // columns
@@ -455,13 +456,18 @@ class PPTXRenderer:
             marker = self.ORANGE if bullet_index % 2 else accent
             if self.DESIGN_STYLE == "organic":
                 self._shape(slide, MSO_SHAPE.OVAL, card_x + 0.25, card_y + 0.28, 0.42, 0.42, marker)
+                self._text(
+                    slide, f"{bullet_index + 1:02d}",
+                    card_x + 0.25, card_y + 0.28, 0.42, 0.42,
+                    10, self.WHITE, bold=True, align=PP_ALIGN.CENTER,
+                )
             else:
                 self._shape(slide, MSO_SHAPE.RECTANGLE, card_x, card_y, 0.08, card_height, marker)
-            self._text(
-                slide, f"{bullet_index + 1:02d}",
-                card_x + 0.25, card_y + 0.22, 0.48, 0.35,
-                11, marker, bold=True,
-            )
+                self._text(
+                    slide, f"{bullet_index + 1:02d}",
+                    card_x + 0.25, card_y + 0.22, 0.48, 0.35,
+                    11, marker, bold=True,
+                )
             self._text(
                 slide, bullet, card_x + 0.78, card_y + 0.2,
                 card_width - 1.0, card_height - 0.38,

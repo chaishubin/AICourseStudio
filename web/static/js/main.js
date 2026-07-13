@@ -75,6 +75,7 @@ class AICourseStudioApp {
                 ttsEmotionScale: document.getElementById('tts-emotion-scale'),
                 ttsSentencePause: document.getElementById('tts-sentence-pause'),
                 burnSubtitles: document.getElementById('burn-subtitles'),
+                focusHighlight: document.getElementById('focus-highlight'),
                 subtitleStyleTemplate: document.getElementById('subtitle-style-template'),
                 subtitlePreset: document.getElementById('subtitle-preset'),
                 subtitleX: document.getElementById('subtitle-x'),
@@ -3482,6 +3483,7 @@ class AICourseStudioApp {
             card.innerHTML = `
                 <div class="course-preview-slide-canvas">
                     <img class="course-preview-image" src="${page.image_url}" alt="第 ${page.page_number} 页">
+                    <div class="course-focus-overlays" aria-label="讲解焦点预览"></div>
                     <div class="subtitle-safe-area" aria-hidden="true"></div>
                     <div class="course-preview-subtitle-overlay">
                         <img class="course-preview-subtitle-sample" alt="字幕预览">
@@ -3499,6 +3501,7 @@ class AICourseStudioApp {
                 <div class="course-preview-editor">
                     <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}${segmentLabel}</div>
                     <textarea class="course-preview-script" aria-label="第 ${page.page_number} 页讲稿">${this._esc(page.script || '')}</textarea>
+                    <div class="course-focus-editor"></div>
                     <div class="course-preview-page-meta">
                         <span class="course-preview-length"></span>
                         <div class="course-preview-page-actions">
@@ -3511,6 +3514,9 @@ class AICourseStudioApp {
                     </div>
                 </div>
             `;
+            card._focusTargets = Array.isArray(page.focus_targets) ? page.focus_targets : [];
+            card._focusCues = Array.isArray(page.focus_cues) ? page.focus_cues : [];
+            this.renderCourseFocusEditor(card);
             const textarea = card.querySelector('textarea');
             card.dataset.estimatedSeconds = String(
                 Number(page.estimated_seconds)
@@ -4123,12 +4129,14 @@ class AICourseStudioApp {
         this.coursePreviewSubtitlePage = card;
         card.classList.add('playing-preview');
         this.renderSubtitlePreviewImage(card, cues[0] || '本页暂无字幕文本');
+        this.syncCourseFocusCue(card, 0);
     }
 
     clearCoursePreviewSubtitlePlayback(card = null) {
         const target = card || this.coursePreviewSubtitlePage;
         if (target) {
             target.classList.remove('playing-preview');
+            target.querySelectorAll('.course-focus-target.active').forEach(node => node.classList.remove('active'));
             this.updatePageSubtitleSample(target);
         }
         if (!card) {
@@ -4146,6 +4154,81 @@ class AICourseStudioApp {
             Math.max(0, Math.floor(audio.currentTime / duration * cues.length))
         );
         this.renderSubtitlePreviewImage(card, cues[index] || cues[0] || '');
+        this.syncCourseFocusByTime(card, audio.currentTime, duration);
+    }
+
+    renderCourseFocusEditor(card) {
+        const overlayRoot = card.querySelector('.course-focus-overlays');
+        const editor = card.querySelector('.course-focus-editor');
+        const targets = card._focusTargets || [];
+        const cues = card._focusCues || [];
+        if (!overlayRoot || !editor) return;
+        overlayRoot.innerHTML = '';
+        targets.forEach(target => {
+            const box = document.createElement('button');
+            box.type = 'button';
+            box.className = 'course-focus-target';
+            box.dataset.targetId = target.id;
+            box.title = target.text || '页面元素';
+            box.style.left = `${Number(target.x || 0) * 100}%`;
+            box.style.top = `${Number(target.y || 0) * 100}%`;
+            box.style.width = `${Number(target.width || 0) * 100}%`;
+            box.style.height = `${Number(target.height || 0) * 100}%`;
+            overlayRoot.appendChild(box);
+        });
+        if (!targets.length || !cues.length) {
+            editor.innerHTML = '<span class="course-focus-empty">本页未识别到可跟随的文字元素</span>';
+            return;
+        }
+        editor.innerHTML = '<strong>讲解焦点校准</strong><span>逐条确认声音对应的页面位置</span>';
+        cues.forEach((cue, index) => {
+            const row = document.createElement('label');
+            row.className = 'course-focus-cue-row';
+            row.innerHTML = `
+                <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}</span>
+                <select aria-label="讲解片段 ${index + 1} 对应位置">
+                    ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
+                </select>
+            `;
+            row.querySelector('select').addEventListener('change', event => {
+                card._focusCues[index] = { ...card._focusCues[index], target_id: event.target.value };
+                this.syncCourseFocusCue(card, index);
+                this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
+                clearTimeout(this.previewAutoSaveTimer);
+                this.previewAutoSaveTimer = setTimeout(
+                    () => this.savePreviewScripts({ automatic: true }),
+                    400
+                );
+            });
+            row.addEventListener('mouseenter', () => this.syncCourseFocusCue(card, index));
+            editor.appendChild(row);
+        });
+    }
+
+    syncCourseFocusCue(card, cueIndex) {
+        if (!card) return;
+        const cue = (card._focusCues || [])[cueIndex];
+        card.querySelectorAll('.course-focus-target').forEach(node => {
+            node.classList.toggle('active', Boolean(cue) && node.dataset.targetId === cue.target_id);
+        });
+    }
+
+    syncCourseFocusByTime(card, currentTime, duration) {
+        const cues = card?._focusCues || [];
+        if (!cues.length || !duration) return;
+        const weights = cues.map(cue => Math.max(1, Number(cue.weight) || String(cue.text || '').length));
+        const position = Math.max(0, Math.min(1, currentTime / duration));
+        const threshold = position * weights.reduce((sum, weight) => sum + weight, 0);
+        let cumulative = 0;
+        let index = cues.length - 1;
+        for (let cueIndex = 0; cueIndex < weights.length; cueIndex += 1) {
+            cumulative += weights[cueIndex];
+            if (threshold <= cumulative) {
+                index = cueIndex;
+                break;
+            }
+        }
+        this.syncCourseFocusCue(card, index);
     }
 
     makeSubtitleCues(text) {
@@ -4281,7 +4364,8 @@ class AICourseStudioApp {
         return Array.from(this.elements.coursePreviewPages.querySelectorAll('.course-preview-page')).map(card => ({
             page_number: Number(card.dataset.pageNumber),
             script: card.querySelector('.course-preview-script').value,
-            reviewed: card.querySelector('.page-reviewed').checked
+            reviewed: card.querySelector('.page-reviewed').checked,
+            focus_cues: card._focusCues || []
         }));
     }
 
@@ -4603,6 +4687,7 @@ class AICourseStudioApp {
                     tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
                     tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
                     burn_subtitles: this.elements.burnSubtitles.checked,
+                    focus_highlight: this.elements.focusHighlight?.checked !== false,
                     ...this.collectCoursePackagingOptions(),
                     ...this.collectVideoOptions(),
                     ...this.collectSubtitleOptions()

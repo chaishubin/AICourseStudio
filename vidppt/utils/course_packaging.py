@@ -174,11 +174,20 @@ def _render_packaging_clip(
 ) -> None:
     options = _side_options(options, kind)
     background_path = Path(options["background_path"]) if options.get("background_path") else background_path
+    video_path = Path(str(options.get(f"{kind}_video_path") or ""))
+    use_video_background = video_path.is_file()
+    render_options = {
+        **options,
+        # A video background must remain the actual background. Render only the
+        # visual decorations and text onto a transparent layer instead of
+        # covering the video with a mostly opaque, full-frame theme image.
+        "_transparent_background": use_video_background,
+    }
     image_path = output.with_suffix(".png")
     _render_packaging_image(
         image_path,
         config,
-        options,
+        render_options,
         kind=kind,
         course_title=course_title,
         segment_title=segment_title,
@@ -199,7 +208,7 @@ def _render_packaging_clip(
         _render_packaging_image(
             decor_path,
             config,
-            {**options, "_reveal_stage": "decor"},
+            {**render_options, "_reveal_stage": "decor"},
             kind=kind,
             course_title=course_title,
             segment_title=segment_title,
@@ -209,7 +218,7 @@ def _render_packaging_clip(
         _render_packaging_image(
             title_stage_path,
             config,
-            {**options, "_reveal_stage": "title"},
+            {**render_options, "_reveal_stage": "title"},
             kind=kind,
             course_title=course_title,
             segment_title=segment_title,
@@ -219,8 +228,6 @@ def _render_packaging_clip(
         _difference_layer(decor_path, title_stage_path, title_layer_path)
         _difference_layer(title_stage_path, image_path, meta_layer_path)
     base_image_path = decor_path if staged_motion else image_path
-    video_path = Path(str(options.get(f"{kind}_video_path") or ""))
-    use_video_background = video_path.is_file()
     command = [ffmpeg, "-y"]
     if use_video_background:
         command.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", str(video_path)])
@@ -248,8 +255,8 @@ def _render_packaging_clip(
         video_filter = (
             f"[0:v]scale={config.video_width}:{config.video_height}:force_original_aspect_ratio=increase,"
             f"crop={config.video_width}:{config.video_height},setsar=1[bg];"
-            "[1:v]format=rgba,colorchannelmixer=aa=0.82[card];"
-            f"[bg][card]overlay=shortest=1,{_video_filter(config, duration, False, 'none')}"
+            "[1:v]format=rgba[foreground];"
+            f"[bg][foreground]overlay=shortest=1,{_video_filter(config, duration, False, 'none')}"
         )
     else:
         video_filter = f"[0:v]{_video_filter(config, duration, False, 'none')}"
@@ -355,7 +362,7 @@ def _staged_video_filter(
         base = (
             f"[0:v]scale={config.video_width}:{config.video_height}:force_original_aspect_ratio=increase,"
             f"crop={config.video_width}:{config.video_height},setsar=1,{motion}[moving];"
-            "[1:v]format=rgba,colorchannelmixer=aa=0.82[decor];"
+            "[1:v]format=rgba[decor];"
             "[moving][decor]overlay=shortest=1[base]"
         )
     else:
@@ -419,13 +426,17 @@ def _render_packaging_image(
     background_path = Path(options["background_path"]) if options.get("background_path") else background_path
     palette = _palette(options)
     width, height = config.video_width, config.video_height
-    image = _base_background(
-        width,
-        height,
-        palette,
-        background_path if (_use_slide_background(options) or options.get("background_path")) else None,
-        str(options.get("background_style") or "ppt").strip().lower(),
-    )
+    if options.get("_transparent_background"):
+        image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        _add_video_readability_scrim(image, palette)
+    else:
+        image = _base_background(
+            width,
+            height,
+            palette,
+            background_path if (_use_slide_background(options) or options.get("background_path")) else None,
+            str(options.get("background_style") or "ppt").strip().lower(),
+        )
     draw = ImageDraw.Draw(image)
 
     layout = palette.get("layout", "diagonal_panel")
@@ -469,6 +480,20 @@ def _render_packaging_image(
     image.save(output)
 
 
+def _add_video_readability_scrim(image: Image.Image, palette: dict) -> None:
+    """Add a restrained local tint so text stays legible over moving footage."""
+    width, height = image.size
+    tint = _hex_to_rgb(palette["background"])
+    scrim = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(scrim)
+    fade_end = max(1, round(width * 0.72))
+    for x in range(fade_end):
+        ratio = x / fade_end
+        alpha = round(104 * (1 - ratio) ** 1.7)
+        draw.line((x, 0, x, height), fill=(*tint, alpha))
+    image.alpha_composite(scrim)
+
+
 def _render_diagonal_panel_layout(
     image: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -492,8 +517,7 @@ def _render_diagonal_panel_layout(
         (round(width * 0.64), 0, width, height),
         fill=(*_hex_to_rgb(palette["panel"]), 232),
     )
-    composited = Image.alpha_composite(image.convert("RGBA"), panel_overlay).convert("RGB")
-    image.paste(composited)
+    _alpha_composite_in_place(image, panel_overlay)
     draw = ImageDraw.Draw(image)
     draw.polygon(
         [
@@ -636,10 +660,7 @@ def _render_title_card_layout(
         fill=(*accent_rgb, 105),
         width=corner_width,
     )
-    image.alpha_composite(overlay) if image.mode == "RGBA" else None
-    if image.mode != "RGBA":
-        composited = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
-        image.paste(composited)
+    _alpha_composite_in_place(image, overlay)
     if reveal_stage == "decor":
         return
 
@@ -665,8 +686,7 @@ def _render_title_card_layout(
         outline=(*accent_rgb, 118),
         width=max(1, width // 960),
     )
-    composited = Image.alpha_composite(image.convert("RGBA"), label_layer).convert("RGB")
-    image.paste(composited)
+    _alpha_composite_in_place(image, label_layer)
     draw = ImageDraw.Draw(image)
     draw.text(
         (text_left + label_padding_x, label_top + label_padding_y - label_bbox[1]),
@@ -791,7 +811,7 @@ def _render_credits_layout(
             fill=(*_hex_to_rgb(accent), alpha),
             width=max(1, height // 360),
         )
-        image.paste(Image.alpha_composite(image.convert("RGBA"), line_overlay).convert("RGB"))
+        _alpha_composite_in_place(image, line_overlay)
 
     if reveal_stage == "decor":
         return
@@ -833,6 +853,14 @@ def _render_credits_layout(
 def _instructor_meta(options: dict, instructor: str) -> str:
     title = str(options.get("instructor_title") or "").strip()
     return f"主讲人：{instructor}{f' · {title}' if title else ''}"
+
+
+def _alpha_composite_in_place(image: Image.Image, overlay: Image.Image) -> None:
+    """Composite an RGBA layer without discarding transparency."""
+    if image.mode == "RGBA":
+        image.alpha_composite(overlay)
+    else:
+        image.paste(Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB"))
 
 
 def _course_identity_meta(options: dict, organization: str, instructor: str) -> str:

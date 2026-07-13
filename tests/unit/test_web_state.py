@@ -57,7 +57,7 @@ class TestSaveState:
         save_state("abc123")
 
         assert STATE_FILE.exists()
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))[0]
         assert data["task_id"] == "abc123"
         assert data["status"] == "completed"
 
@@ -71,7 +71,7 @@ class TestSaveState:
         }
         save_state("t1")
 
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))[0]
         assert data["original_name"] == "我的PPT.pptx"
 
     def test_original_name_not_overwritten_if_present(self):
@@ -85,7 +85,7 @@ class TestSaveState:
         }
         save_state("t2")
 
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))[0]
         assert data["original_name"] == "保留原名.pptx"
 
     def test_noop_if_task_not_found(self):
@@ -95,8 +95,8 @@ class TestSaveState:
         save_state("nonexistent")
         assert not STATE_FILE.exists()
 
-    def test_only_last_task_persisted(self):
-        """state.json 只保留最后一次 save_state 的任务"""
+    def test_all_recent_tasks_are_persisted(self):
+        """state.json 保留最近任务，而不是覆盖成单个任务。"""
         from web.app import save_state, tasks, STATE_FILE
 
         tasks["first"] = {"status": "completed"}
@@ -105,7 +105,7 @@ class TestSaveState:
         save_state("second")
 
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        assert data["task_id"] == "second"
+        assert [item["task_id"] for item in data] == ["first", "second"]
 
 
 class TestLoadState:
@@ -208,7 +208,7 @@ class TestWebProgressTrackerPersistence:
         tracker.update("extract", 3, 5, "提取中")
 
         assert STATE_FILE.exists()
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))[0]
         assert data["task_id"] == "t-integ"
         assert data["status"] == "processing"
 
@@ -219,7 +219,7 @@ class TestWebProgressTrackerPersistence:
         tracker = WebProgressTracker("t-done", q, total_pages=2)
         tracker.complete("/tmp/out.mp4")
 
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))[0]
         assert data["status"] == "completed"
         assert data["video_path"] == "/tmp/out.mp4"
 
@@ -230,7 +230,7 @@ class TestWebProgressTrackerPersistence:
         tracker = WebProgressTracker("t-err", q, total_pages=2)
         tracker.error("TTS 失败")
 
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))[0]
         assert data["status"] == "error"
         assert data["error"] == "TTS 失败"
 

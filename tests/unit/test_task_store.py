@@ -65,6 +65,21 @@ def test_task_store_records_operation_logs(temp_dir):
     assert len(all_logs) == 2
 
 
+def test_task_store_paginates_operation_logs(temp_dir):
+    store = TaskStore(temp_dir / "tasks.db")
+    for index in range(5):
+        store.add_operation_log({
+            "actor": "teacher" if index < 4 else "other",
+            "action": f"action-{index}",
+            "created_at": 1000 + index,
+        })
+
+    logs = store.list_operation_logs(actor="teacher", limit=2, offset=2)
+
+    assert store.count_operation_logs(actor="teacher") == 4
+    assert [log["action"] for log in logs] == ["action-1", "action-0"]
+
+
 def test_task_store_migrates_operation_log_ip_columns(temp_dir):
     db_path = temp_dir / "legacy.db"
     import sqlite3

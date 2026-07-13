@@ -1292,7 +1292,8 @@ def test_index_contains_editable_course_preview():
     assert 'href="/data-management"' in html
     assert 'href="/operation-logs-page"' in html
     assert '这里是字幕位置' not in html
-    assert '在每页 PPT 上检查真实字幕样例、可读性和遮挡风险' in html
+    assert '在每页 PPT 上检查字幕，并让声音讲到哪里、画面就提示到哪里' in html
+    assert 'id="focus-highlight"' in html
 
 
 def test_course_packaging_preview_image_endpoint():
@@ -1423,7 +1424,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=38' in html
+    assert '/static/js/main.js?v=39' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -1631,6 +1632,9 @@ def test_management_pages_are_separate_from_course_workspace():
     assert '/static/css/main.css?v=21' in data_page
     assert '/static/js/admin_pages.js?v=8' in data_page
     assert 'id="operation-log-body"' in logs_page
+    assert 'id="operation-log-pagination"' in logs_page
+    assert '/static/css/main.css?v=22' in logs_page
+    assert '/static/js/admin_pages.js?v=9' in logs_page
     assert 'id="asset-table-body"' not in logs_page
     assert 'id="upload-area"' not in logs_page
     assert 'js/admin_pages.js' in logs_page

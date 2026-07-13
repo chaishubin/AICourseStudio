@@ -166,6 +166,13 @@ def _normalize_quotes(text: str) -> str:
             result.append(char)
             continue
 
+        if char in "”’" and not quote_stack:
+            # A semantic subtitle fragment may start with a closing quote whose
+            # opening quote was in the previous fragment. Keep it as a closing
+            # mark instead of trying to pop an empty local stack.
+            result.append(char)
+            continue
+
         if char in "”’" or (
             char in "\"'"
             and quote_stack

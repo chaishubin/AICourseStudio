@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>操作日志 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=18">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=22">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -94,6 +94,7 @@
                             <tbody id="operation-log-body"></tbody>
                         </table>
                     </div>
+                    <div class="management-pagination" id="operation-log-pagination" hidden></div>
                 </section>
             </main>
             <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
@@ -101,6 +102,6 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=3"></script>
+    <script src="{{ url_for('static', filename='js/admin_pages.js') }}?v=9"></script>
 </body>
 </html>

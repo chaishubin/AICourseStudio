@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=24">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=25">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -605,8 +605,14 @@
                     </div>
                     <div class="course-subtitle-panel">
                         <div class="course-subtitle-panel-header">
-                            <h4>字幕调试</h4>
-                            <span>在每页 PPT 上检查真实字幕样例、可读性和遮挡风险。</span>
+                            <div>
+                                <h4>字幕与讲解焦点</h4>
+                                <span>在每页 PPT 上检查字幕，并让声音讲到哪里、画面就提示到哪里。</span>
+                            </div>
+                            <label class="focus-highlight-toggle">
+                                <input type="checkbox" id="focus-highlight" checked>
+                                视频中启用讲解焦点跟随
+                            </label>
                         </div>
                         <div class="course-subtitle-grid">
                             <div class="course-subtitle-controls">
@@ -754,7 +760,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=38"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=39"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

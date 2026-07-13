@@ -267,6 +267,20 @@ def test_subtitle_punctuation_preserves_book_title_marks():
     assert text == "推荐阅读《人工智能导论》 再完成练习"
 
 
+def test_subtitle_punctuation_accepts_unmatched_closing_quote():
+    text = normalize_subtitle_text("上一段已经开始的内容”。下一句。")
+
+    assert text == "上一段已经开始的内容 下一句"
+
+
+def test_subtitle_chunks_accept_quote_spanning_semantic_phrases():
+    chunks = subtitle_chunks("“第一句话。第二句话”。后续内容。")
+
+    assert "第一句话" in " ".join(chunks)
+    assert "第二句话" in " ".join(chunks)
+    assert "后续内容" in " ".join(chunks)
+
+
 def test_subtitle_chunks_use_normalized_punctuation_for_breaks():
     chunks = subtitle_chunks("第一,明确目标;第二,检查结果?第三,复盘改进")
 
@@ -543,9 +557,46 @@ def test_course_packaging_uses_local_video_as_animated_background(temp_dir, monk
     command = run.call_args.args[0]
     assert str(video) in command
     filter_complex = command[command.index("-filter_complex") + 1]
-    assert "[bg][card]overlay=shortest=1" in filter_complex
-    assert "colorchannelmixer=aa=0.82" in filter_complex
+    assert "[bg][foreground]overlay=shortest=1" in filter_complex
+    assert "colorchannelmixer=aa=0.82" not in filter_complex
     assert command[command.index("-t", command.index("-ac")) + 1] == "4.00"
+
+
+def test_course_packaging_video_uses_transparent_visual_overlay(temp_dir):
+    from PIL import Image
+
+    from vidppt.utils.course_packaging import _render_packaging_image
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+    )
+    overlay = temp_dir / "overlay.png"
+
+    _render_packaging_image(
+        overlay,
+        config,
+        {
+            "template": "academic",
+            "primary_color": "#12324A",
+            "_transparent_background": True,
+        },
+        kind="intro",
+        course_title="人工智能导论",
+        segment_title="",
+        logo_path=None,
+        background_path=None,
+    )
+
+    with Image.open(overlay) as rendered:
+        assert rendered.mode == "RGBA"
+        alpha = rendered.getchannel("A")
+        minimum, maximum = alpha.getextrema()
+        assert minimum < 16
+        assert maximum == 255
+        assert sum(1 for value in alpha.getdata() if value < 128) > 960 * 540 // 2
 
 
 def test_course_packaging_zoom_filter_keeps_one_output_frame_per_input_frame(temp_dir):
