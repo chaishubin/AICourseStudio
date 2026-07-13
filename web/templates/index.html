@@ -33,6 +33,7 @@
                 <a class="nav-item" href="{{ url_for('course_packaging_page') }}">
                     <span class="nav-icon">◈</span><span>课程包装</span>
                 </a>
+                <a class="nav-item" href="{{ url_for('packaging_assets_page') }}"><span class="nav-icon">▧</span><span>包装素材</span></a>
                 <a class="nav-item" href="{{ url_for('data_management_page') }}">
                     <span class="nav-icon">☷</span><span>数据管理</span>
                 </a>
@@ -550,9 +551,21 @@
                                 <input id="packaging-organization" class="text-input" type="text"
                                        maxlength="60" placeholder="例如：某某大学">
                             </label>
+                            <label>院系/部门
+                                <input id="packaging-department" class="text-input" type="text"
+                                       maxlength="60" placeholder="例如：人工智能学院">
+                            </label>
                             <label>主讲人
                                 <input id="packaging-instructor" class="text-input" type="text"
                                        maxlength="40" placeholder="可选">
+                            </label>
+                            <label>职称/身份
+                                <input id="packaging-instructor-title" class="text-input" type="text"
+                                       maxlength="40" placeholder="例如：教授">
+                            </label>
+                            <label>柔性衔接
+                                <input id="packaging-transition-seconds" class="number-input" type="number"
+                                       min="0" max="0.8" step="0.05" value="0.35">
                             </label>
                             <label>片头片尾时长
                                 <input id="packaging-duration" class="number-input" type="number"
@@ -739,7 +752,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=34"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=36"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

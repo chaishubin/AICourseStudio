@@ -6,10 +6,11 @@ import shutil
 import subprocess
 import tempfile
 import time
+import re
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from ..core.models import ProcessConfig
 
@@ -70,11 +71,14 @@ def package_course_video(
     segment_title: str = "",
     logo_path: Optional[Path] = None,
     intro_background_path: Optional[Path] = None,
+    mid_background_path: Optional[Path] = None,
     outro_background_path: Optional[Path] = None,
+    segment_durations: Optional[list[float]] = None,
     cancel_check=None,
 ) -> None:
-    """Add optional intro/outro clips around an existing MP4."""
-    if not options.get("enable_intro") and not options.get("enable_outro"):
+    """Add optional intro, inter-segment transitions, and outro around an MP4."""
+    use_mid = bool(options.get("enable_mid")) and bool(segment_durations) and len(segment_durations) > 1
+    if not options.get("enable_intro") and not use_mid and not options.get("enable_outro"):
         if source_video != output_video:
             source_video.replace(output_video)
         return
@@ -102,7 +106,35 @@ def package_course_video(
                 background_path=intro_background_path,
             )
             clips.append(intro)
-        clips.append(source_video)
+        if use_mid:
+            mid = temp_dir / "mid.mp4"
+            _render_packaging_clip(
+                mid,
+                config,
+                options,
+                kind="mid",
+                course_title=course_title,
+                segment_title="下一章节",
+                logo_path=logo_path,
+                background_path=mid_background_path or intro_background_path,
+            )
+            offset = 0.0
+            for index, duration in enumerate(segment_durations):
+                chunk = temp_dir / f"segment_{index + 1:03d}.mp4"
+                _extract_video_range(
+                    ffmpeg,
+                    source_video,
+                    chunk,
+                    config,
+                    start=offset,
+                    duration=None if index == len(segment_durations) - 1 else duration,
+                )
+                clips.append(chunk)
+                offset += duration
+                if index < len(segment_durations) - 1:
+                    clips.append(mid)
+        else:
+            clips.append(source_video)
         if options.get("enable_outro"):
             outro = temp_dir / "outro.mp4"
             _render_packaging_clip(
@@ -118,7 +150,14 @@ def package_course_video(
             clips.append(outro)
 
         packaged = temp_dir / "packaged.mp4"
-        _concat_with_ffmpeg(ffmpeg, clips, packaged, config, cancel_check)
+        _concat_with_ffmpeg(
+            ffmpeg,
+            clips,
+            packaged,
+            config,
+            cancel_check,
+            transition_seconds=float(options.get("transition_seconds") or 0.35),
+        )
         packaged.replace(output_video)
 
 
@@ -133,6 +172,8 @@ def _render_packaging_clip(
     logo_path: Optional[Path],
     background_path: Optional[Path],
 ) -> None:
+    options = _side_options(options, kind)
+    background_path = Path(options["background_path"]) if options.get("background_path") else background_path
     image_path = output.with_suffix(".png")
     _render_packaging_image(
         image_path,
@@ -149,44 +190,87 @@ def _render_packaging_clip(
     enable_motion = bool(options.get("enable_motion", True))
     enable_music = bool(options.get("enable_music", True))
     motion_style = str(options.get("motion_style") or "zoom").strip().lower()
-    video_filter = _video_filter(config, duration, enable_motion, motion_style)
+    staged_motion = enable_motion and motion_style != "none"
+    decor_path = output.with_name(f"{output.stem}.decor.png")
+    title_stage_path = output.with_name(f"{output.stem}.title-stage.png")
+    title_layer_path = output.with_name(f"{output.stem}.title-layer.png")
+    meta_layer_path = output.with_name(f"{output.stem}.meta-layer.png")
+    if staged_motion:
+        _render_packaging_image(
+            decor_path,
+            config,
+            {**options, "_reveal_stage": "decor"},
+            kind=kind,
+            course_title=course_title,
+            segment_title=segment_title,
+            logo_path=logo_path,
+            background_path=background_path,
+        )
+        _render_packaging_image(
+            title_stage_path,
+            config,
+            {**options, "_reveal_stage": "title"},
+            kind=kind,
+            course_title=course_title,
+            segment_title=segment_title,
+            logo_path=logo_path,
+            background_path=background_path,
+        )
+        _difference_layer(decor_path, title_stage_path, title_layer_path)
+        _difference_layer(title_stage_path, image_path, meta_layer_path)
+    base_image_path = decor_path if staged_motion else image_path
     video_path = Path(str(options.get(f"{kind}_video_path") or ""))
     use_video_background = video_path.is_file()
     command = [ffmpeg, "-y"]
     if use_video_background:
         command.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", str(video_path)])
-        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(image_path)])
+        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(base_image_path)])
+        next_input = 2
+    else:
+        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(base_image_path)])
+        next_input = 1
+    if staged_motion:
+        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(title_layer_path)])
+        title_input = next_input
+        next_input += 1
+        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(meta_layer_path)])
+        meta_input = next_input
+        next_input += 1
+        video_filter = _staged_video_filter(
+            config,
+            duration,
+            motion_style,
+            use_video_background=use_video_background,
+            title_input=title_input,
+            meta_input=meta_input,
+        )
+    elif use_video_background:
         video_filter = (
             f"[0:v]scale={config.video_width}:{config.video_height}:force_original_aspect_ratio=increase,"
             f"crop={config.video_width}:{config.video_height},setsar=1[bg];"
             "[1:v]format=rgba,colorchannelmixer=aa=0.82[card];"
-            f"[bg][card]overlay=shortest=1,{_video_filter(config, duration, enable_motion, motion_style)}"
+            f"[bg][card]overlay=shortest=1,{_video_filter(config, duration, False, 'none')}"
         )
-        next_input = 2
     else:
-        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(image_path)])
-        next_input = 1
+        video_filter = f"[0:v]{_video_filter(config, duration, False, 'none')}"
     if enable_music:
         music_path = Path(str(options.get("music_path") or ""))
         if music_path.is_file():
             command.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", str(music_path)])
             music_input = next_input
             audio_filter = (
-                f"[{music_input}:a]volume=0.16,afade=t=in:st=0:d=0.35,"
+                f"[{music_input}:a]loudnorm=I=-24:TP=-3:LRA=5,afade=t=in:st=0:d=0.30,"
                 f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
             )
         else:
-            for frequency in _music_frequencies(options):
+            frequencies = _music_frequencies(options)
+            for frequency in frequencies:
                 command.extend([
                     "-f", "lavfi", "-t", f"{duration:.2f}", "-i",
                     f"sine=frequency={frequency}:sample_rate={config.audio_sample_rate}",
                 ])
-            audio_filter = (
-                f"[{next_input}:a][{next_input + 1}:a][{next_input + 2}:a]amix=inputs=3:duration=shortest,volume=0.018,"
-                "afade=t=in:st=0:d=0.35,"
-                f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
-            )
-        filter_complex = f"{video_filter}[v];{audio_filter}" if use_video_background else f"[0:v]{video_filter}[v];{audio_filter}"
+            audio_filter = _soundmark_filter(next_input, duration, len(frequencies))
+        filter_complex = f"{video_filter}[v];{audio_filter}"
     else:
         command.extend([
             "-f",
@@ -197,10 +281,7 @@ def _render_packaging_clip(
             f"anullsrc=channel_layout=mono:sample_rate={config.audio_sample_rate}",
         ])
         silence_input = next_input
-        filter_complex = (
-            f"{video_filter}[v];[{silence_input}:a]anull[a]"
-            if use_video_background else f"[0:v]{video_filter}[v];[{silence_input}:a]anull[a]"
-        )
+        filter_complex = f"{video_filter}[v];[{silence_input}:a]anull[a]"
     command.extend([
         "-filter_complex",
         filter_complex,
@@ -232,12 +313,95 @@ def _render_packaging_clip(
         str(config.audio_sample_rate),
         "-ac",
         str(config.audio_channels),
+        "-t",
+        f"{duration:.2f}",
         "-shortest",
         "-movflags",
         "+faststart",
         str(output),
     ])
     subprocess.run(command, check=True, capture_output=True, text=True)
+
+
+def _difference_layer(before_path: Path, after_path: Path, output_path: Path) -> None:
+    """Extract pixels introduced by a reveal stage into an RGBA overlay."""
+    before = Image.open(before_path).convert("RGB")
+    after = Image.open(after_path).convert("RGB")
+    difference = ImageChops.difference(before, after)
+    alpha = difference.convert("L").point(lambda value: min(255, value * 5))
+    layer = after.convert("RGBA")
+    layer.putalpha(alpha)
+    layer.save(output_path)
+
+
+def _staged_video_filter(
+    config: ProcessConfig,
+    duration: float,
+    motion_style: str,
+    *,
+    use_video_background: bool,
+    title_input: int,
+    meta_input: int,
+) -> str:
+    """Build background motion followed by staged title and identity reveals."""
+    motion = _video_filter(
+        config,
+        duration,
+        True,
+        motion_style,
+        include_fades=False,
+    )
+    if use_video_background:
+        base = (
+            f"[0:v]scale={config.video_width}:{config.video_height}:force_original_aspect_ratio=increase,"
+            f"crop={config.video_width}:{config.video_height},setsar=1,{motion}[moving];"
+            "[1:v]format=rgba,colorchannelmixer=aa=0.82[decor];"
+            "[moving][decor]overlay=shortest=1[base]"
+        )
+    else:
+        base = f"[0:v]{motion}[base]"
+    title_start = min(0.35, max(0.05, duration * 0.10))
+    meta_start = min(1.10, max(title_start + 0.25, duration * 0.28))
+    fade_out_start = max(0.0, duration - 0.42)
+    return (
+        f"{base};"
+        f"[{title_input}:v]format=rgba,fade=t=in:st={title_start:.2f}:d=0.48:alpha=1[title];"
+        f"[base][title]overlay=x='-24+24*min(max((t-{title_start:.2f})/0.55,0),1)':y=0:shortest=1[titled];"
+        f"[{meta_input}:v]format=rgba,fade=t=in:st={meta_start:.2f}:d=0.42:alpha=1[meta];"
+        f"[titled][meta]overlay=shortest=1,fade=t=in:st=0:d=0.28,"
+        f"fade=t=out:st={fade_out_start:.2f}:d=0.36,format={config.video_pixel_format}"
+    )
+
+
+def _soundmark_filter(first_input: int, duration: float, input_count: int) -> str:
+    """Create a short, shaped course ident instead of an inaudible flat chord."""
+    main_count = max(1, input_count - 1)
+    pieces = []
+    labels = []
+    for index in range(main_count):
+        delay_ms = index * 110
+        local_duration = max(0.6, duration - delay_ms / 1000)
+        fade_out = max(0.15, local_duration - 0.55)
+        label = f"tone{index}"
+        pieces.append(
+            f"[{first_input + index}:a]atrim=0:{local_duration:.2f},"
+            f"afade=t=in:st=0:d=0.10,afade=t=out:st={fade_out:.2f}:d=0.48,"
+            f"adelay={delay_ms}:all=1[{label}]"
+        )
+        labels.append(f"[{label}]")
+    stinger_index = first_input + input_count - 1
+    stinger_delay = max(0, round((duration - 0.75) * 1000))
+    pieces.append(
+        f"[{stinger_index}:a]atrim=0:0.65,afade=t=in:st=0:d=0.04,"
+        f"afade=t=out:st=0.22:d=0.40,adelay={stinger_delay}:all=1[stinger]"
+    )
+    labels.append("[stinger]")
+    pieces.append(
+        f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:normalize=0,"
+        "aecho=0.8:0.32:55:0.10,loudnorm=I=-24:TP=-4:LRA=4,"
+        f"atrim=0:{duration:.2f}[a]"
+    )
+    return ";".join(pieces)
 
 
 def _render_packaging_image(
@@ -251,6 +415,8 @@ def _render_packaging_image(
     logo_path: Optional[Path],
     background_path: Optional[Path],
 ) -> None:
+    options = _side_options(options, kind)
+    background_path = Path(options["background_path"]) if options.get("background_path") else background_path
     palette = _palette(options)
     width, height = config.video_width, config.video_height
     image = _base_background(
@@ -316,6 +482,7 @@ def _render_diagonal_panel_layout(
     logo_path: Optional[Path],
 ) -> None:
     width, height = config.video_width, config.video_height
+    reveal_stage = str(options.get("_reveal_stage") or "full")
 
     accent = palette["accent"]
     draw.rectangle((0, 0, width, max(10, height // 80)), fill=accent)
@@ -337,6 +504,8 @@ def _render_diagonal_panel_layout(
         ],
         fill=accent,
     )
+    if reveal_stage == "decor":
+        return
 
     title_font = _load_font(round(height * 0.064), bold=True)
     subtitle_font = _load_font(round(height * 0.034), bold=False)
@@ -358,7 +527,7 @@ def _render_diagonal_panel_layout(
 
     if kind == "intro":
         y = content_y
-        if organization:
+        if organization and reveal_stage == "full":
             draw.text((left, y - round(height * 0.09)), organization, fill=palette["muted"], font=meta_font)
         for line in _wrap_text(draw, title, title_font, max_text_width, max_lines=3):
             draw.text((left, y), line, fill=palette["text"], font=title_font)
@@ -366,10 +535,11 @@ def _render_diagonal_panel_layout(
         subtitle = intro_subtitle or (course_title if segment_title and course_title else "")
         if subtitle:
             draw.text((left, y + 12), subtitle, fill=palette["muted"], font=small_font)
-        if instructor:
+        if instructor and reveal_stage == "full":
+            instructor_meta = _instructor_meta(options, instructor)
             draw.text(
                 (left, round(height * 0.76)),
-                f"主讲人：{instructor}",
+                instructor_meta,
                 fill=palette["muted"],
                 font=subtitle_font,
             )
@@ -380,10 +550,10 @@ def _render_diagonal_panel_layout(
             draw.text((left, y), line, fill=palette["text"], font=title_font)
             y += round(height * 0.078)
         draw.text((left, y + 24), outro_subtitle or title, fill=palette["muted"], font=subtitle_font)
-        if organization:
+        if organization and reveal_stage == "full":
             draw.text((left, round(height * 0.78)), organization, fill=palette["muted"], font=meta_font)
 
-    if logo_path and logo_path.is_file():
+    if reveal_stage == "full" and logo_path and logo_path.is_file():
         _paste_logo(image, logo_path, config, options)
 
 
@@ -400,6 +570,7 @@ def _render_title_card_layout(
     logo_path: Optional[Path],
 ) -> None:
     width, height = config.video_width, config.video_height
+    reveal_stage = str(options.get("_reveal_stage") or "full")
     accent = palette["accent"]
     left = round(width * 0.095)
     right = round(width * 0.90)
@@ -432,6 +603,14 @@ def _render_title_card_layout(
     if image.mode != "RGBA":
         composited = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
         image.paste(composited)
+
+    draw.line(
+        (left, round(height * 0.78), right - round(width * 0.055), round(height * 0.78)),
+        fill=accent,
+        width=max(2, height // 220),
+    )
+    if reveal_stage == "decor":
+        return
 
     title_font = _load_font(round(height * 0.068), bold=True)
     subtitle_font = _load_font(round(height * 0.034), bold=False)
@@ -469,8 +648,8 @@ def _render_title_card_layout(
         subtitle = intro_subtitle or (course_title if segment_title and course_title else "")
         if subtitle:
             draw.text((text_left, y + 10), subtitle, fill=palette["muted"], font=subtitle_font)
-        meta = " · ".join(part for part in (organization, f"主讲人：{instructor}" if instructor else "") if part)
-        if meta:
+        meta = _course_identity_meta(options, organization, instructor)
+        if meta and reveal_stage == "full":
             draw.text((text_left, round(height * 0.70)), meta, fill=palette["muted"], font=meta_font)
     else:
         title = outro_title or title
@@ -479,15 +658,10 @@ def _render_title_card_layout(
             draw.text((text_left, y), line, fill=palette["text"], font=title_font)
             y += round(height * 0.082)
         draw.text((text_left, y + 12), outro_subtitle or title, fill=palette["muted"], font=subtitle_font)
-        if organization:
+        if organization and reveal_stage == "full":
             draw.text((text_left, round(height * 0.70)), organization, fill=palette["muted"], font=meta_font)
 
-    draw.line(
-        (text_left, round(height * 0.78), right - round(width * 0.055), round(height * 0.78)),
-        fill=accent,
-        width=max(2, height // 220),
-    )
-    if logo_path and logo_path.is_file():
+    if reveal_stage == "full" and logo_path and logo_path.is_file():
         _paste_logo(image, logo_path, config, options)
 
 
@@ -504,6 +678,7 @@ def _render_credits_layout(
     logo_path: Optional[Path],
 ) -> None:
     width, height = config.video_width, config.video_height
+    reveal_stage = str(options.get("_reveal_stage") or "full")
     title = segment_title or course_title or "课程视频"
     organization = str(options.get("organization") or "").strip()
     instructor = str(options.get("instructor") or "").strip()
@@ -535,6 +710,9 @@ def _render_credits_layout(
         )
         image.paste(Image.alpha_composite(image.convert("RGBA"), line_overlay).convert("RGB"))
 
+    if reveal_stage == "decor":
+        return
+
     if kind == "intro":
         heading = intro_title or title
         support_lines = [intro_subtitle or intro_label]
@@ -553,17 +731,32 @@ def _render_credits_layout(
         draw.text((left, y), line, fill=palette["text"], font=title_font)
         y += round(height * 0.080)
     y += round(height * 0.025)
-    for line in support_lines[:4]:
+    visible_support = support_lines[:1] if reveal_stage == "title" else support_lines[:4]
+    for line in visible_support:
         draw.text((left, y), str(line), fill=palette["muted"], font=line_font)
         y += round(height * 0.052)
-    draw.text(
-        (left, round(height * 0.80)),
-        "Powered by VidPPT",
-        fill=palette["muted"],
-        font=meta_font,
-    )
-    if logo_path and logo_path.is_file():
+    if reveal_stage == "full":
+        copyright_text = str(options.get("copyright") or "Powered by VidPPT").strip()
+        draw.text(
+            (left, round(height * 0.80)),
+            copyright_text,
+            fill=palette["muted"],
+            font=meta_font,
+        )
+    if reveal_stage == "full" and logo_path and logo_path.is_file():
         _paste_logo(image, logo_path, config, options)
+
+
+def _instructor_meta(options: dict, instructor: str) -> str:
+    title = str(options.get("instructor_title") or "").strip()
+    return f"主讲人：{instructor}{f' · {title}' if title else ''}"
+
+
+def _course_identity_meta(options: dict, organization: str, instructor: str) -> str:
+    department = str(options.get("department") or "").strip()
+    organization_meta = " · ".join(part for part in (organization, department) if part)
+    instructor_meta = _instructor_meta(options, instructor) if instructor else ""
+    return " · ".join(part for part in (organization_meta, instructor_meta) if part)
 
 
 def _base_background(
@@ -625,6 +818,101 @@ def _use_slide_background(options: dict) -> bool:
     return bool(options.get("use_slide_background", True))
 
 
+def _side_options(options: dict, kind: str) -> dict:
+    """将片头或片尾的独立设置映射到现有渲染字段。"""
+    resolved = dict(options)
+    for name in (
+        "background_path", "music_path", "accent_color", "background_style",
+        "logo_position", "motion_style", "music_style", "use_slide_background",
+        "enable_motion", "enable_music",
+    ):
+        specific = options.get(f"{kind}_{name}")
+        if specific is not None:
+            resolved[name] = specific
+    if kind == "mid":
+        resolved["outro_text"] = options.get("mid_title") or "章节过渡"
+        resolved["outro_title"] = options.get("mid_title") or "章节过渡"
+        resolved["outro_subtitle"] = options.get("mid_subtitle") or "接下来进入下一章节"
+        resolved["outro_label"] = options.get("mid_label") or "课程继续"
+    return resolved
+
+
+def _extract_video_range(
+    ffmpeg: str,
+    source: Path,
+    output: Path,
+    config: ProcessConfig,
+    *,
+    start: float,
+    duration: Optional[float],
+) -> None:
+    """Extract a normalized course segment for transition-aware concatenation."""
+    command = [ffmpeg, "-y", "-ss", f"{max(0.0, start):.3f}", "-i", str(source)]
+    if duration is not None:
+        command.extend(["-t", f"{max(0.05, duration):.3f}"])
+    command.extend([
+        "-c:v", config.video_codec,
+        "-preset", config.video_preset,
+        "-crf", str(config.video_crf),
+        "-profile:v", config.video_profile,
+        "-pix_fmt", config.video_pixel_format,
+        "-r", str(config.video_fps),
+        "-g", str(config.video_fps * config.video_gop_seconds),
+        "-c:a", config.audio_codec,
+        "-b:a", config.audio_bitrate,
+        "-ar", str(config.audio_sample_rate),
+        "-ac", str(config.audio_channels),
+        "-movflags", "+faststart",
+        str(output),
+    ])
+    subprocess.run(command, check=True, capture_output=True, text=True)
+
+
+def shift_srt_for_packaging(
+    path: Path,
+    *,
+    intro_seconds: float = 0.0,
+    segment_durations: Optional[list[float]] = None,
+    mid_seconds: float = 0.0,
+) -> None:
+    """Keep external subtitle cues aligned after intro and mid transitions."""
+    if not path.is_file() or (intro_seconds <= 0 and mid_seconds <= 0):
+        return
+    boundaries = []
+    elapsed = 0.0
+    for duration in (segment_durations or [])[:-1]:
+        elapsed += max(0.0, float(duration))
+        boundaries.append(elapsed)
+    timing = re.compile(
+        r'^(\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2},\d{3})(.*)$'
+    )
+
+    def seconds(value: str) -> float:
+        hours, minutes, rest = value.split(':')
+        secs, millis = rest.split(',')
+        return int(hours) * 3600 + int(minutes) * 60 + int(secs) + int(millis) / 1000
+
+    def timestamp(value: float) -> str:
+        total_ms = max(0, round(value * 1000))
+        hours, remainder = divmod(total_ms, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        secs, millis = divmod(remainder, 1000)
+        return f'{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}'
+
+    shifted = []
+    for line in path.read_text(encoding='utf-8').splitlines():
+        match = timing.match(line)
+        if not match:
+            shifted.append(line)
+            continue
+        start = seconds(match.group(1))
+        end = seconds(match.group(2))
+        preceding_mid_count = sum(start >= boundary - 0.001 for boundary in boundaries)
+        offset = intro_seconds + mid_seconds * preceding_mid_count
+        shifted.append(f'{timestamp(start + offset)} --> {timestamp(end + offset)}{match.group(3)}')
+    path.write_text('\n'.join(shifted) + '\n', encoding='utf-8')
+
+
 def _content_box(
     options: dict,
     kind: str,
@@ -663,39 +951,44 @@ def _video_filter(
     duration: float,
     enable_motion: bool,
     motion_style: str,
+    *,
+    include_fades: bool = True,
 ) -> str:
     base = f"scale={config.video_width}:{config.video_height},format={config.video_pixel_format}"
     if not enable_motion or motion_style == "none":
         return base
     frames = max(1, round(duration * config.video_fps))
+    fades = (
+        "fade=t=in:st=0:d=0.35,"
+        f"fade=t=out:st={max(0.0, duration - 0.45):.2f}:d=0.35,"
+        if include_fades else ""
+    )
     if motion_style == "pan":
         return (
             f"scale={round(config.video_width * 1.08)}:{round(config.video_height * 1.08)},"
             f"crop={config.video_width}:{config.video_height}:x='(iw-ow)*on/{frames}':y='(ih-oh)/2',"
-            "fade=t=in:st=0:d=0.35,"
-            f"fade=t=out:st={max(0.0, duration - 0.45):.2f}:d=0.35,"
+            f"{fades}"
             f"format={config.video_pixel_format}"
         )
     return (
         "scale=iw*1.04:ih*1.04,"
-        f"zoompan=z='min(zoom+0.0008,1.04)':"
-        f"d={frames}:"
+        f"zoompan=z='min(1+0.04*on/{frames},1.04)':"
+        "d=1:"
         f"s={config.video_width}x{config.video_height}:fps={config.video_fps},"
-        "fade=t=in:st=0:d=0.35,"
-        f"fade=t=out:st={max(0.0, duration - 0.45):.2f}:d=0.35,"
+        f"{fades}"
         f"format={config.video_pixel_format}"
     )
 
 
-def _music_frequencies(options: dict) -> tuple[str, str, str]:
+def _music_frequencies(options: dict) -> tuple[str, str, str, str]:
     style = str(options.get("music_style") or "warm").strip().lower()
     if style == "bright":
-        return ("262", "330", "392")
+        return ("262", "330", "392", "784")
     if style == "calm":
-        return ("174", "220", "261")
+        return ("174", "220", "261", "523")
     if style == "tech":
-        return ("220", "277", "370")
-    return ("196", "247", "294")
+        return ("220", "277", "370", "740")
+    return ("196", "247", "294", "588")
 
 
 def _paste_logo(image: Image.Image, logo_path: Path, config: ProcessConfig, options: dict) -> None:
@@ -725,6 +1018,8 @@ def _concat_with_ffmpeg(
     output: Path,
     config: ProcessConfig,
     cancel_check=None,
+    *,
+    transition_seconds: float = 0.0,
 ) -> None:
     clips = [
         _ensure_audio_stream(ffmpeg, clip, output.parent, config)
@@ -733,10 +1028,41 @@ def _concat_with_ffmpeg(
     command = [ffmpeg, "-y"]
     for clip in clips:
         command.extend(["-i", str(clip)])
-    parts = []
-    for index in range(len(clips)):
-        parts.append(f"[{index}:v:0][{index}:a:0]")
-    filter_complex = "".join(parts) + f"concat=n={len(clips)}:v=1:a=1[v][a]"
+    transition = max(0.0, min(0.8, float(transition_seconds or 0.0)))
+    durations = [_probe_media_duration(clip) for clip in clips]
+    if transition > 0 and len(clips) > 1 and all(duration > 0 for duration in durations):
+        transition = min(transition, min(durations) / 2)
+        filters = []
+        concat_parts = []
+        for index in range(len(clips)):
+            video_filters = [f"fps={config.video_fps}", "setpts=PTS-STARTPTS"]
+            audio_filters = [
+                f"aresample={config.audio_sample_rate}:async=1:first_pts=0",
+                "asetpts=PTS-STARTPTS",
+            ]
+            if index > 0:
+                video_filters.append(f"fade=t=in:st=0:d={transition:.3f}")
+                audio_filters.append(f"afade=t=in:st=0:d={transition:.3f}")
+            if index < len(clips) - 1:
+                fade_out = max(0.0, durations[index] - transition)
+                video_filters.append(
+                    f"fade=t=out:st={fade_out:.3f}:d={transition:.3f}"
+                )
+                audio_filters.append(
+                    f"afade=t=out:st={fade_out:.3f}:d={transition:.3f}"
+                )
+            filters.append(f"[{index}:v:0]{','.join(video_filters)}[v{index}]")
+            filters.append(f"[{index}:a:0]{','.join(audio_filters)}[a{index}]")
+            concat_parts.append(f"[v{index}][a{index}]")
+        filters.append(
+            "".join(concat_parts) + f"concat=n={len(clips)}:v=1:a=1[v][a]"
+        )
+        filter_complex = ";".join(filters)
+    else:
+        parts = []
+        for index in range(len(clips)):
+            parts.append(f"[{index}:v:0][{index}:a:0]")
+        filter_complex = "".join(parts) + f"concat=n={len(clips)}:v=1:a=1[v][a]"
     command.extend(
         [
             "-filter_complex",
@@ -788,6 +1114,31 @@ def _concat_with_ffmpeg(
     if process.returncode != 0:
         _, stderr = process.communicate()
         raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+
+
+def _probe_media_duration(path: Path) -> float:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return max(0.0, float(result.stdout.strip()))
+    except (OSError, subprocess.CalledProcessError, TypeError, ValueError):
+        return 0.0
 
 
 def _ensure_audio_stream(

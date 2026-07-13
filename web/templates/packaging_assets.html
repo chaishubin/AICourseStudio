@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>包装素材管理 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=25">
+</head>
+<body>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand"><div class="brand-mark">AI</div><div><strong>Course Studio</strong><span>课程生产管理平台</span></div></div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item" href="{{ url_for('index') }}"><span class="nav-icon">▦</span><span>生产工作台</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#upload-module"><span class="nav-icon">⇧</span><span>素材与任务</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#course-preview-module"><span class="nav-icon">✎</span><span>内容审核</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#results-module"><span class="nav-icon">□</span><span>课程资产</span></a>
+                <a class="nav-item" href="{{ url_for('course_packaging_page') }}"><span class="nav-icon">◈</span><span>课程包装</span></a>
+                <a class="nav-item active" href="{{ url_for('packaging_assets_page') }}"><span class="nav-icon">▧</span><span>包装素材</span></a>
+                <a class="nav-item" href="{{ url_for('data_management_page') }}"><span class="nav-icon">☷</span><span>数据管理</span></a>
+                <a class="nav-item" href="{{ url_for('operation_logs_page') }}"><span class="nav-icon">◴</span><span>操作日志</span></a>
+                {% if can_manage_accounts %}<a class="nav-item" href="{{ url_for('accounts_page') }}"><span class="nav-icon">◎</span><span>账号管理</span></a>{% endif %}
+                {% if can_view_debug %}<a class="nav-item" href="{{ url_for('debug_page') }}"><span class="nav-icon">◇</span><span>调试工作台</span></a>{% endif %}
+            </nav>
+            <div class="sidebar-meta"><span class="status-dot"></span><div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div></div>
+        </aside>
+        <div class="admin-main">
+            <header class="admin-topbar">
+                <div><p class="breadcrumb">AI 课程生产 / 课程包装 / 素材管理</p><h1>包装素材管理</h1></div>
+                <div class="topbar-actions"><span class="environment-badge"><span></span>共享素材库</span><span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span><div class="admin-avatar">{{ current_user[:1] | upper }}</div><form method="post" action="{{ url_for('logout') }}"><button class="logout-button" type="submit">退出登录</button></form></div>
+            </header>
+            <main class="content management-page packaging-assets-page">
+                <section class="workspace-intro packaging-page-intro">
+                    <div><h2>统一维护片头片尾素材</h2><p>预览、筛选、重命名或删除包装页面上传的背景图、视频和音乐。</p></div>
+                    <a class="btn-convert" href="{{ url_for('course_packaging_page') }}">返回包装设计</a>
+                </section>
+                <section class="card management-card">
+                    <div class="packaging-asset-add-panel">
+                        <div><span class="section-kicker">添加素材</span><h3>上传到包装素材库</h3><p>选择素材用途后上传，文件会自动进入课程包装页对应的素材库。</p></div>
+                        <form id="packaging-asset-add-form" class="packaging-asset-add-form">
+                            <label class="management-filter-field"><span>素材用途</span><select id="packaging-asset-add-kind" class="select-input"><option value="intro_video">片头视频</option><option value="mid_video">片中视频</option><option value="outro_video">片尾视频</option><option value="intro_background">片头背景图</option><option value="mid_background">片中背景图</option><option value="outro_background">片尾背景图</option><option value="intro_music">片头音乐</option><option value="mid_music">片中音乐</option><option value="outro_music">片尾音乐</option></select></label>
+                            <label class="packaging-asset-file-picker"><input id="packaging-asset-add-file" type="file" accept=".mp4,.mov,.m4v,.webm" multiple hidden><span class="btn-preview" id="packaging-asset-add-file-button">选择多个文件</span><small id="packaging-asset-add-file-name">尚未选择文件</small></label>
+                            <button id="packaging-asset-add-submit" class="btn-convert" type="submit">添加素材</button>
+                        </form>
+                        <span id="packaging-asset-add-status" class="packaging-preview-state" aria-live="polite"></span>
+                    </div>
+                    <div class="section-heading"><div><span class="section-kicker">素材库</span><h3>包装素材列表</h3></div><span id="packaging-assets-count" class="packaging-preview-state">正在加载…</span></div>
+                    <div class="management-filters" aria-label="包装素材筛选">
+                        <label class="management-filter-field"><span>关键字</span><input id="packaging-asset-search" class="select-input" type="search" placeholder="搜索素材名称"></label>
+                        <label class="management-filter-field"><span>素材类型</span><select id="packaging-asset-type" class="select-input"><option value="">全部类型</option><option value="image">背景图片</option><option value="video">视频</option><option value="audio">音乐</option></select></label>
+                        <label class="management-filter-field"><span>使用位置</span><select id="packaging-asset-side" class="select-input"><option value="">全部位置</option><option value="intro">片头</option><option value="mid">片中</option><option value="outro">片尾</option><option value="shared">通用</option></select></label>
+                        <button id="packaging-asset-reset" class="btn-secondary" type="button">重置</button>
+                    </div>
+                    <div id="packaging-assets-grid" class="packaging-assets-grid" aria-live="polite"></div>
+                </section>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/packaging_assets.js') }}?v=4"></script>
+</body>
+</html>

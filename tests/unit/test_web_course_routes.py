@@ -216,7 +216,11 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
             "audio_loudness_lufs": -18,
             "packaging_template": "university",
             "packaging_organization": "测试大学",
+            "packaging_department": "人工智能学院",
             "packaging_instructor": "王老师",
+            "packaging_instructor_title": "教授",
+            "packaging_copyright": "测试大学版权所有",
+            "packaging_transition_seconds": 0.35,
             "packaging_duration_seconds": 3.5,
             "packaging_outro_text": "下节课见",
             "packaging_apply_to_segments": True,
@@ -251,7 +255,11 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     packaging = web_app.tasks[task_id]["media_options"]["course_packaging"]
     assert packaging["template"] == "university"
     assert packaging["organization"] == "测试大学"
+    assert packaging["department"] == "人工智能学院"
     assert packaging["instructor"] == "王老师"
+    assert packaging["instructor_title"] == "教授"
+    assert packaging["copyright"] == "测试大学版权所有"
+    assert packaging["transition_seconds"] == 0.35
     assert packaging["duration_seconds"] == 3.5
     assert packaging["outro_text"] == "下节课见"
     assert packaging["apply_to_segments"] is True
@@ -890,7 +898,8 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     def fake_package(
         source_video, output_video, config, options, *,
         course_title, segment_title="", logo_path=None,
-        intro_background_path=None, outro_background_path=None,
+        intro_background_path=None, mid_background_path=None, outro_background_path=None,
+        segment_durations=None,
         cancel_check=None,
     ):
         packaged.append({
@@ -900,7 +909,9 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             "course_title": course_title,
             "segment_title": segment_title,
             "intro_background_path": intro_background_path,
+            "mid_background_path": mid_background_path,
             "outro_background_path": outro_background_path,
+            "segment_durations": segment_durations,
         })
 
     monkeypatch.setattr(Pipeline, "_generate_audio", fake_audio)
@@ -1295,22 +1306,37 @@ def test_course_packaging_preview_image_endpoint():
     assert response.data.startswith(b"\x89PNG")
 
 
-def test_course_packaging_preview_video_endpoint(monkeypatch):
+def test_course_packaging_preview_video_endpoint(monkeypatch, temp_dir):
     import web.app as web_app
     import vidppt.utils.course_packaging as course_packaging
 
+    render_calls = []
+
     def fake_render(output, *_args, **_kwargs):
+        render_calls.append(output)
         output.write_bytes(b"fake mp4")
 
     monkeypatch.setattr(course_packaging, "_render_packaging_clip", fake_render)
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    query = {"kind": "intro", "packaging_enable_motion": "true"}
     response = web_app.app.test_client().get(
         "/api/course-packaging-preview-video",
-        query_string={"kind": "intro", "packaging_enable_motion": "true"},
+        query_string=query,
     )
 
     assert response.status_code == 200
     assert response.mimetype == "video/mp4"
     assert response.data == b"fake mp4"
+
+    range_response = web_app.app.test_client().get(
+        "/api/course-packaging-preview-video",
+        query_string=query,
+        headers={"Range": "bytes=0-3"},
+    )
+    assert range_response.status_code == 206
+    assert range_response.data == b"fake"
+    assert range_response.headers["Content-Range"] == "bytes 0-3/8"
+    assert len(render_calls) == 1
 
 
 def test_course_packaging_background_asset_can_be_uploaded(monkeypatch, temp_dir):
@@ -1382,7 +1408,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=34' in html
+    assert '/static/js/main.js?v=36' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -1396,10 +1422,105 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-save-btn"' in html
     assert '<video id="packaging-intro-preview" controls' in html
     assert '<video id="packaging-outro-preview" controls' in html
-    assert 'id="packaging-music-library"' in html
+    assert 'id="packaging-intro-tab"' in html
+    assert 'id="packaging-mid-tab"' in html
+    assert 'id="packaging-outro-tab"' in html
+    assert 'id="packaging-intro-panel"' in html
+    assert 'data-packaging-select="packaging-intro-background-style"' in html
+    assert 'data-packaging-select="packaging-outro-motion-style"' in html
+    assert 'id="packaging-copy-intro-style"' in html
+    assert 'id="packaging-show-safe-area"' in html
+    assert 'id="enable-mid"' in html
+    assert 'id="packaging-mid-preview"' in html
+    assert 'id="packaging-mid-video-library"' in html
+    assert 'id="packaging-intro-music-library"' in html
+    assert 'id="packaging-outro-music-library"' in html
+    assert 'id="packaging-intro-background-input"' in html
+    assert 'id="packaging-outro-background-input"' in html
     assert 'id="packaging-intro-video-input"' in html
+    assert 'id="packaging-intro-video-library"' in html
+    assert 'id="packaging-outro-video-library"' in html
+    assert 'id="packaging-department"' in html
+    assert 'id="packaging-instructor-title"' in html
+    assert 'id="packaging-copyright"' in html
+    assert 'id="packaging-transition-seconds"' in html
     assert 'id="upload-area"' not in html
-    assert '/static/js/course_packaging.js?v=2' in html
+    assert '/static/js/course_packaging.js?v=9' in html
+
+
+def test_course_packaging_keeps_intro_and_outro_media_settings_separate(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    intro_music = temp_dir / "packaging_intro_music_a__intro.mp3"
+    outro_music = temp_dir / "packaging_outro_music_b__outro.mp3"
+    intro_music.write_bytes(b"intro")
+    outro_music.write_bytes(b"outro")
+
+    options = web_app._course_packaging_options({
+        "enable_mid": True,
+        "packaging_mid_title": "下一章节",
+        "packaging_mid_duration_seconds": 2.5,
+        "packaging_intro_music_path": str(intro_music),
+        "packaging_outro_music_path": str(outro_music),
+        "packaging_intro_motion_style": "zoom",
+        "packaging_outro_motion_style": "pan",
+        "packaging_intro_enable_music": False,
+        "packaging_outro_enable_music": True,
+    })["course_packaging"]
+
+    assert options["intro_music_path"] == str(intro_music)
+    assert options["outro_music_path"] == str(outro_music)
+    assert options["intro_motion_style"] == "zoom"
+    assert options["outro_motion_style"] == "pan"
+    assert options["intro_enable_music"] is False
+    assert options["outro_enable_music"] is True
+    assert options["enable_mid"] is True
+    assert options["mid_title"] == "下一章节"
+    assert options["mid_duration_seconds"] == 2.5
+
+
+def test_packaging_assets_management_page_and_api(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    asset = temp_dir / "packaging_intro_video_abc__campus.mp4"
+    asset.write_bytes(b"video data")
+    client = web_app.app.test_client()
+
+    html = client.get('/packaging-assets').get_data(as_text=True)
+    assert '包装素材管理' in html
+    assert 'id="packaging-assets-grid"' in html
+    assert 'id="packaging-asset-add-form"' in html
+    assert 'id="packaging-asset-add-kind"' in html
+    assert 'id="packaging-asset-add-file"' in html
+    assert 'id="packaging-asset-add-file" type="file" accept=".mp4,.mov,.m4v,.webm" multiple' in html
+    assert '选择多个文件' in html
+    assert 'id="packaging-asset-add-submit"' in html
+    assert 'value="mid_video">片中视频' in html
+    assert 'value="mid_background">片中背景图' in html
+    assert 'value="mid_music">片中音乐' in html
+    assert '/static/js/packaging_assets.js?v=4' in html
+    assert 'href="/course-packaging"' in html
+
+    listed = client.get('/api/course-packaging-assets', query_string={'kind': 'all'})
+    assert listed.status_code == 200
+    item = listed.get_json()['assets'][0]
+    assert item['kind'] == 'intro_video'
+    assert item['media_type'] == 'video'
+    assert item['filename'] == asset.name
+
+    renamed = client.patch(
+        f'/api/course-packaging-asset/{asset.name}', json={'name': '校园片头'}
+    )
+    assert renamed.status_code == 200
+    renamed_name = renamed.get_json()['filename']
+    assert '校园片头' in renamed_name
+    assert (temp_dir / renamed_name).is_file()
+
+    deleted = client.delete(f'/api/course-packaging-asset/{renamed_name}')
+    assert deleted.status_code == 200
+    assert not (temp_dir / renamed_name).exists()
 
 
 def test_management_pages_are_separate_from_course_workspace():

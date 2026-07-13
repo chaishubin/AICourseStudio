@@ -185,6 +185,8 @@ PROPRIETARY_SUBTITLE_FONTS = {
 _state_lock = threading.Lock()
 _continue_lock = threading.Lock()
 _preview_audio_locks: dict[str, threading.Lock] = {}
+_packaging_preview_locks: dict[str, threading.Lock] = {}
+_packaging_preview_locks_guard = threading.Lock()
 MAX_STATE_ENTRIES = 50
 RESOURCE_CPU_LIMIT = float(os.environ.get('VIDPPT_CPU_LIMIT', '85'))
 RESOURCE_MEMORY_LIMIT = float(os.environ.get('VIDPPT_MEMORY_LIMIT', '80'))
@@ -996,22 +998,34 @@ def _course_packaging_options(data: dict) -> dict:
     intro_duration = _packaging_duration(
         data.get('packaging_intro_duration_seconds'), duration
     )
+    mid_duration = _packaging_duration(
+        data.get('packaging_mid_duration_seconds'), 2.5, minimum=1, maximum=8
+    )
     outro_duration = _packaging_duration(
         data.get('packaging_outro_duration_seconds'), duration
     )
     organization = str(data.get('packaging_organization', '')).strip()[:60]
+    department = str(data.get('packaging_department', '')).strip()[:60]
     instructor = str(data.get('packaging_instructor', '')).strip()[:40]
+    instructor_title = str(data.get('packaging_instructor_title', '')).strip()[:40]
+    copyright_text = str(data.get('packaging_copyright', '')).strip()[:80]
+    transition_seconds = _packaging_transition(data.get('packaging_transition_seconds'), 0.35)
     outro_text = str(
         data.get('packaging_outro_text', '感谢观看')
     ).strip()[:120] or '感谢观看'
-    background_path = _packaging_asset_path(
-        data.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
-    )
-    music_path = _packaging_asset_path(
-        data.get('packaging_music_path'), ALLOWED_PACKAGING_AUDIO_EXTENSIONS
-    )
+    background_path = _packaging_asset_path(data.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS)
+    music_path = _packaging_asset_path(data.get('packaging_music_path'), ALLOWED_PACKAGING_AUDIO_EXTENSIONS)
+    intro_background_path = _packaging_asset_path(data.get('packaging_intro_background_path') or background_path, ALLOWED_LOGO_EXTENSIONS)
+    mid_background_path = _packaging_asset_path(data.get('packaging_mid_background_path') or background_path, ALLOWED_LOGO_EXTENSIONS)
+    outro_background_path = _packaging_asset_path(data.get('packaging_outro_background_path') or background_path, ALLOWED_LOGO_EXTENSIONS)
+    intro_music_path = _packaging_asset_path(data.get('packaging_intro_music_path') or music_path, ALLOWED_PACKAGING_AUDIO_EXTENSIONS)
+    mid_music_path = _packaging_asset_path(data.get('packaging_mid_music_path') or music_path, ALLOWED_PACKAGING_AUDIO_EXTENSIONS)
+    outro_music_path = _packaging_asset_path(data.get('packaging_outro_music_path') or music_path, ALLOWED_PACKAGING_AUDIO_EXTENSIONS)
     intro_video_path = _packaging_asset_path(
         data.get('packaging_intro_video_path'), ALLOWED_PACKAGING_VIDEO_EXTENSIONS
+    )
+    mid_video_path = _packaging_asset_path(
+        data.get('packaging_mid_video_path'), ALLOWED_PACKAGING_VIDEO_EXTENSIONS
     )
     outro_video_path = _packaging_asset_path(
         data.get('packaging_outro_video_path'), ALLOWED_PACKAGING_VIDEO_EXTENSIONS
@@ -1019,6 +1033,7 @@ def _course_packaging_options(data: dict) -> dict:
     return {
         'course_packaging': {
             'enable_intro': bool(data.get('enable_intro', True)),
+            'enable_mid': bool(data.get('enable_mid', True)),
             'enable_outro': bool(data.get('enable_outro', True)),
             'enable_motion': bool(data.get('packaging_enable_motion', True)),
             'enable_music': bool(data.get('packaging_enable_music', True)),
@@ -1026,17 +1041,32 @@ def _course_packaging_options(data: dict) -> dict:
             'template': template,
             'duration_seconds': duration,
             'intro_duration_seconds': intro_duration,
+            'mid_duration_seconds': mid_duration,
             'outro_duration_seconds': outro_duration,
             'organization': organization,
+            'department': department,
             'instructor': instructor,
+            'instructor_title': instructor_title,
+            'copyright': copyright_text,
+            'transition_seconds': transition_seconds,
             'outro_text': outro_text,
             'background_path': background_path,
             'music_path': music_path,
             'intro_video_path': intro_video_path,
+            'mid_video_path': mid_video_path,
             'outro_video_path': outro_video_path,
+            'intro_background_path': intro_background_path,
+            'mid_background_path': mid_background_path,
+            'outro_background_path': outro_background_path,
+            'intro_music_path': intro_music_path,
+            'mid_music_path': mid_music_path,
+            'outro_music_path': outro_music_path,
             'intro_label': str(data.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
             'intro_title': str(data.get('packaging_intro_title', '')).strip()[:80],
             'intro_subtitle': str(data.get('packaging_intro_subtitle', '')).strip()[:100],
+            'mid_title': str(data.get('packaging_mid_title', '章节过渡')).strip()[:80] or '章节过渡',
+            'mid_subtitle': str(data.get('packaging_mid_subtitle', '')).strip()[:100],
+            'mid_label': str(data.get('packaging_mid_label', '课程继续')).strip()[:30] or '课程继续',
             'outro_title': str(data.get('packaging_outro_title', '')).strip()[:80],
             'outro_subtitle': str(data.get('packaging_outro_subtitle', '')).strip()[:100],
             'accent_color': _packaging_color(data.get('packaging_accent_color'), '#D6A239'),
@@ -1051,6 +1081,9 @@ def _course_packaging_options(data: dict) -> dict:
             'intro_content_x': _packaging_percent(data.get('packaging_intro_content_x'), 9.5),
             'intro_content_y': _packaging_percent(data.get('packaging_intro_content_y'), 30.0),
             'intro_content_width': _packaging_percent(data.get('packaging_intro_content_width'), 70.0, 18.0),
+            'mid_content_x': _packaging_percent(data.get('packaging_mid_content_x'), 9.5),
+            'mid_content_y': _packaging_percent(data.get('packaging_mid_content_y'), 34.0),
+            'mid_content_width': _packaging_percent(data.get('packaging_mid_content_width'), 70.0, 18.0),
             'outro_content_x': _packaging_percent(data.get('packaging_outro_content_x'), 9.5),
             'outro_content_y': _packaging_percent(data.get('packaging_outro_content_y'), 34.0),
             'outro_content_width': _packaging_percent(data.get('packaging_outro_content_width'), 70.0, 18.0),
@@ -1060,18 +1093,52 @@ def _course_packaging_options(data: dict) -> dict:
             'music_style': _packaging_choice(
                 data.get('packaging_music_style'), {'warm', 'calm', 'bright', 'tech'}, 'warm'
             ),
+            'intro_accent_color': _packaging_color(data.get('packaging_intro_accent_color') or data.get('packaging_accent_color'), '#D6A239'),
+            'mid_accent_color': _packaging_color(data.get('packaging_mid_accent_color') or data.get('packaging_accent_color'), '#D6A239'),
+            'outro_accent_color': _packaging_color(data.get('packaging_outro_accent_color') or data.get('packaging_accent_color'), '#D6A239'),
+            'intro_background_style': _packaging_choice(data.get('packaging_intro_background_style') or data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'),
+            'mid_background_style': _packaging_choice(data.get('packaging_mid_background_style') or data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'),
+            'outro_background_style': _packaging_choice(data.get('packaging_outro_background_style') or data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'),
+            'intro_logo_position': _packaging_choice(data.get('packaging_intro_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, 'top-right'),
+            'mid_logo_position': _packaging_choice(data.get('packaging_mid_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, 'top-right'),
+            'outro_logo_position': _packaging_choice(data.get('packaging_outro_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, 'top-right'),
+            'intro_motion_style': _packaging_choice(data.get('packaging_intro_motion_style') or data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'),
+            'mid_motion_style': _packaging_choice(data.get('packaging_mid_motion_style') or data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'),
+            'outro_motion_style': _packaging_choice(data.get('packaging_outro_motion_style') or data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'),
+            'intro_music_style': _packaging_choice(data.get('packaging_intro_music_style') or data.get('packaging_music_style'), {'warm', 'calm', 'bright', 'tech'}, 'warm'),
+            'mid_music_style': _packaging_choice(data.get('packaging_mid_music_style') or data.get('packaging_music_style'), {'warm', 'calm', 'bright', 'tech'}, 'warm'),
+            'outro_music_style': _packaging_choice(data.get('packaging_outro_music_style') or data.get('packaging_music_style'), {'warm', 'calm', 'bright', 'tech'}, 'warm'),
+            'intro_use_slide_background': bool(data.get('packaging_intro_use_slide_background', data.get('packaging_use_slide_background', True))),
+            'mid_use_slide_background': bool(data.get('packaging_mid_use_slide_background', data.get('packaging_use_slide_background', True))),
+            'outro_use_slide_background': bool(data.get('packaging_outro_use_slide_background', data.get('packaging_use_slide_background', True))),
+            'intro_enable_motion': bool(data.get('packaging_intro_enable_motion', data.get('packaging_enable_motion', True))),
+            'mid_enable_motion': bool(data.get('packaging_mid_enable_motion', data.get('packaging_enable_motion', True))),
+            'outro_enable_motion': bool(data.get('packaging_outro_enable_motion', data.get('packaging_enable_motion', True))),
+            'intro_enable_music': bool(data.get('packaging_intro_enable_music', data.get('packaging_enable_music', True))),
+            'mid_enable_music': bool(data.get('packaging_mid_enable_music', data.get('packaging_enable_music', True))),
+            'outro_enable_music': bool(data.get('packaging_outro_enable_music', data.get('packaging_enable_music', True))),
             'apply_to_segments': bool(data.get('packaging_apply_to_segments', False)),
         }
     }
 
 
-def _packaging_duration(value, fallback: float) -> float:
+def _packaging_duration(value, fallback: float, *, minimum: float = 2, maximum: float = 10) -> float:
     try:
         duration = float(value if value not in (None, '') else fallback)
     except (TypeError, ValueError):
         duration = fallback
-    if duration < 2 or duration > 10:
-        raise ValueError('片头片尾单独时长必须在 2 到 10 秒之间')
+    if duration < minimum or duration > maximum:
+        raise ValueError(f'包装单独时长必须在 {minimum:g} 到 {maximum:g} 秒之间')
+    return duration
+
+
+def _packaging_transition(value, fallback: float = 0.35) -> float:
+    try:
+        duration = float(value if value not in (None, '') else fallback)
+    except (TypeError, ValueError):
+        duration = fallback
+    if duration < 0 or duration > 0.8:
+        raise ValueError('包装衔接时长必须在 0 到 0.8 秒之间')
     return duration
 
 
@@ -1551,6 +1618,23 @@ def course_packaging_page():
     )
 
 
+@app.route('/packaging-assets')
+def packaging_assets_page():
+    """渲染课程包装素材管理页面。"""
+    user = current_user_context()
+    return render_template(
+        'packaging_assets.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
+    )
+
+
 @app.route('/operation-logs-page')
 def operation_logs_page():
     """渲染操作日志页面。"""
@@ -1686,12 +1770,14 @@ def upload_course_packaging_asset():
 
     kind = str(request.form.get('kind') or '').strip().lower()
     file = request.files.get('asset')
-    if kind not in {'background', 'music', 'intro_video', 'outro_video'} or not file or not file.filename:
+    allowed_kinds = {'background', 'music', 'intro_background', 'mid_background', 'outro_background', 'intro_music', 'mid_music', 'outro_music', 'intro_video', 'mid_video', 'outro_video'}
+    if kind not in allowed_kinds or not file or not file.filename:
         return jsonify({'error': '未选择有效的包装素材'}), 400
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if kind == 'background':
+    media_kind = kind.split('_')[-1]
+    if media_kind == 'background':
         allowed = ALLOWED_LOGO_EXTENSIONS
-    elif kind == 'music':
+    elif media_kind == 'music':
         allowed = ALLOWED_PACKAGING_AUDIO_EXTENSIONS
     else:
         allowed = ALLOWED_PACKAGING_VIDEO_EXTENSIONS
@@ -1700,13 +1786,13 @@ def upload_course_packaging_asset():
     file.seek(0, 2)
     size = file.tell()
     file.seek(0)
-    limit = 15 * 1024 * 1024 if kind == 'background' else (200 * 1024 * 1024 if kind.endswith('_video') else 30 * 1024 * 1024)
+    limit = 15 * 1024 * 1024 if media_kind == 'background' else (200 * 1024 * 1024 if media_kind == 'video' else 30 * 1024 * 1024)
     if size <= 0 or size > limit:
         return jsonify({'error': f'素材文件不能为空且不能超过 {limit // 1024 // 1024}MB'}), 400
     safe_original = secure_filename(Path(file.filename).stem)[:48] or kind
     asset_path = UPLOAD_FOLDER / f"packaging_{kind}_{uuid.uuid4().hex}__{safe_original}.{ext}"
     file.save(asset_path)
-    if kind == 'background':
+    if media_kind == 'background':
         try:
             with Image.open(asset_path) as image:
                 image.verify()
@@ -1726,33 +1812,72 @@ def list_course_packaging_assets():
     """列出可复用的片头片尾音乐和本地视频素材。"""
     kind = str(request.args.get('kind') or 'music').strip().lower()
     allowed_kinds = {
+        'all': ALLOWED_LOGO_EXTENSIONS | ALLOWED_PACKAGING_AUDIO_EXTENSIONS | ALLOWED_PACKAGING_VIDEO_EXTENSIONS,
         'music': ALLOWED_PACKAGING_AUDIO_EXTENSIONS,
         'intro_video': ALLOWED_PACKAGING_VIDEO_EXTENSIONS,
+        'mid_video': ALLOWED_PACKAGING_VIDEO_EXTENSIONS,
         'outro_video': ALLOWED_PACKAGING_VIDEO_EXTENSIONS,
     }
     if kind not in allowed_kinds:
         return jsonify({'error': '不支持的素材库类型'}), 400
     assets = []
-    for path in sorted(UPLOAD_FOLDER.glob(f'packaging_{kind}_*'), key=lambda item: item.stat().st_mtime, reverse=True):
+    patterns = ['packaging_*'] if kind == 'all' else [f'packaging_{kind}_*']
+    if kind == 'music':
+        patterns.extend(['packaging_intro_music_*', 'packaging_mid_music_*', 'packaging_outro_music_*'])
+    candidates = {path for pattern in patterns for path in UPLOAD_FOLDER.glob(pattern)}
+    for path in sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True):
         if path.is_file() and path.suffix.lower().lstrip('.') in allowed_kinds[kind]:
             label = path.stem.split('__', 1)[-1].replace('_', ' ')
-            assets.append({
+            asset_kind = next((name for name in ('intro_background', 'mid_background', 'outro_background', 'intro_video', 'mid_video', 'outro_video', 'intro_music', 'mid_music', 'outro_music', 'background', 'music') if path.name.startswith(f'packaging_{name}_')), 'other')
+            media_type = 'image' if path.suffix.lower().lstrip('.') in ALLOWED_LOGO_EXTENSIONS else ('audio' if path.suffix.lower().lstrip('.') in ALLOWED_PACKAGING_AUDIO_EXTENSIONS else 'video')
+            item = {
                 'name': label,
                 'path': str(path),
                 'url': url_for('serve_course_packaging_asset', filename=path.name),
-            })
+            }
+            if kind == 'all':
+                item.update({
+                    'filename': path.name,
+                    'kind': asset_kind,
+                    'media_type': media_type,
+                    'size': path.stat().st_size,
+                    'updated_at': path.stat().st_mtime,
+                })
+            assets.append(item)
     return jsonify({'kind': kind, 'assets': assets})
 
 
-@app.route('/api/course-packaging-asset/<path:filename>')
+@app.route('/api/course-packaging-asset/<path:filename>', methods=['GET', 'PATCH', 'DELETE'])
 def serve_course_packaging_asset(filename):
-    """试听或预览已上传的受控包装素材。"""
+    """预览、重命名或删除受控包装素材。"""
     if Path(filename).name != filename or not filename.startswith('packaging_'):
         return jsonify({'error': '素材路径无效'}), 400
     path = UPLOAD_FOLDER / filename
-    allowed = ALLOWED_PACKAGING_AUDIO_EXTENSIONS | ALLOWED_PACKAGING_VIDEO_EXTENSIONS
+    allowed = ALLOWED_LOGO_EXTENSIONS | ALLOWED_PACKAGING_AUDIO_EXTENSIONS | ALLOWED_PACKAGING_VIDEO_EXTENSIONS
     if not path.is_file() or path.suffix.lower().lstrip('.') not in allowed:
         return jsonify({'error': '素材不存在'}), 404
+    if request.method == 'DELETE':
+        path.unlink()
+        log_operation('delete_packaging_asset', target_name=filename)
+        return jsonify({'success': True, 'filename': filename})
+    if request.method == 'PATCH':
+        display_name = str((request.get_json(silent=True) or {}).get('name') or '').strip()
+        safe_name = re.sub(r'[^\w\- ]+', '', display_name, flags=re.UNICODE).strip().replace(' ', '_')[:80]
+        if not safe_name:
+            return jsonify({'error': '素材名称不能为空'}), 400
+        stem_prefix = path.stem.split('__', 1)[0]
+        renamed = path.with_name(f'{stem_prefix}__{safe_name}{path.suffix.lower()}')
+        if renamed != path and renamed.exists():
+            return jsonify({'error': '同名素材已存在'}), 409
+        path.rename(renamed)
+        log_operation('rename_packaging_asset', target_name=filename, message=f'重命名为 {renamed.name}')
+        return jsonify({
+            'success': True,
+            'filename': renamed.name,
+            'name': safe_name,
+            'path': str(renamed),
+            'url': url_for('serve_course_packaging_asset', filename=renamed.name),
+        })
     return send_file(path, conditional=True)
 
 
@@ -2701,7 +2826,7 @@ def run_media_generation(task_id: str):
         from moviepy import AudioFileClip
         from vidppt.core.models import DocumentContent, PageContent
         from vidppt.renderers.subtitles import SubtitleRenderer
-        from vidppt.utils.course_packaging import package_course_video
+        from vidppt.utils.course_packaging import package_course_video, shift_srt_for_packaging
         from vidppt.utils.progress import ProgressTracker
         from vidppt.utils.video_composer import VideoComposer
         from vidppt.course_pipeline import CoursePipeline
@@ -2829,6 +2954,23 @@ def run_media_generation(task_id: str):
         else:
             base_video.replace(video_path)
         packaging_options = options.get('course_packaging') or {}
+        lesson_segments = [
+            segment for segment in preview.get('lesson_segments', [])
+            if isinstance(segment, dict)
+        ]
+        packaging_segment_durations = []
+        for segment in lesson_segments:
+            try:
+                start_page = int(segment['start_page'])
+                end_page = int(segment['end_page'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            segment_duration = sum(
+                duration for page_number, duration in durations_by_page.items()
+                if start_page <= page_number <= end_page
+            )
+            if segment_duration > 0:
+                packaging_segment_durations.append(segment_duration)
         logo_candidate = (
             options.get('school_logo_path')
             or (task.get('strategy') or {}).get('school_logo_path')
@@ -2836,6 +2978,7 @@ def run_media_generation(task_id: str):
         logo_path = Path(logo_candidate) if logo_candidate else None
         if (
             packaging_options.get('enable_intro')
+            or (packaging_options.get('enable_mid') and len(packaging_segment_durations) > 1)
             or packaging_options.get('enable_outro')
         ):
             custom_background = Path(packaging_options['background_path']) if packaging_options.get('background_path') else None
@@ -2845,7 +2988,10 @@ def run_media_generation(task_id: str):
             outro_background = (
                 custom_background or (content.pages[-1].slide_image if content.pages else None)
             )
-            report_video(99, '正在添加片头片尾')
+            mid_background = (
+                custom_background or (content.pages[len(content.pages) // 2].slide_image if content.pages else None)
+            )
+            report_video(99, '正在添加片头、片中转场与片尾')
             package_course_video(
                 video_path,
                 video_path,
@@ -2854,14 +3000,25 @@ def run_media_generation(task_id: str):
                 course_title=task.get('course_name') or stem,
                 logo_path=logo_path if logo_path and logo_path.is_file() else None,
                 intro_background_path=intro_background,
+                mid_background_path=mid_background,
                 outro_background_path=outro_background,
+                segment_durations=packaging_segment_durations,
                 cancel_check=cancel_event.is_set,
             )
+            if not config.burn_subtitles:
+                shift_srt_for_packaging(
+                    subtitles,
+                    intro_seconds=(
+                        float(packaging_options.get('intro_duration_seconds') or packaging_options.get('duration_seconds') or 4)
+                        if packaging_options.get('enable_intro') else 0
+                    ),
+                    segment_durations=packaging_segment_durations,
+                    mid_seconds=(
+                        float(packaging_options.get('mid_duration_seconds') or 2.5)
+                        if packaging_options.get('enable_mid') and len(packaging_segment_durations) > 1 else 0
+                    ),
+                )
         progress.update('video', 100, 100, '视频生成完成')
-        lesson_segments = [
-            segment for segment in preview.get('lesson_segments', [])
-            if isinstance(segment, dict)
-        ]
         segment_artifacts = []
         if lesson_segments:
             progress.set_stage('video', '按智能切课范围生成分段视频...')
@@ -4647,7 +4804,7 @@ def course_packaging_preview_image():
     from vidppt.utils.course_packaging import _render_packaging_image
 
     kind = str(request.args.get('kind', 'intro')).strip().lower()
-    if kind not in {'intro', 'outro'}:
+    if kind not in {'intro', 'mid', 'outro'}:
         kind = 'intro'
     template = str(request.args.get('packaging_template', 'academic')).strip().lower()
     if template not in {'academic', 'modern', 'minimal', 'university', 'credits'}:
@@ -4655,11 +4812,17 @@ def course_packaging_preview_image():
     options = {
         'template': template,
         'organization': str(request.args.get('packaging_organization', '')).strip()[:60],
+        'department': str(request.args.get('packaging_department', '')).strip()[:60],
         'instructor': str(request.args.get('packaging_instructor', '')).strip()[:40],
+        'instructor_title': str(request.args.get('packaging_instructor_title', '')).strip()[:40],
+        'copyright': str(request.args.get('packaging_copyright', '')).strip()[:80],
         'outro_text': str(request.args.get('packaging_outro_text', '感谢观看')).strip()[:120] or '感谢观看',
         'intro_label': str(request.args.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
         'intro_title': str(request.args.get('packaging_intro_title', '')).strip()[:80],
         'intro_subtitle': str(request.args.get('packaging_intro_subtitle', '')).strip()[:100],
+        'mid_title': str(request.args.get('packaging_mid_title', '章节过渡')).strip()[:80] or '章节过渡',
+        'mid_subtitle': str(request.args.get('packaging_mid_subtitle', '')).strip()[:100],
+        'mid_label': str(request.args.get('packaging_mid_label', '课程继续')).strip()[:30] or '课程继续',
         'outro_title': str(request.args.get('packaging_outro_title', '')).strip()[:80],
         'outro_subtitle': str(request.args.get('packaging_outro_subtitle', '')).strip()[:100],
         'accent_color': _packaging_color(request.args.get('packaging_accent_color'), '#D6A239'),
@@ -4674,19 +4837,27 @@ def course_packaging_preview_image():
         'intro_content_x': _packaging_percent(request.args.get('packaging_intro_content_x'), 9.5),
         'intro_content_y': _packaging_percent(request.args.get('packaging_intro_content_y'), 30.0),
         'intro_content_width': _packaging_percent(request.args.get('packaging_intro_content_width'), 70.0, 18.0),
+        'mid_content_x': _packaging_percent(request.args.get('packaging_mid_content_x'), 9.5),
+        'mid_content_y': _packaging_percent(request.args.get('packaging_mid_content_y'), 34.0),
+        'mid_content_width': _packaging_percent(request.args.get('packaging_mid_content_width'), 70.0, 18.0),
         'outro_content_x': _packaging_percent(request.args.get('packaging_outro_content_x'), 9.5),
         'outro_content_y': _packaging_percent(request.args.get('packaging_outro_content_y'), 34.0),
         'outro_content_width': _packaging_percent(request.args.get('packaging_outro_content_width'), 70.0, 18.0),
         'use_slide_background': False,
     }
+    options.update({
+        f'{kind}_accent_color': _packaging_color(request.args.get(f'packaging_{kind}_accent_color'), options['accent_color']),
+        f'{kind}_background_style': _packaging_choice(request.args.get(f'packaging_{kind}_background_style'), {'ppt', 'solid', 'gradient', 'light'}, options['background_style']),
+        f'{kind}_logo_position': _packaging_choice(request.args.get(f'packaging_{kind}_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, options['logo_position']),
+    })
     background_path = None
     try:
         candidate = _packaging_asset_path(
-            request.args.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
+            request.args.get(f'packaging_{kind}_background_path') or request.args.get('packaging_background_path'), ALLOWED_LOGO_EXTENSIONS
         )
         background_path = Path(candidate) if candidate else None
         if candidate:
-            options['background_path'] = candidate
+            options[f'{kind}_background_path'] = candidate
     except ValueError:
         pass
     config = ProcessConfig(
@@ -4719,13 +4890,18 @@ def course_packaging_preview_video():
     from vidppt.utils.course_packaging import _render_packaging_clip
 
     kind = str(request.args.get('kind', 'intro')).strip().lower()
-    if kind not in {'intro', 'outro'}:
+    if kind not in {'intro', 'mid', 'outro'}:
         kind = 'intro'
     preview_args = request.args.to_dict()
     for key in (
-        'enable_intro', 'enable_outro', 'packaging_apply_to_segments',
+        'enable_intro', 'enable_mid', 'enable_outro', 'packaging_apply_to_segments',
         'packaging_use_slide_background', 'packaging_enable_motion',
-        'packaging_enable_music',
+        'packaging_enable_music', 'packaging_intro_use_slide_background',
+        'packaging_outro_use_slide_background', 'packaging_intro_enable_motion',
+        'packaging_mid_use_slide_background', 'packaging_mid_enable_motion',
+        'packaging_outro_enable_motion', 'packaging_intro_enable_music',
+        'packaging_mid_enable_music',
+        'packaging_outro_enable_music',
     ):
         if key in preview_args:
             preview_args[key] = str(preview_args[key]).strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -4740,22 +4916,50 @@ def course_packaging_preview_video():
         video_width=960,
         video_height=540,
     )
-    with tempfile.TemporaryDirectory(prefix='vidppt-packaging-preview-') as temp_dir:
-        preview_path = Path(temp_dir) / f'{kind}.mp4'
-        _render_packaging_clip(
-            preview_path,
-            config,
-            options,
-            kind=kind,
-            course_title=str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例',
-            segment_title=str(request.args.get('segment_title', '')).strip()[:80],
-            logo_path=None,
-            background_path=background_path,
-        )
-        data = BytesIO(preview_path.read_bytes())
-    data.seek(0)
-    response = make_response(send_file(data, mimetype='video/mp4', max_age=0, conditional=True))
-    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    course_title = str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例'
+    segment_title = str(request.args.get('segment_title', '')).strip()[:80]
+    cache_payload = {
+        'version': 4,
+        'kind': kind,
+        'options': options,
+        'course_title': course_title,
+        'segment_title': segment_title,
+        'size': [config.video_width, config.video_height],
+    }
+    for asset_key in ('background_path', 'music_path', 'intro_background_path', 'mid_background_path', 'outro_background_path', 'intro_music_path', 'mid_music_path', 'outro_music_path', 'intro_video_path', 'mid_video_path', 'outro_video_path'):
+        asset_path = Path(str(options.get(asset_key) or ''))
+        if asset_path.is_file():
+            stat = asset_path.stat()
+            cache_payload[f'{asset_key}_file'] = [stat.st_size, stat.st_mtime_ns]
+    cache_key = hashlib.sha256(
+        json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
+    ).hexdigest()
+    cache_dir = UPLOAD_FOLDER / '.packaging_preview_cache'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f'{cache_key}.mp4'
+    with _packaging_preview_locks_guard:
+        preview_lock = _packaging_preview_locks.setdefault(cache_key, threading.Lock())
+    with preview_lock:
+        if not cache_path.is_file():
+            temporary_path = cache_dir / f'.{cache_key}.{uuid.uuid4().hex}.mp4'
+            try:
+                _render_packaging_clip(
+                    temporary_path,
+                    config,
+                    options,
+                    kind=kind,
+                    course_title=course_title,
+                    segment_title=segment_title,
+                    logo_path=None,
+                    background_path=background_path,
+                )
+                temporary_path.replace(cache_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+                temporary_path.with_suffix('.png').unlink(missing_ok=True)
+    # 缓存文件在后续 Range 请求及页面刷新间保持不变，可以安全地分段播放。
+    response = make_response(send_file(cache_path, mimetype='video/mp4', conditional=True))
+    response.headers['Cache-Control'] = 'private, max-age=86400'
     return response
 
 

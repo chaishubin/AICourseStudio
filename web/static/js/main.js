@@ -123,8 +123,11 @@ class AICourseStudioApp {
                 schoolLogoHint: document.getElementById('school-logo-hint'),
                 packagingTemplate: document.getElementById('packaging-template'),
                 packagingOrganization: document.getElementById('packaging-organization'),
+                packagingDepartment: document.getElementById('packaging-department'),
                 packagingInstructor: document.getElementById('packaging-instructor'),
+                packagingInstructorTitle: document.getElementById('packaging-instructor-title'),
                 packagingDuration: document.getElementById('packaging-duration'),
+                packagingTransitionSeconds: document.getElementById('packaging-transition-seconds'),
                 packagingOutroText: document.getElementById('packaging-outro-text'),
                 enableIntro: document.getElementById('enable-intro'),
                 enableOutro: document.getElementById('enable-outro'),
@@ -819,8 +822,11 @@ class AICourseStudioApp {
             pptFooterText: 'ppt_footer_text',
             packagingTemplate: 'packaging_template',
             packagingOrganization: 'packaging_organization',
+            packagingDepartment: 'packaging_department',
             packagingInstructor: 'packaging_instructor',
+            packagingInstructorTitle: 'packaging_instructor_title',
             packagingDuration: 'packaging_duration_seconds',
+            packagingTransitionSeconds: 'packaging_transition_seconds',
             packagingOutroText: 'packaging_outro_text',
             packagingIntroLabel: 'packaging_intro_label',
             packagingIntroTitle: 'packaging_intro_title',
@@ -1645,13 +1651,31 @@ class AICourseStudioApp {
         } catch (error) {
             console.warn('读取课程包装默认配置失败:', error);
         }
+        const managedSideOptions = {};
+        ['intro', 'mid', 'outro'].forEach(side => {
+            [
+                'background_path', 'music_path', 'video_path', 'accent_color',
+                'background_style', 'logo_position', 'motion_style', 'music_style',
+                'use_slide_background', 'enable_motion', 'enable_music',
+                'content_x', 'content_y', 'content_width'
+            ].forEach(name => {
+                const key = `packaging_${side}_${name}`;
+                if (saved[key] !== undefined) managedSideOptions[key] = saved[key];
+            });
+        });
         return {
+            ...managedSideOptions,
             enable_intro: this.elements.enableIntro?.checked ?? true,
+            enable_mid: saved.enable_mid ?? true,
             enable_outro: this.elements.enableOutro?.checked ?? true,
             packaging_template: this.elements.packagingTemplate?.value || 'academic',
             packaging_organization: this.elements.packagingOrganization?.value.trim() || '',
+            packaging_department: this.elements.packagingDepartment?.value.trim() || saved.packaging_department || '',
             packaging_instructor: this.elements.packagingInstructor?.value.trim() || '',
+            packaging_instructor_title: this.elements.packagingInstructorTitle?.value.trim() || saved.packaging_instructor_title || '',
+            packaging_copyright: saved.packaging_copyright || '',
             packaging_duration_seconds: Number(this.elements.packagingDuration?.value) || 4,
+            packaging_transition_seconds: Number(this.elements.packagingTransitionSeconds?.value ?? saved.packaging_transition_seconds ?? 0.35),
             packaging_outro_text: this.elements.packagingOutroText?.value.trim() || '感谢观看',
             packaging_apply_to_segments: this.elements.packagingApplySegments?.checked ?? false,
             packaging_use_slide_background: this.elements.packagingUseSlideBackground?.checked ?? true,
@@ -1661,6 +1685,10 @@ class AICourseStudioApp {
             packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || saved.packaging_intro_title || '',
             packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() || saved.packaging_intro_subtitle || '',
             packaging_intro_duration_seconds: Number(this.elements.packagingIntroDuration?.value) || Number(saved.packaging_intro_duration_seconds) || Number(this.elements.packagingDuration?.value) || 4,
+            packaging_mid_title: saved.packaging_mid_title || '章节过渡',
+            packaging_mid_subtitle: saved.packaging_mid_subtitle || '',
+            packaging_mid_label: saved.packaging_mid_label || '课程继续',
+            packaging_mid_duration_seconds: Number(saved.packaging_mid_duration_seconds) || 2.5,
             packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() || saved.packaging_outro_title || '',
             packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() || saved.packaging_outro_subtitle || '',
             packaging_outro_duration_seconds: Number(this.elements.packagingOutroDuration?.value) || Number(saved.packaging_outro_duration_seconds) || Number(this.elements.packagingDuration?.value) || 4,
@@ -1671,8 +1699,9 @@ class AICourseStudioApp {
             packaging_music_style: this.elements.packagingMusicStyle?.value || saved.packaging_music_style || 'warm',
             packaging_background_path: this.state.packagingBackgroundPath,
             packaging_music_path: this.state.packagingMusicPath,
-            packaging_intro_video_path: this.state.packagingIntroVideoPath,
-            packaging_outro_video_path: this.state.packagingOutroVideoPath,
+            packaging_intro_video_path: saved.packaging_intro_video_path || this.state.packagingIntroVideoPath,
+            packaging_mid_video_path: saved.packaging_mid_video_path || null,
+            packaging_outro_video_path: saved.packaging_outro_video_path || this.state.packagingOutroVideoPath,
             packaging_intro_content_x: this.packagingLayout.intro.x,
             packaging_intro_content_y: this.packagingLayout.intro.y,
             packaging_intro_content_width: this.packagingLayout.intro.width,
@@ -1909,7 +1938,9 @@ class AICourseStudioApp {
             kind,
             packaging_template: this.elements.packagingTemplate?.value || 'academic',
             packaging_organization: this.elements.packagingOrganization?.value.trim() || '',
+            packaging_department: this.elements.packagingDepartment?.value.trim() || '',
             packaging_instructor: this.elements.packagingInstructor?.value.trim() || '',
+            packaging_instructor_title: this.elements.packagingInstructorTitle?.value.trim() || '',
             packaging_outro_text: this.elements.packagingOutroText?.value.trim() || '感谢观看',
             packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() || '在线开放课程',
             packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || '',

@@ -2243,7 +2243,14 @@ body {
 }
 
 .packaging-manager-page .packaging-base-controls {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+}
+
+.packaging-workbench {
+    display: grid;
+    grid-template-columns: minmax(480px, .9fr) minmax(560px, 1.1fr);
+    gap: 20px;
+    align-items: start;
 }
 
 .packaging-manager-header {
@@ -2293,6 +2300,10 @@ body {
     margin-bottom: 16px;
 }
 
+.packaging-manager-page .packaging-manager-controls {
+    margin-bottom: 0;
+}
+
 .packaging-manager-controls fieldset {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2304,6 +2315,12 @@ body {
     background: var(--color-surface-2);
 }
 
+.packaging-manager-page .packaging-manager-controls fieldset {
+    gap: 12px;
+    padding: 16px;
+    border-radius: var(--radius-sm);
+}
+
 .packaging-manager-controls legend {
     padding: 0 6px;
     color: var(--color-text);
@@ -2311,10 +2328,26 @@ body {
     font-weight: 800;
 }
 
+.packaging-manager-page .packaging-manager-controls legend {
+    padding: 0 8px;
+    font-size: 13px;
+}
+
 .packaging-manager-controls label {
     min-width: 0;
     color: var(--color-text-2);
     font-size: 12px;
+}
+
+.packaging-manager-page .packaging-manager-controls label {
+    display: grid;
+    gap: 6px;
+    line-height: 1.35;
+}
+
+.packaging-manager-page .packaging-manager-controls .packaging-toggle {
+    display: flex;
+    min-height: 38px;
 }
 
 .packaging-manager-controls .text-input,
@@ -2329,20 +2362,205 @@ body {
 }
 
 .packaging-manager-controls .packaging-asset-field {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    align-items: flex-start;
+    flex-direction: column;
     gap: 6px;
 }
 
-.packaging-asset-field > small,
-.packaging-asset-field > :first-child {
+.packaging-asset-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.packaging-asset-actions .btn-preview {
+    min-height: 30px;
+    padding: 5px 11px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.packaging-asset-actions .packaging-remove-button {
+    color: var(--color-text-3);
+    background: transparent;
+}
+
+.packaging-remove-button[hidden] {
+    display: none !important;
+}
+
+.packaging-side-settings audio {
+    width: 100%;
+    height: 34px;
+}
+
+.packaging-assets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 16px;
+    margin-top: 18px;
+}
+
+.packaging-asset-add-panel {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.8fr) minmax(460px, 1.5fr);
+    align-items: end;
+    gap: 18px 28px;
+    margin-bottom: 22px;
+    padding: 18px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+}
+
+.packaging-asset-add-panel h3 {
+    margin: 3px 0 6px;
+}
+
+.packaging-asset-add-panel p {
+    margin: 0;
+    color: var(--color-text-3);
+    font-size: 12px;
+}
+
+.packaging-asset-add-form {
+    display: grid;
+    grid-template-columns: minmax(150px, 0.8fr) minmax(190px, 1fr) auto;
+    align-items: end;
+    gap: 10px;
+}
+
+.packaging-asset-file-picker {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 9px;
+}
+
+.packaging-asset-file-picker .btn-preview {
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+
+.packaging-asset-file-picker small {
+    overflow: hidden;
+    color: var(--color-text-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.packaging-asset-add-panel > .packaging-preview-state {
+    grid-column: 2;
+    min-height: 18px;
+    margin: -10px 0 0;
+}
+
+@media (max-width: 1100px) {
+    .packaging-asset-add-panel,
+    .packaging-asset-add-form {
+        grid-template-columns: 1fr;
+    }
+
+    .packaging-asset-add-panel > .packaging-preview-state {
+        grid-column: 1;
+    }
+}
+
+.packaging-assets-grid > .table-empty {
     grid-column: 1 / -1;
+}
+
+.packaging-asset-card {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+}
+
+.packaging-asset-preview {
+    display: grid;
+    min-height: 142px;
+    place-items: center;
+    overflow: hidden;
+    background: #111827;
+}
+
+.packaging-asset-preview img,
+.packaging-asset-preview video {
+    width: 100%;
+    height: 142px;
+    object-fit: cover;
+}
+
+.packaging-asset-preview audio {
+    width: calc(100% - 24px);
+}
+
+.packaging-asset-card-body {
+    display: grid;
+    gap: 8px;
+    padding: 14px;
+}
+
+.packaging-asset-card-body strong {
+    overflow: hidden;
+    color: var(--color-text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.packaging-asset-card-body small {
+    color: var(--color-text-3);
+}
+
+.packaging-asset-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 2px;
 }
 
 .packaging-preview-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
+}
+
+.packaging-preview-panel {
+    position: sticky;
+    top: 18px;
+    padding: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+}
+
+.packaging-preview-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.packaging-preview-heading h5 {
+    margin: 1px 0 0;
+    color: var(--color-text);
+    font-size: 15px;
+}
+
+.packaging-preview-state {
+    display: block;
+    margin: 6px 0 14px;
+    color: var(--color-text-3);
+    font-size: 12px;
+}
+
+.packaging-preview-panel .packaging-preview-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
 }
 
 .packaging-preview-grid figure {
@@ -2355,6 +2573,19 @@ body {
     color: var(--color-text-2);
     font-size: 12px;
     font-weight: 700;
+}
+
+.packaging-preview-panel figcaption {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.packaging-preview-panel figcaption span {
+    color: var(--color-text-3);
+    font-size: 11px;
+    font-weight: 400;
 }
 
 .packaging-preview-canvas {
@@ -2419,6 +2650,459 @@ body {
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid var(--color-border);
+}
+
+/* Dedicated course-packaging designer */
+.packaging-global-settings {
+    margin-bottom: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+}
+
+.packaging-global-settings summary {
+    display: flex;
+    min-height: 58px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 0 18px;
+    color: var(--color-text);
+    cursor: pointer;
+    list-style: none;
+}
+
+.packaging-global-settings summary::-webkit-details-marker {
+    display: none;
+}
+
+.packaging-global-settings summary > span:first-child {
+    display: grid;
+    gap: 3px;
+}
+
+.packaging-global-settings summary small,
+.packaging-summary-action {
+    color: var(--color-text-3);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.packaging-global-grid.packaging-manager-controls {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+    padding: 4px 18px 18px;
+    border-top: 1px solid var(--color-border);
+}
+
+.packaging-global-grid > label,
+.packaging-global-grid > button {
+    margin-top: 12px;
+}
+
+.packaging-copy-style {
+    align-self: end;
+    min-height: 40px;
+}
+
+.packaging-segment-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.packaging-segment-tab {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 11px;
+    min-height: 70px;
+    padding: 12px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+    color: var(--color-text-2);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+.packaging-segment-tab:hover {
+    border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+    transform: translateY(-1px);
+}
+
+.packaging-segment-tab.is-active {
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 12%, transparent);
+    color: var(--color-text);
+}
+
+.packaging-tab-index {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border-radius: 9px;
+    background: var(--color-surface-3, #eef2f7);
+    color: var(--color-text-3);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.packaging-segment-tab.is-active .packaging-tab-index {
+    background: var(--color-accent);
+    color: #fff;
+}
+
+.packaging-segment-tab > span:nth-child(2) {
+    display: grid;
+    gap: 4px;
+}
+
+.packaging-segment-tab small {
+    color: var(--color-text-3);
+    font-weight: 400;
+}
+
+.packaging-segment-tab small b {
+    font-weight: 600;
+}
+
+.packaging-segment-tab > i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, .12);
+}
+
+.packaging-segment-tab.is-disabled > i {
+    background: #94a3b8;
+    box-shadow: none;
+}
+
+.packaging-workbench {
+    grid-template-columns: minmax(440px, .95fr) minmax(520px, 1.05fr);
+    gap: 22px;
+}
+
+.packaging-segment-editor.packaging-manager-controls {
+    display: block;
+}
+
+.packaging-segment-panel {
+    display: grid;
+    gap: 14px;
+}
+
+.packaging-segment-panel[hidden] {
+    display: none;
+}
+
+.packaging-panel-heading {
+    display: flex;
+    min-height: 52px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 0 3px;
+}
+
+.packaging-panel-heading h5 {
+    margin: 2px 0 0;
+    color: var(--color-text);
+    font-size: 17px;
+}
+
+.packaging-manager-page .packaging-manager-controls .packaging-enable-toggle {
+    display: flex;
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface-2);
+}
+
+.packaging-manager-page .packaging-manager-controls .packaging-editor-section {
+    gap: 13px;
+    padding: 18px;
+    border: 0;
+    border-top: 3px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+    box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.packaging-editor-section legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.packaging-editor-section legend > span {
+    color: var(--color-accent);
+    font-size: 10px;
+    letter-spacing: .08em;
+}
+
+.packaging-wide-field {
+    grid-column: 1 / -1;
+}
+
+.packaging-number-control,
+.packaging-color-control {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-1, #fff);
+}
+
+.packaging-number-control .number-input {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.packaging-number-control > span,
+.packaging-color-control code {
+    padding: 0 12px;
+    color: var(--color-text-3);
+    font-size: 12px;
+}
+
+.packaging-color-control {
+    grid-template-columns: 48px 1fr;
+}
+
+.packaging-color-control .color-input {
+    width: 48px;
+    height: 40px;
+    padding: 5px;
+    border: 0;
+    background: transparent;
+}
+
+.packaging-color-control code {
+    font-family: inherit;
+}
+
+.packaging-style-choice {
+    display: grid;
+    gap: 7px;
+    color: var(--color-text-2);
+    font-size: 12px;
+}
+
+.packaging-option-cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.packaging-option-cards button {
+    display: grid;
+    min-width: 0;
+    min-height: 66px;
+    place-items: center;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface-1, #fff);
+    color: var(--color-text-2);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.packaging-option-cards button:hover,
+.packaging-option-cards button.is-active {
+    border-color: var(--color-accent);
+    color: var(--color-text);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.style-swatch {
+    display: block;
+    width: 100%;
+    height: 23px;
+    border: 1px solid rgba(15, 23, 42, .10);
+    border-radius: 5px;
+}
+
+.style-ppt {
+    background: linear-gradient(135deg, #dbeafe 0 44%, #1e3a8a 44% 48%, #f8fafc 48%);
+}
+
+.style-solid {
+    background: #17345f;
+}
+
+.style-gradient {
+    background: linear-gradient(135deg, #0f294d, #d6a239);
+}
+
+.style-light {
+    background: linear-gradient(135deg, #fff, #eef2f7);
+}
+
+.packaging-motion-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.packaging-motion-cards button {
+    min-height: 54px;
+}
+
+.packaging-motion-cards button i {
+    color: var(--color-accent);
+    font-size: 17px;
+    font-style: normal;
+}
+
+.packaging-native-select {
+    position: absolute;
+    width: 1px !important;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.packaging-asset-dropzone {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 70px;
+    padding: 10px 12px;
+    border: 1px dashed color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--color-accent) 3%, var(--color-surface-1, #fff));
+    box-sizing: border-box;
+}
+
+.packaging-asset-dropzone > i {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    place-items: center;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-2));
+    color: var(--color-accent);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 800;
+}
+
+.packaging-asset-dropzone > span:nth-child(2) {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.packaging-asset-dropzone strong {
+    overflow: hidden;
+    color: var(--color-text-2);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.packaging-asset-dropzone small {
+    color: var(--color-text-3);
+    font-size: 11px;
+}
+
+.packaging-preview-panel {
+    padding: 18px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 4%, var(--color-surface-2)), var(--color-surface-2));
+}
+
+.packaging-preview-panel .packaging-preview-grid {
+    grid-template-columns: 1fr;
+}
+
+.packaging-preview-canvas {
+    border-radius: 10px;
+    box-shadow: 0 14px 34px rgba(15, 23, 42, .16);
+}
+
+.packaging-safe-area {
+    position: absolute;
+    inset: 7.5% 5%;
+    display: none;
+    border: 1px dashed rgba(255, 255, 255, .68);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, .28);
+    pointer-events: none;
+}
+
+.show-safe-area .packaging-safe-area {
+    display: block;
+}
+
+.packaging-preview-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.packaging-preview-actions .packaging-toggle {
+    min-height: 34px;
+    color: var(--color-text-3);
+    font-size: 12px;
+}
+
+@media (max-width: 1220px) {
+    .packaging-workbench {
+        grid-template-columns: 1fr;
+    }
+
+    .packaging-preview-panel {
+        position: static;
+    }
+
+    .packaging-preview-panel .packaging-preview-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .packaging-global-grid.packaging-manager-controls {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 720px) {
+    .packaging-segment-tabs,
+    .packaging-global-grid.packaging-manager-controls,
+    .packaging-manager-controls fieldset,
+    .packaging-option-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .packaging-segment-tab {
+        min-height: 58px;
+    }
+
+    .packaging-wide-field {
+        grid-column: 1;
+    }
+
+    .packaging-asset-dropzone {
+        grid-template-columns: auto 1fr;
+    }
+
+    .packaging-asset-dropzone .packaging-asset-actions {
+        grid-column: 1 / -1;
+    }
 }
 
 .course-subtitle-panel {

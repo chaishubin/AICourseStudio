@@ -504,6 +504,160 @@ def test_course_packaging_uses_local_video_as_animated_background(temp_dir, monk
     filter_complex = command[command.index("-filter_complex") + 1]
     assert "[bg][card]overlay=shortest=1" in filter_complex
     assert "colorchannelmixer=aa=0.82" in filter_complex
+    assert command[command.index("-t", command.index("-ac")) + 1] == "4.00"
+
+
+def test_course_packaging_zoom_filter_keeps_one_output_frame_per_input_frame(temp_dir):
+    from vidppt.utils.course_packaging import _video_filter
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+        video_fps=24,
+    )
+
+    video_filter = _video_filter(config, 4.0, True, "zoom")
+
+    assert "d=1" in video_filter
+    assert "d=96" not in video_filter
+    assert "on/96" in video_filter
+
+
+def test_course_packaging_stages_title_and_identity_reveals(temp_dir):
+    from vidppt.utils.course_packaging import _soundmark_filter, _staged_video_filter
+
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+        video_fps=24,
+    )
+
+    video_filter = _staged_video_filter(
+        config,
+        4.0,
+        "zoom",
+        use_video_background=True,
+        title_input=2,
+        meta_input=3,
+    )
+    audio_filter = _soundmark_filter(4, 4.0, 4)
+
+    assert "[2:v]format=rgba,fade=t=in" in video_filter
+    assert "[3:v]format=rgba,fade=t=in" in video_filter
+    assert "overlay=x='-24+24*" in video_filter
+    assert "loudnorm=I=-24" in audio_filter
+    assert "[stinger]" in audio_filter
+
+
+def test_course_packaging_soft_transition_keeps_timeline_length(temp_dir, monkeypatch):
+    from vidppt.utils import course_packaging
+
+    first = temp_dir / "intro.mp4"
+    second = temp_dir / "course.mp4"
+    first.write_bytes(b"intro")
+    second.write_bytes(b"course")
+    config = ProcessConfig(input_path=temp_dir / "source.pptx", output_dir=temp_dir)
+    commands = []
+
+    class FinishedProcess:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(course_packaging, "_ensure_audio_stream", lambda _f, clip, _d, _c: clip)
+    monkeypatch.setattr(course_packaging, "_probe_media_duration", lambda _path: 4.0)
+    monkeypatch.setattr(
+        course_packaging.subprocess,
+        "Popen",
+        lambda command, **_kwargs: commands.append(command) or FinishedProcess(),
+    )
+
+    course_packaging._concat_with_ffmpeg(
+        "/usr/bin/ffmpeg",
+        [first, second],
+        temp_dir / "output.mp4",
+        config,
+        transition_seconds=0.35,
+    )
+
+    filter_complex = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "fade=t=out:st=3.650:d=0.350" in filter_complex
+    assert "fade=t=in:st=0:d=0.350" in filter_complex
+    assert "concat=n=2:v=1:a=1" in filter_complex
+    assert "xfade" not in filter_complex
+
+
+def test_course_packaging_inserts_mid_clip_between_lesson_segments(temp_dir, monkeypatch):
+    from vidppt.utils import course_packaging
+
+    source = temp_dir / "course.mp4"
+    output = temp_dir / "packaged.mp4"
+    source.write_bytes(b"course")
+    config = ProcessConfig(input_path=temp_dir / "source.pptx", output_dir=temp_dir)
+    extracted = []
+    concatenated = []
+
+    monkeypatch.setattr(course_packaging.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        course_packaging,
+        "_render_packaging_clip",
+        lambda path, *_args, **_kwargs: path.write_bytes(b"mid"),
+    )
+
+    def extract(_ffmpeg, _source, path, _config, *, start, duration):
+        extracted.append((start, duration))
+        path.write_bytes(b"segment")
+
+    def concat(_ffmpeg, clips, path, _config, _cancel_check, **_kwargs):
+        concatenated.extend(item.name for item in clips)
+        path.write_bytes(b"packaged")
+
+    monkeypatch.setattr(course_packaging, "_extract_video_range", extract)
+    monkeypatch.setattr(course_packaging, "_concat_with_ffmpeg", concat)
+
+    course_packaging.package_course_video(
+        source,
+        output,
+        config,
+        {"enable_mid": True, "enable_intro": False, "enable_outro": False},
+        course_title="人工智能导论",
+        segment_durations=[12.0, 18.0, 9.0],
+    )
+
+    assert extracted == [(0.0, 12.0), (12.0, 18.0), (30.0, None)]
+    assert concatenated == [
+        "segment_001.mp4", "mid.mp4", "segment_002.mp4", "mid.mp4", "segment_003.mp4"
+    ]
+    assert output.read_bytes() == b"packaged"
+
+
+def test_course_packaging_shifts_external_subtitles_for_intro_and_mid(temp_dir):
+    from vidppt.utils.course_packaging import shift_srt_for_packaging
+
+    subtitles = temp_dir / "course.srt"
+    subtitles.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\n第一段\n\n"
+        "2\n00:00:10,000 --> 00:00:11,000\n第二段\n\n"
+        "3\n00:00:30,000 --> 00:00:31,000\n第三段\n",
+        encoding="utf-8",
+    )
+
+    shift_srt_for_packaging(
+        subtitles,
+        intro_seconds=4,
+        segment_durations=[10, 20, 8],
+        mid_seconds=2.5,
+    )
+
+    shifted = subtitles.read_text(encoding="utf-8")
+    assert "00:00:04,000 --> 00:00:05,000" in shifted
+    assert "00:00:16,500 --> 00:00:17,500" in shifted
+    assert "00:00:39,000 --> 00:00:40,000" in shifted
 
 
 def test_course_pipeline_scales_subtitle_design_units_for_video_resolution(temp_dir):
