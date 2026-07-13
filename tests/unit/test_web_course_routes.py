@@ -214,12 +214,33 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
             "video_preset": "superfast",
             "video_crf": 26,
             "audio_loudness_lufs": -18,
-            "packaging_template": "modern",
+            "packaging_template": "university",
             "packaging_organization": "测试大学",
             "packaging_instructor": "王老师",
             "packaging_duration_seconds": 3.5,
             "packaging_outro_text": "下节课见",
             "packaging_apply_to_segments": True,
+            "packaging_use_slide_background": True,
+            "packaging_enable_motion": True,
+            "packaging_enable_music": False,
+            "packaging_intro_label": "在线精品课",
+            "packaging_intro_title": "课程导入",
+            "packaging_intro_subtitle": "从问题到方法",
+            "packaging_intro_duration_seconds": 5,
+            "packaging_outro_title": "课程小结",
+            "packaging_outro_subtitle": "请完成课后练习",
+            "packaging_outro_duration_seconds": 6,
+            "packaging_accent_color": "#1D4ED8",
+            "packaging_background_style": "gradient",
+            "packaging_logo_position": "top-left",
+            "packaging_motion_style": "pan",
+            "packaging_music_style": "bright",
+            "packaging_intro_content_x": 12,
+            "packaging_intro_content_y": 28,
+            "packaging_intro_content_width": 62,
+            "packaging_outro_content_x": 18,
+            "packaging_outro_content_y": 36,
+            "packaging_outro_content_width": 58,
         },
     )
     assert continue_response.status_code == 200
@@ -228,12 +249,33 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert web_app.tasks[task_id]["media_options"]["video_preset"] == "superfast"
     assert web_app.tasks[task_id]["media_options"]["audio_loudness_lufs"] == -18
     packaging = web_app.tasks[task_id]["media_options"]["course_packaging"]
-    assert packaging["template"] == "modern"
+    assert packaging["template"] == "university"
     assert packaging["organization"] == "测试大学"
     assert packaging["instructor"] == "王老师"
     assert packaging["duration_seconds"] == 3.5
     assert packaging["outro_text"] == "下节课见"
     assert packaging["apply_to_segments"] is True
+    assert packaging["use_slide_background"] is True
+    assert packaging["enable_motion"] is True
+    assert packaging["enable_music"] is False
+    assert packaging["intro_label"] == "在线精品课"
+    assert packaging["intro_title"] == "课程导入"
+    assert packaging["intro_subtitle"] == "从问题到方法"
+    assert packaging["intro_duration_seconds"] == 5
+    assert packaging["outro_title"] == "课程小结"
+    assert packaging["outro_subtitle"] == "请完成课后练习"
+    assert packaging["outro_duration_seconds"] == 6
+    assert packaging["accent_color"] == "#1D4ED8"
+    assert packaging["background_style"] == "gradient"
+    assert packaging["logo_position"] == "top-left"
+    assert packaging["motion_style"] == "pan"
+    assert packaging["music_style"] == "bright"
+    assert packaging["intro_content_x"] == 12
+    assert packaging["intro_content_y"] == 28
+    assert packaging["intro_content_width"] == 62
+    assert packaging["outro_content_x"] == 18
+    assert packaging["outro_content_y"] == 36
+    assert packaging["outro_content_width"] == 58
     assert isinstance(web_app.progress_queues[task_id], Queue)
     assert enqueued[0][0] == (web_app.run_media_generation, task_id)
 
@@ -673,19 +715,25 @@ def test_task_list_includes_source_path_for_preview_retry(monkeypatch, temp_dir)
 
     source = temp_dir / "lesson.docx"
     source.write_bytes(b"docx")
+    video = temp_dir / "outputs" / "lesson-video.mp4"
+    video.parent.mkdir()
+    video.write_bytes(b"mp4")
     monkeypatch.setattr(web_app, "tasks", {
         "preview-task": {
             "status": "awaiting_confirmation",
             "original_name": "lesson.docx",
             "file_path": str(source),
+            "video_path": str(video),
         },
     })
 
     response = web_app.app.test_client().get("/api/tasks")
 
     assert response.status_code == 200
-    assert response.get_json()["tasks"][0]["file_path"] == str(source)
-    assert response.get_json()["tasks"][0]["source_file_exists"] is True
+    task = response.get_json()["tasks"][0]
+    assert task["file_path"] == str(source)
+    assert task["source_file_exists"] is True
+    assert task["video_name"] == "lesson-video.mp4"
 
 
 def test_source_file_can_be_downloaded_and_previewed(monkeypatch, temp_dir):
@@ -794,6 +842,9 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
                     "instructor": "",
                     "outro_text": "感谢观看",
                     "apply_to_segments": False,
+                    "use_slide_background": True,
+                    "enable_motion": True,
+                    "enable_music": True,
                 },
             },
         }
@@ -838,7 +889,9 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
 
     def fake_package(
         source_video, output_video, config, options, *,
-        course_title, segment_title="", logo_path=None, cancel_check=None,
+        course_title, segment_title="", logo_path=None,
+        intro_background_path=None, outro_background_path=None,
+        cancel_check=None,
     ):
         packaged.append({
             "source_video": source_video,
@@ -846,6 +899,8 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             "options": options,
             "course_title": course_title,
             "segment_title": segment_title,
+            "intro_background_path": intro_background_path,
+            "outro_background_path": outro_background_path,
         })
 
     monkeypatch.setattr(Pipeline, "_generate_audio", fake_audio)
@@ -860,6 +915,8 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     assert len(packaged) == 1
     assert packaged[0]["course_title"] == "source"
     assert packaged[0]["options"]["template"] == "academic"
+    assert packaged[0]["intro_background_path"] == slide
+    assert packaged[0]["outro_background_path"] == slide
     assert web_app.tasks[task_id]["status"] == "completed"
     assert Path(web_app.tasks[task_id]["video_path"]).exists()
     saved_preview = json.loads((output_dir / "preview.json").read_text(encoding="utf-8"))
@@ -1177,6 +1234,25 @@ def test_index_contains_editable_course_preview():
     assert 'id="visual-theme"' in html
     assert 'id="smart-cut-recommend-btn"' in html
     assert 'id="smart-cut-apply-btn"' in html
+    assert 'id="packaging-template"' in html
+    assert 'id="packaging-manage-btn"' in html
+    assert 'id="packaging-manager-overlay"' in html
+    assert 'id="packaging-intro-preview"' in html
+    assert 'id="packaging-outro-preview"' in html
+    assert 'id="packaging-intro-label"' in html
+    assert 'id="packaging-intro-duration"' in html
+    assert 'id="packaging-outro-duration"' in html
+    assert 'id="packaging-accent-color"' in html
+    assert 'id="packaging-background-style"' in html
+    assert 'id="packaging-logo-position"' in html
+    assert 'id="packaging-motion-style"' in html
+    assert 'id="packaging-music-style"' in html
+    assert 'id="packaging-use-slide-background"' in html
+    assert 'id="packaging-enable-motion"' in html
+    assert 'id="packaging-enable-music"' in html
+    assert 'id="packaging-layout-reset"' in html
+    assert 'data-packaging-layout="intro"' in html
+    assert 'data-packaging-layout="outro"' in html
     assert 'id="course-duration-estimate"' in html
     assert '预计完整视频总时长' in html
     assert '约 -- 分 -- 秒' in html
@@ -1200,6 +1276,32 @@ def test_index_contains_editable_course_preview():
     assert 'href="/operation-logs-page"' in html
     assert '这里是字幕位置' not in html
     assert '在每页 PPT 上检查真实字幕样例、可读性和遮挡风险' in html
+
+
+def test_course_packaging_preview_image_endpoint():
+    import web.app as web_app
+
+    response = web_app.app.test_client().get(
+        "/api/course-packaging-preview-image",
+        query_string={
+            "kind": "outro",
+            "packaging_template": "credits",
+            "packaging_organization": "测试大学",
+            "packaging_outro_text": "感谢观看",
+            "packaging_intro_label": "在线精品课",
+            "packaging_intro_title": "课程导入",
+            "packaging_intro_subtitle": "从问题到方法",
+            "packaging_outro_title": "课程总结",
+            "packaging_outro_subtitle": "请完成课后练习",
+            "packaging_accent_color": "#1D4ED8",
+            "packaging_background_style": "gradient",
+            "packaging_logo_position": "none",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.data.startswith(b"\x89PNG")
 
 
 def test_management_pages_are_separate_from_course_workspace():

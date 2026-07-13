@@ -40,6 +40,7 @@ class AICourseStudioApp {
         this.coursePreviewPlaying = false;
         this.coursePreviewSubtitlePage = null;
         this.currentAIReview = null;
+        this.packagingLayout = this.defaultPackagingLayout();
 
         try {
             this.elements = {
@@ -124,6 +125,29 @@ class AICourseStudioApp {
                 enableIntro: document.getElementById('enable-intro'),
                 enableOutro: document.getElementById('enable-outro'),
                 packagingApplySegments: document.getElementById('packaging-apply-segments'),
+                packagingUseSlideBackground: document.getElementById('packaging-use-slide-background'),
+                packagingEnableMotion: document.getElementById('packaging-enable-motion'),
+                packagingEnableMusic: document.getElementById('packaging-enable-music'),
+                packagingManageBtn: document.getElementById('packaging-manage-btn'),
+                packagingManagerOverlay: document.getElementById('packaging-manager-overlay'),
+                packagingManagerClose: document.getElementById('packaging-manager-close'),
+                packagingPreviewRefresh: document.getElementById('packaging-preview-refresh'),
+                packagingLayoutReset: document.getElementById('packaging-layout-reset'),
+                packagingPreviewStatus: document.getElementById('packaging-preview-status'),
+                packagingIntroPreview: document.getElementById('packaging-intro-preview'),
+                packagingOutroPreview: document.getElementById('packaging-outro-preview'),
+                packagingIntroLabel: document.getElementById('packaging-intro-label'),
+                packagingIntroTitle: document.getElementById('packaging-intro-title'),
+                packagingIntroSubtitle: document.getElementById('packaging-intro-subtitle'),
+                packagingIntroDuration: document.getElementById('packaging-intro-duration'),
+                packagingOutroTitle: document.getElementById('packaging-outro-title'),
+                packagingOutroSubtitle: document.getElementById('packaging-outro-subtitle'),
+                packagingOutroDuration: document.getElementById('packaging-outro-duration'),
+                packagingAccentColor: document.getElementById('packaging-accent-color'),
+                packagingBackgroundStyle: document.getElementById('packaging-background-style'),
+                packagingLogoPosition: document.getElementById('packaging-logo-position'),
+                packagingMotionStyle: document.getElementById('packaging-motion-style'),
+                packagingMusicStyle: document.getElementById('packaging-music-style'),
                 advancedToggle: document.getElementById('advanced-toggle'),
                 workflowBadge: document.getElementById('workflow-badge'),
                 workflowDescription: document.getElementById('workflow-description'),
@@ -321,7 +345,22 @@ class AICourseStudioApp {
             this.elements.packagingOutroText,
             this.elements.enableIntro,
             this.elements.enableOutro,
-            this.elements.packagingApplySegments
+            this.elements.packagingApplySegments,
+            this.elements.packagingUseSlideBackground,
+            this.elements.packagingEnableMotion,
+            this.elements.packagingEnableMusic,
+            this.elements.packagingIntroLabel,
+            this.elements.packagingIntroTitle,
+            this.elements.packagingIntroSubtitle,
+            this.elements.packagingIntroDuration,
+            this.elements.packagingOutroTitle,
+            this.elements.packagingOutroSubtitle,
+            this.elements.packagingOutroDuration,
+            this.elements.packagingAccentColor,
+            this.elements.packagingBackgroundStyle,
+            this.elements.packagingLogoPosition,
+            this.elements.packagingMotionStyle,
+            this.elements.packagingMusicStyle
         ];
         controls.forEach(control => {
             if (!control) return;
@@ -761,6 +800,18 @@ class AICourseStudioApp {
             packagingInstructor: 'packaging_instructor',
             packagingDuration: 'packaging_duration_seconds',
             packagingOutroText: 'packaging_outro_text',
+            packagingIntroLabel: 'packaging_intro_label',
+            packagingIntroTitle: 'packaging_intro_title',
+            packagingIntroSubtitle: 'packaging_intro_subtitle',
+            packagingIntroDuration: 'packaging_intro_duration_seconds',
+            packagingOutroTitle: 'packaging_outro_title',
+            packagingOutroSubtitle: 'packaging_outro_subtitle',
+            packagingOutroDuration: 'packaging_outro_duration_seconds',
+            packagingAccentColor: 'packaging_accent_color',
+            packagingBackgroundStyle: 'packaging_background_style',
+            packagingLogoPosition: 'packaging_logo_position',
+            packagingMotionStyle: 'packaging_motion_style',
+            packagingMusicStyle: 'packaging_music_style',
             ttsEmotion: 'tts_emotion',
             ttsRate: 'tts_rate',
             ttsEmotionScale: 'tts_emotion_scale',
@@ -815,6 +866,23 @@ class AICourseStudioApp {
         if (strategy.packaging_apply_to_segments !== undefined && this.elements.packagingApplySegments) {
             this.elements.packagingApplySegments.checked = Boolean(strategy.packaging_apply_to_segments);
         }
+        if (strategy.packaging_use_slide_background !== undefined && this.elements.packagingUseSlideBackground) {
+            this.elements.packagingUseSlideBackground.checked = Boolean(strategy.packaging_use_slide_background);
+        }
+        if (strategy.packaging_enable_motion !== undefined && this.elements.packagingEnableMotion) {
+            this.elements.packagingEnableMotion.checked = Boolean(strategy.packaging_enable_motion);
+        }
+        if (strategy.packaging_enable_music !== undefined && this.elements.packagingEnableMusic) {
+            this.elements.packagingEnableMusic.checked = Boolean(strategy.packaging_enable_music);
+        }
+        ['intro', 'outro'].forEach(kind => {
+            const x = Number(strategy[`packaging_${kind}_content_x`]);
+            const y = Number(strategy[`packaging_${kind}_content_y`]);
+            const width = Number(strategy[`packaging_${kind}_content_width`]);
+            if (Number.isFinite(x)) this.packagingLayout[kind].x = x;
+            if (Number.isFinite(y)) this.packagingLayout[kind].y = y;
+            if (Number.isFinite(width)) this.packagingLayout[kind].width = width;
+        });
 
         const customVoice = strategy.custom_voice || '';
         this.elements.customVoice.value = customVoice;
@@ -912,6 +980,27 @@ class AICourseStudioApp {
         this.elements.smartCutApplyBtn.addEventListener(
             'click', () => this.applySmartCuts()
         );
+        this.elements.packagingManageBtn?.addEventListener(
+            'click', () => this.openPackagingManager()
+        );
+        this.elements.packagingManagerClose?.addEventListener(
+            'click', () => this.closePackagingManager()
+        );
+        this.elements.packagingManagerOverlay?.addEventListener('click', event => {
+            if (event.target === this.elements.packagingManagerOverlay) {
+                this.closePackagingManager();
+            }
+        });
+        this.elements.packagingPreviewRefresh?.addEventListener(
+            'click', () => this.refreshPackagingPreview()
+        );
+        this.elements.packagingLayoutReset?.addEventListener('click', () => {
+            this.packagingLayout = this.defaultPackagingLayout();
+            this.syncPackagingLayoutBoxes();
+            this.refreshPackagingPreview();
+            this.saveCurrentStrategy();
+        });
+        this.bindPackagingLayoutEditor();
         this.elements.uploadEditedPptBtn.addEventListener(
             'click', () => this.elements.editedPptInput.click()
         );
@@ -1530,8 +1619,162 @@ class AICourseStudioApp {
             packaging_instructor: this.elements.packagingInstructor?.value.trim() || '',
             packaging_duration_seconds: Number(this.elements.packagingDuration?.value) || 4,
             packaging_outro_text: this.elements.packagingOutroText?.value.trim() || '感谢观看',
-            packaging_apply_to_segments: this.elements.packagingApplySegments?.checked ?? false
+            packaging_apply_to_segments: this.elements.packagingApplySegments?.checked ?? false,
+            packaging_use_slide_background: this.elements.packagingUseSlideBackground?.checked ?? true,
+            packaging_enable_motion: this.elements.packagingEnableMotion?.checked ?? true,
+            packaging_enable_music: this.elements.packagingEnableMusic?.checked ?? true,
+            packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() || '在线开放课程',
+            packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || '',
+            packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() || '',
+            packaging_intro_duration_seconds: Number(this.elements.packagingIntroDuration?.value) || Number(this.elements.packagingDuration?.value) || 4,
+            packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() || '',
+            packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() || '',
+            packaging_outro_duration_seconds: Number(this.elements.packagingOutroDuration?.value) || Number(this.elements.packagingDuration?.value) || 4,
+            packaging_accent_color: this.elements.packagingAccentColor?.value || '#D6A239',
+            packaging_background_style: this.elements.packagingBackgroundStyle?.value || 'ppt',
+            packaging_logo_position: this.elements.packagingLogoPosition?.value || 'top-right',
+            packaging_motion_style: this.elements.packagingMotionStyle?.value || 'zoom',
+            packaging_music_style: this.elements.packagingMusicStyle?.value || 'warm',
+            packaging_intro_content_x: this.packagingLayout.intro.x,
+            packaging_intro_content_y: this.packagingLayout.intro.y,
+            packaging_intro_content_width: this.packagingLayout.intro.width,
+            packaging_outro_content_x: this.packagingLayout.outro.x,
+            packaging_outro_content_y: this.packagingLayout.outro.y,
+            packaging_outro_content_width: this.packagingLayout.outro.width
         };
+    }
+
+    defaultPackagingLayout() {
+        return {
+            intro: { x: 9.5, y: 30, width: 70 },
+            outro: { x: 9.5, y: 34, width: 70 }
+        };
+    }
+
+    bindPackagingLayoutEditor() {
+        document.querySelectorAll('[data-packaging-layout]').forEach(box => {
+            box.addEventListener('pointerdown', event => {
+                const kind = box.dataset.packagingLayout;
+                const canvas = box.parentElement;
+                const resizing = event.target.tagName === 'I';
+                const start = { x: event.clientX, y: event.clientY };
+                const original = { ...this.packagingLayout[kind] };
+                const rect = canvas.getBoundingClientRect();
+                box.setPointerCapture(event.pointerId);
+                const move = moveEvent => {
+                    const dx = (moveEvent.clientX - start.x) / rect.width * 100;
+                    const dy = (moveEvent.clientY - start.y) / rect.height * 100;
+                    if (resizing) {
+                        this.packagingLayout[kind].width = Math.max(
+                            18, Math.min(95 - original.x, original.width + dx)
+                        );
+                    } else {
+                        this.packagingLayout[kind].x = Math.max(
+                            0, Math.min(100 - original.width, original.x + dx)
+                        );
+                        this.packagingLayout[kind].y = Math.max(
+                            0, Math.min(78, original.y + dy)
+                        );
+                    }
+                    this.syncPackagingLayoutBoxes();
+                };
+                const up = () => {
+                    box.removeEventListener('pointermove', move);
+                    box.removeEventListener('pointerup', up);
+                    box.removeEventListener('pointercancel', up);
+                    this.refreshPackagingPreview();
+                    this.saveCurrentStrategy();
+                };
+                box.addEventListener('pointermove', move);
+                box.addEventListener('pointerup', up);
+                box.addEventListener('pointercancel', up);
+                event.preventDefault();
+            });
+        });
+    }
+
+    syncPackagingLayoutBoxes() {
+        document.querySelectorAll('[data-packaging-layout]').forEach(box => {
+            const layout = this.packagingLayout[box.dataset.packagingLayout];
+            if (!layout) return;
+            box.style.left = `${layout.x}%`;
+            box.style.top = `${layout.y}%`;
+            box.style.width = `${layout.width}%`;
+            box.style.height = '34%';
+        });
+    }
+
+    openPackagingManager() {
+        const overlay = this.elements.packagingManagerOverlay;
+        if (!overlay) return;
+        overlay.hidden = false;
+        requestAnimationFrame(() => overlay.classList.add('visible'));
+        this.syncPackagingLayoutBoxes();
+        this.refreshPackagingPreview();
+    }
+
+    closePackagingManager() {
+        const overlay = this.elements.packagingManagerOverlay;
+        if (!overlay) return;
+        overlay.classList.remove('visible');
+        window.setTimeout(() => {
+            if (!overlay.classList.contains('visible')) overlay.hidden = true;
+        }, 180);
+    }
+
+    refreshPackagingPreview() {
+        const intro = this.elements.packagingIntroPreview;
+        const outro = this.elements.packagingOutroPreview;
+        if (!intro || !outro) return;
+        if (this.elements.packagingPreviewStatus) {
+            this.elements.packagingPreviewStatus.textContent = '正在生成预览...';
+        }
+        intro.src = this.packagingPreviewUrl('intro');
+        outro.src = this.packagingPreviewUrl('outro');
+        let loaded = 0;
+        const done = () => {
+            loaded += 1;
+            if (loaded >= 2 && this.elements.packagingPreviewStatus) {
+                this.elements.packagingPreviewStatus.textContent = '预览已更新';
+            }
+        };
+        const failed = () => {
+            if (this.elements.packagingPreviewStatus) {
+                this.elements.packagingPreviewStatus.textContent = '预览生成失败';
+            }
+        };
+        intro.onload = done;
+        outro.onload = done;
+        intro.onerror = failed;
+        outro.onerror = failed;
+    }
+
+    packagingPreviewUrl(kind) {
+        const params = new URLSearchParams({
+            kind,
+            packaging_template: this.elements.packagingTemplate?.value || 'academic',
+            packaging_organization: this.elements.packagingOrganization?.value.trim() || '',
+            packaging_instructor: this.elements.packagingInstructor?.value.trim() || '',
+            packaging_outro_text: this.elements.packagingOutroText?.value.trim() || '感谢观看',
+            packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() || '在线开放课程',
+            packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || '',
+            packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() || '',
+            packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() || '',
+            packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() || '',
+            packaging_accent_color: this.elements.packagingAccentColor?.value || '#D6A239',
+            packaging_background_style: this.elements.packagingBackgroundStyle?.value || 'solid',
+            packaging_logo_position: this.elements.packagingLogoPosition?.value || 'top-right',
+            packaging_intro_content_x: String(this.packagingLayout.intro.x),
+            packaging_intro_content_y: String(this.packagingLayout.intro.y),
+            packaging_intro_content_width: String(this.packagingLayout.intro.width),
+            packaging_outro_content_x: String(this.packagingLayout.outro.x),
+            packaging_outro_content_y: String(this.packagingLayout.outro.y),
+            packaging_outro_content_width: String(this.packagingLayout.outro.width),
+            course_title: '人工智能课程示例',
+            segment_title: kind === 'intro' ? '第一讲 课程导入' : '',
+            t: String(Date.now())
+        });
+        return `/api/course-packaging-preview-image?${params.toString()}`;
     }
 
     collectVideoOptions() {

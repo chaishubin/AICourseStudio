@@ -17,6 +17,7 @@ import time
 import shutil
 import secrets
 import subprocess
+import tempfile
 from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
@@ -518,12 +519,15 @@ def _task_generation_duration_seconds(task: dict, created_at: float | None) -> f
 
 def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> dict:
     source_path = task.get('file_path', '')
+    video_path = task.get('video_path')
+    video_name = str(video_path or '').replace('\\', '/').rsplit('/', 1)[-1]
     created_at = _task_created_at(task)
     return {
         'task_id': task_id,
         'status': task.get('status', 'unknown'),
         'original_name': task.get('original_name', ''),
         'course_name': task.get('course_name', ''),
+        'video_name': video_name,
         'file_path': source_path,
         'source_file_exists': bool(source_path and Path(source_path).is_file()),
         'stage': task.get('stage'),
@@ -532,7 +536,7 @@ def task_summary(task_id: str, task: dict, queue_positions: dict[str, int]) -> d
         'stage_current': task.get('stage_current'),
         'stage_total': task.get('stage_total'),
         'message': task.get('message', ''),
-        'video_path': task.get('video_path'),
+        'video_path': video_path,
         'course_json_path': task.get('course_json_path'),
         'presentation_path': task.get('presentation_path'),
         'subtitles_path': task.get('subtitles_path'),
@@ -980,11 +984,17 @@ def _video_options(data: dict) -> dict:
 def _course_packaging_options(data: dict) -> dict:
     """校验片头片尾包装参数。"""
     template = str(data.get('packaging_template', 'academic')).strip().lower()
-    if template not in {'academic', 'modern', 'minimal'}:
+    if template not in {'academic', 'modern', 'minimal', 'university', 'credits'}:
         raise ValueError('不支持的课程包装模板')
     duration = float(data.get('packaging_duration_seconds', 4))
     if duration < 2 or duration > 8:
         raise ValueError('片头片尾时长必须在 2 到 8 秒之间')
+    intro_duration = _packaging_duration(
+        data.get('packaging_intro_duration_seconds'), duration
+    )
+    outro_duration = _packaging_duration(
+        data.get('packaging_outro_duration_seconds'), duration
+    )
     organization = str(data.get('packaging_organization', '')).strip()[:60]
     instructor = str(data.get('packaging_instructor', '')).strip()[:40]
     outro_text = str(
@@ -994,14 +1004,75 @@ def _course_packaging_options(data: dict) -> dict:
         'course_packaging': {
             'enable_intro': bool(data.get('enable_intro', True)),
             'enable_outro': bool(data.get('enable_outro', True)),
+            'enable_motion': bool(data.get('packaging_enable_motion', True)),
+            'enable_music': bool(data.get('packaging_enable_music', True)),
+            'use_slide_background': bool(data.get('packaging_use_slide_background', True)),
             'template': template,
             'duration_seconds': duration,
+            'intro_duration_seconds': intro_duration,
+            'outro_duration_seconds': outro_duration,
             'organization': organization,
             'instructor': instructor,
             'outro_text': outro_text,
+            'intro_label': str(data.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
+            'intro_title': str(data.get('packaging_intro_title', '')).strip()[:80],
+            'intro_subtitle': str(data.get('packaging_intro_subtitle', '')).strip()[:100],
+            'outro_title': str(data.get('packaging_outro_title', '')).strip()[:80],
+            'outro_subtitle': str(data.get('packaging_outro_subtitle', '')).strip()[:100],
+            'accent_color': _packaging_color(data.get('packaging_accent_color'), '#D6A239'),
+            'background_style': _packaging_choice(
+                data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'
+            ),
+            'logo_position': _packaging_choice(
+                data.get('packaging_logo_position'),
+                {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'},
+                'top-right',
+            ),
+            'intro_content_x': _packaging_percent(data.get('packaging_intro_content_x'), 9.5),
+            'intro_content_y': _packaging_percent(data.get('packaging_intro_content_y'), 30.0),
+            'intro_content_width': _packaging_percent(data.get('packaging_intro_content_width'), 70.0, 18.0),
+            'outro_content_x': _packaging_percent(data.get('packaging_outro_content_x'), 9.5),
+            'outro_content_y': _packaging_percent(data.get('packaging_outro_content_y'), 34.0),
+            'outro_content_width': _packaging_percent(data.get('packaging_outro_content_width'), 70.0, 18.0),
+            'motion_style': _packaging_choice(
+                data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'
+            ),
+            'music_style': _packaging_choice(
+                data.get('packaging_music_style'), {'warm', 'calm', 'bright', 'tech'}, 'warm'
+            ),
             'apply_to_segments': bool(data.get('packaging_apply_to_segments', False)),
         }
     }
+
+
+def _packaging_duration(value, fallback: float) -> float:
+    try:
+        duration = float(value if value not in (None, '') else fallback)
+    except (TypeError, ValueError):
+        duration = fallback
+    if duration < 2 or duration > 10:
+        raise ValueError('片头片尾单独时长必须在 2 到 10 秒之间')
+    return duration
+
+
+def _packaging_percent(value, default: float, minimum: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return round(max(minimum, min(100.0, number)), 2)
+
+
+def _packaging_choice(value, allowed: set[str], default: str) -> str:
+    choice = str(value or default).strip().lower()
+    return choice if choice in allowed else default
+
+
+def _packaging_color(value, default: str) -> str:
+    color = str(value or default).strip()
+    if re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+        return color
+    return default
 
 
 def _media_config_options(options: dict) -> dict:
@@ -2640,6 +2711,12 @@ def run_media_generation(task_id: str):
             packaging_options.get('enable_intro')
             or packaging_options.get('enable_outro')
         ):
+            intro_background = (
+                content.pages[0].slide_image if content.pages else None
+            )
+            outro_background = (
+                content.pages[-1].slide_image if content.pages else None
+            )
             report_video(99, '正在添加片头片尾')
             package_course_video(
                 video_path,
@@ -2648,6 +2725,8 @@ def run_media_generation(task_id: str):
                 packaging_options,
                 course_title=task.get('course_name') or stem,
                 logo_path=logo_path if logo_path and logo_path.is_file() else None,
+                intro_background_path=intro_background,
+                outro_background_path=outro_background,
                 cancel_check=cancel_event.is_set,
             )
         progress.update('video', 100, 100, '视频生成完成')
@@ -2749,6 +2828,8 @@ def run_media_generation(task_id: str):
                         course_title=task.get('course_name') or stem,
                         segment_title=segment.get('title', ''),
                         logo_path=logo_path if logo_path and logo_path.is_file() else None,
+                        intro_background_path=segment_pages[0].slide_image,
+                        outro_background_path=segment_pages[-1].slide_image,
                         cancel_check=cancel_event.is_set,
                     )
                 segment_artifacts.append({
@@ -3873,6 +3954,8 @@ def get_tasks():
             if keyword in ' '.join([
                 str(task.get('original_name') or ''),
                 str(task.get('course_name') or ''),
+                str(task.get('video_name') or ''),
+                str(task.get('video_path') or ''),
                 str(task.get('task_id') or ''),
                 str(task.get('owner_username') or ''),
                 str(task.get('created_by') or ''),
@@ -4422,6 +4505,68 @@ def subtitle_preview_image():
         mimetype='image/png',
         max_age=0,
     ))
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/api/course-packaging-preview-image')
+def course_packaging_preview_image():
+    """生成课程片头/片尾模板预览图，不进入视频合成流程。"""
+    from vidppt.utils.course_packaging import _render_packaging_image
+
+    kind = str(request.args.get('kind', 'intro')).strip().lower()
+    if kind not in {'intro', 'outro'}:
+        kind = 'intro'
+    template = str(request.args.get('packaging_template', 'academic')).strip().lower()
+    if template not in {'academic', 'modern', 'minimal', 'university', 'credits'}:
+        template = 'academic'
+    options = {
+        'template': template,
+        'organization': str(request.args.get('packaging_organization', '')).strip()[:60],
+        'instructor': str(request.args.get('packaging_instructor', '')).strip()[:40],
+        'outro_text': str(request.args.get('packaging_outro_text', '感谢观看')).strip()[:120] or '感谢观看',
+        'intro_label': str(request.args.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
+        'intro_title': str(request.args.get('packaging_intro_title', '')).strip()[:80],
+        'intro_subtitle': str(request.args.get('packaging_intro_subtitle', '')).strip()[:100],
+        'outro_title': str(request.args.get('packaging_outro_title', '')).strip()[:80],
+        'outro_subtitle': str(request.args.get('packaging_outro_subtitle', '')).strip()[:100],
+        'accent_color': _packaging_color(request.args.get('packaging_accent_color'), '#D6A239'),
+        'background_style': _packaging_choice(
+            request.args.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'solid'
+        ),
+        'logo_position': _packaging_choice(
+            request.args.get('packaging_logo_position'),
+            {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'},
+            'top-right',
+        ),
+        'intro_content_x': _packaging_percent(request.args.get('packaging_intro_content_x'), 9.5),
+        'intro_content_y': _packaging_percent(request.args.get('packaging_intro_content_y'), 30.0),
+        'intro_content_width': _packaging_percent(request.args.get('packaging_intro_content_width'), 70.0, 18.0),
+        'outro_content_x': _packaging_percent(request.args.get('packaging_outro_content_x'), 9.5),
+        'outro_content_y': _packaging_percent(request.args.get('packaging_outro_content_y'), 34.0),
+        'outro_content_width': _packaging_percent(request.args.get('packaging_outro_content_width'), 70.0, 18.0),
+        'use_slide_background': False,
+    }
+    config = ProcessConfig(
+        input_path=Path('course-packaging-preview.pptx'),
+        output_dir=Path(tempfile.gettempdir()),
+        video_width=960,
+        video_height=540,
+    )
+    with tempfile.NamedTemporaryFile(suffix='.png') as preview:
+        _render_packaging_image(
+            Path(preview.name),
+            config,
+            options,
+            kind=kind,
+            course_title=str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例',
+            segment_title=str(request.args.get('segment_title', '')).strip()[:80],
+            logo_path=None,
+            background_path=None,
+        )
+        data = BytesIO(Path(preview.name).read_bytes())
+    data.seek(0)
+    response = make_response(send_file(data, mimetype='image/png', max_age=0))
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
 
