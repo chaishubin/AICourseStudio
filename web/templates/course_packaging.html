@@ -101,8 +101,8 @@
                     </div>
                     <div class="packaging-manager-toolbar"><button type="button" class="btn-preview" id="packaging-layout-reset">重置内容位置</button><span id="packaging-preview-status">使用当前表单参数</span></div>
                     <div class="packaging-preview-grid">
-                        <figure><figcaption>片头预览</figcaption><div class="packaging-preview-canvas"><img id="packaging-intro-preview" alt="课程片头模板预览"><div class="packaging-layout-box" data-packaging-layout="intro" tabindex="0"><span>片头内容区</span><i aria-hidden="true"></i></div></div></figure>
-                        <figure><figcaption>片尾预览</figcaption><div class="packaging-preview-canvas"><img id="packaging-outro-preview" alt="课程片尾模板预览"><div class="packaging-layout-box" data-packaging-layout="outro" tabindex="0"><span>片尾内容区</span><i aria-hidden="true"></i></div></div></figure>
+                        <figure><figcaption>片头预览</figcaption><div class="packaging-preview-canvas"><video id="packaging-intro-preview" controls playsinline preload="metadata" aria-label="课程片头视频预览"></video><div class="packaging-layout-box" data-packaging-layout="intro" tabindex="0"><span>片头内容区</span><i aria-hidden="true"></i></div></div></figure>
+                        <figure><figcaption>片尾预览</figcaption><div class="packaging-preview-canvas"><video id="packaging-outro-preview" controls playsinline preload="metadata" aria-label="课程片尾视频预览"></video><div class="packaging-layout-box" data-packaging-layout="outro" tabindex="0"><span>片尾内容区</span><i aria-hidden="true"></i></div></div></figure>
                     </div>
                     <div class="packaging-template-notes"><span>拖动虚线框调整内容位置，拖动右下角调整宽度；学校 Logo 仍由生产工作台的生成策略提供。</span></div>
                 </section>
@@ -110,6 +110,6 @@
             <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
         </div>
     </div>
-    <script src="{{ url_for('static', filename='js/course_packaging.js') }}?v=1"></script>
+    <script src="{{ url_for('static', filename='js/course_packaging.js') }}?v=2"></script>
 </body>
 </html>

@@ -1295,6 +1295,24 @@ def test_course_packaging_preview_image_endpoint():
     assert response.data.startswith(b"\x89PNG")
 
 
+def test_course_packaging_preview_video_endpoint(monkeypatch):
+    import web.app as web_app
+    import vidppt.utils.course_packaging as course_packaging
+
+    def fake_render(output, *_args, **_kwargs):
+        output.write_bytes(b"fake mp4")
+
+    monkeypatch.setattr(course_packaging, "_render_packaging_clip", fake_render)
+    response = web_app.app.test_client().get(
+        "/api/course-packaging-preview-video",
+        query_string={"kind": "intro", "packaging_enable_motion": "true"},
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == "video/mp4"
+    assert response.data == b"fake mp4"
+
+
 def test_course_packaging_background_asset_can_be_uploaded(monkeypatch, temp_dir):
     import web.app as web_app
     from PIL import Image
@@ -1376,12 +1394,12 @@ def test_course_packaging_has_a_separate_design_page():
     assert '片头片尾设计' in html
     assert 'class="nav-item active" href="/course-packaging"' in html
     assert 'id="packaging-save-btn"' in html
-    assert 'id="packaging-intro-preview"' in html
-    assert 'id="packaging-outro-preview"' in html
+    assert '<video id="packaging-intro-preview" controls' in html
+    assert '<video id="packaging-outro-preview" controls' in html
     assert 'id="packaging-music-library"' in html
     assert 'id="packaging-intro-video-input"' in html
     assert 'id="upload-area"' not in html
-    assert '/static/js/course_packaging.js?v=1' in html
+    assert '/static/js/course_packaging.js?v=2' in html
 
 
 def test_management_pages_are_separate_from_course_workspace():

@@ -4713,6 +4713,52 @@ def course_packaging_preview_image():
     return response
 
 
+@app.route('/api/course-packaging-preview-video')
+def course_packaging_preview_video():
+    """使用正式包装渲染链路生成可播放的片头/片尾预览。"""
+    from vidppt.utils.course_packaging import _render_packaging_clip
+
+    kind = str(request.args.get('kind', 'intro')).strip().lower()
+    if kind not in {'intro', 'outro'}:
+        kind = 'intro'
+    preview_args = request.args.to_dict()
+    for key in (
+        'enable_intro', 'enable_outro', 'packaging_apply_to_segments',
+        'packaging_use_slide_background', 'packaging_enable_motion',
+        'packaging_enable_music',
+    ):
+        if key in preview_args:
+            preview_args[key] = str(preview_args[key]).strip().lower() in {'1', 'true', 'yes', 'on'}
+    try:
+        options = _course_packaging_options(preview_args)['course_packaging']
+    except (TypeError, ValueError) as error:
+        return jsonify({'error': str(error)}), 400
+    background_path = Path(options['background_path']) if options.get('background_path') else None
+    config = ProcessConfig(
+        input_path=Path('course-packaging-preview.pptx'),
+        output_dir=Path(tempfile.gettempdir()),
+        video_width=960,
+        video_height=540,
+    )
+    with tempfile.TemporaryDirectory(prefix='vidppt-packaging-preview-') as temp_dir:
+        preview_path = Path(temp_dir) / f'{kind}.mp4'
+        _render_packaging_clip(
+            preview_path,
+            config,
+            options,
+            kind=kind,
+            course_title=str(request.args.get('course_title', '课程名称示例')).strip()[:80] or '课程名称示例',
+            segment_title=str(request.args.get('segment_title', '')).strip()[:80],
+            logo_path=None,
+            background_path=background_path,
+        )
+        data = BytesIO(preview_path.read_bytes())
+    data.seek(0)
+    response = make_response(send_file(data, mimetype='video/mp4', max_age=0, conditional=True))
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
 @app.route('/api/voices')
 def list_voices():
     """列出各 TTS 引擎可用音色；Edge 优先从 SDK 动态读取完整目录。"""

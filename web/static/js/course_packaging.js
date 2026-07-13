@@ -152,7 +152,7 @@ class CoursePackagingDesigner {
                 this.syncAssets();
                 if (kind === 'music') await this.loadMusicLibrary();
                 this.markDirty();
-                if (kind === 'background') this.refreshPreview();
+                if (kind !== 'music') this.refreshPreview();
             } catch (error) { status.textContent = error.message; }
         });
     }
@@ -162,7 +162,7 @@ class CoursePackagingDesigner {
             this.assets[kind] = null;
             this.syncAssets();
             this.markDirty();
-            if (kind === 'background') this.refreshPreview();
+            if (kind !== 'music') this.refreshPreview();
         });
     }
 
@@ -210,18 +210,20 @@ class CoursePackagingDesigner {
             segment_title: kind === 'intro' ? '第一讲 课程导入' : '',
             t: String(Date.now())
         });
-        return `/api/course-packaging-preview-image?${params.toString()}`;
+        return `/api/course-packaging-preview-video?${params.toString()}`;
     }
 
     refreshPreview() {
         const status = this.element('packaging-preview-status');
-        const images = [this.element('packaging-intro-preview'), this.element('packaging-outro-preview')];
-        status.textContent = '正在生成预览...';
+        const videos = [this.element('packaging-intro-preview'), this.element('packaging-outro-preview')];
+        status.textContent = '正在合成视频预览，请稍候...';
         let loaded = 0;
-        images.forEach((image, index) => {
-            image.onload = () => { loaded += 1; if (loaded === 2) status.textContent = '预览已更新'; };
-            image.onerror = () => { status.textContent = '预览生成失败'; };
-            image.src = this.previewUrl(index === 0 ? 'intro' : 'outro');
+        videos.forEach((video, index) => {
+            video.pause();
+            video.onloadedmetadata = () => { loaded += 1; if (loaded === 2) status.textContent = '视频预览已更新，可播放查看动效与声音'; };
+            video.onerror = () => { status.textContent = '视频预览生成失败'; };
+            video.src = this.previewUrl(index === 0 ? 'intro' : 'outro');
+            video.load();
         });
     }
 
