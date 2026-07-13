@@ -1445,7 +1445,7 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-copyright"' in html
     assert 'id="packaging-transition-seconds"' in html
     assert 'id="upload-area"' not in html
-    assert '/static/js/course_packaging.js?v=11' in html
+    assert '/static/js/course_packaging.js?v=12' in html
 
 
 def test_packaging_template_management_crud_and_render_resolution():
@@ -1457,7 +1457,7 @@ def test_packaging_template_management_crud_and_render_resolution():
     html = page.get_data(as_text=True)
     assert '包装模板管理' in html
     assert 'id="packaging-templates-grid"' in html
-    assert '/static/js/packaging_templates.js?v=1' in html
+    assert '/static/js/packaging_templates.js?v=2' in html
 
     builtins = client.get('/api/course-packaging-templates?include_disabled=1')
     assert builtins.status_code == 200
@@ -1494,6 +1494,25 @@ def test_packaging_template_management_crud_and_render_resolution():
     )
     assert made_default.status_code == 200
     assert made_default.get_json()['template']['is_default'] is True
+
+    updated_details = client.patch(
+        f"/api/course-packaging-templates/{template['id']}",
+        json={
+            'base_template': 'modern',
+            'config': {
+                'packaging_intro_title': '更新后的课程片头',
+                'packaging_outro_text': '学习完成',
+                'packaging_intro_content_x': 14.5,
+            },
+        },
+    )
+    assert updated_details.status_code == 200
+    updated_template = updated_details.get_json()['template']
+    assert updated_template['base_template'] == 'modern'
+    assert updated_template['config']['packaging_template'] == 'modern'
+    assert updated_template['config']['packaging_intro_title'] == '更新后的课程片头'
+    assert updated_template['config']['packaging_outro_text'] == '学习完成'
+    assert updated_template['config']['packaging_intro_content_x'] == 14.5
 
     cannot_delete_builtin = client.delete('/api/course-packaging-templates/academic')
     assert cannot_delete_builtin.status_code == 400

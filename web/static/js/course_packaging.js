@@ -1,6 +1,8 @@
 class CoursePackagingDesigner {
     constructor() {
         this.storageKey = 'vidppt.currentStrategy.v1';
+        this.editingTemplateId = new URLSearchParams(window.location.search).get('edit_template');
+        this.editingTemplate = null;
         this.activeSide = 'intro';
         this.layout = {
             intro: { x: 9.5, y: 30, width: 70 },
@@ -179,7 +181,8 @@ class CoursePackagingDesigner {
 
     async loadTemplates() {
         try {
-            const response = await fetch('/api/course-packaging-templates');
+            const suffix = this.editingTemplateId ? '?include_disabled=1' : '';
+            const response = await fetch(`/api/course-packaging-templates${suffix}`);
             const result = await response.json();
             if (!response.ok) throw new Error(result.error || '模板加载失败');
             this.templates = new Map(result.templates.map(template => [template.id, template]));
@@ -190,17 +193,36 @@ class CoursePackagingDesigner {
             system.label = '系统模板';
             const custom = document.createElement('optgroup');
             custom.label = '自定义模板';
-            result.templates.forEach(template => {
+            result.templates.filter(template => !this.editingTemplateId || template.builtin).forEach(template => {
                 const option = new Option(`${template.name}${template.is_default ? ' · 默认' : ''}`, template.id);
                 (template.builtin ? system : custom).append(option);
             });
             if (system.children.length) select.append(system);
             if (custom.children.length) select.append(custom);
-            const selected = this.templates.has(stored) ? stored : result.default_template_id;
+            const editingTemplate = this.editingTemplateId ? this.templates.get(this.editingTemplateId) : null;
+            if (this.editingTemplateId && (!editingTemplate || editingTemplate.builtin)) {
+                throw new Error('只能编辑自定义模板的详细内容');
+            }
+            this.editingTemplate = editingTemplate || null;
+            const selected = editingTemplate?.base_template || (this.templates.has(stored) ? stored : result.default_template_id);
             select.value = selected;
+            if (editingTemplate) {
+                this.applyTemplateConfig(editingTemplate);
+                this.enterTemplateEditMode(editingTemplate);
+            }
         } catch (error) {
             console.warn('加载包装模板失败:', error);
+            this.element('packaging-save-status').textContent = error.message;
         }
+    }
+
+    enterTemplateEditMode(template) {
+        const heading = document.querySelector('.packaging-page-intro h2');
+        const description = document.querySelector('.packaging-page-intro p');
+        if (heading) heading.textContent = `编辑模板：${template.name}`;
+        if (description) description.textContent = '正在编辑此模板保存的片头、片中、片尾内容、视觉、动效、声音和版式；保存后，所有使用该模板的新任务都会应用更新。';
+        this.element('packaging-save-btn').textContent = '保存模板详细内容';
+        this.element('packaging-save-status').textContent = '模板详细内容已载入';
     }
 
     applyTemplateConfig(template) {
@@ -311,7 +333,28 @@ class CoursePackagingDesigner {
         return options;
     }
 
-    save() {
+    async save() {
+        if (this.editingTemplate) {
+            const button = this.element('packaging-save-btn');
+            button.disabled = true;
+            this.element('packaging-save-status').textContent = '正在保存模板…';
+            try {
+                const response = await fetch(`/api/course-packaging-templates/${encodeURIComponent(this.editingTemplate.id)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_template: this.element('packaging-template').value, config: this.collect() })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '模板保存失败');
+                this.editingTemplate = result.template;
+                this.element('packaging-save-status').textContent = '模板详细内容已保存';
+            } catch (error) {
+                this.element('packaging-save-status').textContent = error.message;
+            } finally {
+                button.disabled = false;
+            }
+            return;
+        }
         try {
             localStorage.setItem(this.storageKey, JSON.stringify({ ...this.storedStrategy(), ...this.collect() }));
             this.element('packaging-save-status').textContent = '已保存，生产工作台将自动应用';

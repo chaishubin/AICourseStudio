@@ -95,7 +95,10 @@ class PackagingTemplateManager {
                 <div class="packaging-template-actions">
                     ${template.is_default ? '' : `<button class="btn-preview" data-template-action="default" data-template-id="${template.id}">设为默认</button>`}
                     <button class="btn-preview" data-template-action="copy" data-template-id="${template.id}">复制</button>
-                    <button class="btn-preview" data-template-action="rename" data-template-id="${template.id}">编辑信息</button>
+                    ${template.builtin
+                        ? `<button class="btn-preview" data-template-action="copy-edit" data-template-id="${template.id}">复制并编辑</button>`
+                        : `<a class="btn-preview" href="/course-packaging?edit_template=${encodeURIComponent(template.id)}">编辑详细内容</a>`}
+                    <button class="btn-preview" data-template-action="rename" data-template-id="${template.id}">编辑基本信息</button>
                     <button class="btn-preview" data-template-action="toggle" data-template-id="${template.id}">${template.enabled ? '停用' : '启用'}</button>
                     ${template.builtin ? '' : `<button class="btn-preview packaging-template-delete" data-template-action="delete" data-template-id="${template.id}">删除</button>`}
                 </div></div></article>`;
@@ -108,6 +111,10 @@ class PackagingTemplateManager {
         try {
             if (action === 'copy') {
                 await this.request('/api/course-packaging-templates', { method: 'POST', body: JSON.stringify({ source_id: id }) });
+            } else if (action === 'copy-edit') {
+                const result = await this.request('/api/course-packaging-templates', { method: 'POST', body: JSON.stringify({ source_id: id }) });
+                window.location.href = `/course-packaging?edit_template=${encodeURIComponent(result.template.id)}`;
+                return;
             } else if (action === 'default') {
                 await this.update(id, { is_default: true });
             } else if (action === 'toggle') {
