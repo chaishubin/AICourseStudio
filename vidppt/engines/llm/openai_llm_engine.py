@@ -60,6 +60,8 @@ class OpenAILLMEngine(LLMEngine):
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": False,
         }
+        if kwargs.get("response_format"):
+            payload["response_format"] = kwargs["response_format"]
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

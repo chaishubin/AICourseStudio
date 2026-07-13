@@ -235,6 +235,8 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
             "packaging_outro_subtitle": "请完成课后练习",
             "packaging_outro_duration_seconds": 6,
             "packaging_accent_color": "#1D4ED8",
+            "packaging_primary_color": "#102A43",
+            "packaging_text_color": "#F8FAFC",
             "packaging_background_style": "gradient",
             "packaging_logo_position": "top-left",
             "packaging_motion_style": "pan",
@@ -245,6 +247,9 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
             "packaging_outro_content_x": 18,
             "packaging_outro_content_y": 36,
             "packaging_outro_content_width": 58,
+            "packaging_intro_logo_position": "custom",
+            "packaging_intro_logo_x": 71.5,
+            "packaging_intro_logo_y": 14,
         },
     )
     assert continue_response.status_code == 200
@@ -274,6 +279,8 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert packaging["outro_subtitle"] == "请完成课后练习"
     assert packaging["outro_duration_seconds"] == 6
     assert packaging["accent_color"] == "#1D4ED8"
+    assert packaging["primary_color"] == "#102A43"
+    assert packaging["text_color"] == "#F8FAFC"
     assert packaging["background_style"] == "gradient"
     assert packaging["logo_position"] == "top-left"
     assert packaging["motion_style"] == "pan"
@@ -284,6 +291,9 @@ def test_preview_can_be_edited_and_continued_once(monkeypatch, temp_dir):
     assert packaging["outro_content_x"] == 18
     assert packaging["outro_content_y"] == 36
     assert packaging["outro_content_width"] == 58
+    assert packaging["intro_logo_position"] == "custom"
+    assert packaging["intro_logo_x"] == 71.5
+    assert packaging["intro_logo_y"] == 14
     assert isinstance(web_app.progress_queues[task_id], Queue)
     assert enqueued[0][0] == (web_app.run_media_generation, task_id)
 
@@ -390,6 +400,7 @@ def test_course_review_runs_and_persists_result(monkeypatch, temp_dir):
             return {
                 "status": "warning",
                 "mode": mode,
+                "provider": "deepseek",
                 "model": "fake-model",
                 "summary": "需要优化承接",
                 "findings": [{
@@ -398,6 +409,7 @@ def test_course_review_runs_and_persists_result(monkeypatch, temp_dir):
                     "category": "衔接",
                     "message": "转场略硬",
                     "suggestion": "增加承上启下句",
+                    "replacement_script": "下面我们进入总结环节。第二页讲稿",
                 }],
                 "reviewed_pages": [1, 2],
                 "estimated_cost_cny": 0.01,
@@ -419,6 +431,8 @@ def test_course_review_runs_and_persists_result(monkeypatch, temp_dir):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["ai_review"]["status"] == "warning"
+    assert payload["ai_review"]["provider"] == "deepseek"
+    assert payload["ai_review"]["findings"][0]["replacement_script"].startswith("下面")
     saved = json.loads(preview_path.read_text(encoding="utf-8"))
     assert saved["ai_review"]["findings"][0]["page_number"] == 2
 
@@ -1239,7 +1253,8 @@ def test_index_contains_editable_course_preview():
     assert 'id="refinement-level"' in html
     assert 'id="quality-mode"' in html
     assert 'id="ai-review-panel"' in html
-    assert 'ChatGPT 抽检' in html
+    assert 'id="ai-review-fix-all-btn"' in html
+    assert 'AI 抽检' in html
     assert 'id="custom-voice"' in html
     assert 'id="ppt-footer-text"' in html
     assert 'id="visual-theme"' in html
@@ -1408,7 +1423,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=37' in html
+    assert '/static/js/main.js?v=38' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -1426,7 +1441,13 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-mid-tab"' in html
     assert 'id="packaging-outro-tab"' in html
     assert 'id="packaging-intro-panel"' in html
-    assert 'data-packaging-select="packaging-intro-background-style"' in html
+    assert 'data-packaging-presets="intro"' in html
+    assert 'data-packaging-source="intro"' in html
+    assert 'id="packaging-intro-primary-color"' in html
+    assert 'id="packaging-intro-text-color"' in html
+    assert 'data-packaging-logo="intro"' in html
+    assert 'id="packaging-intro-logo-x"' in html
+    assert 'id="packaging-save-scope"' in html
     assert 'data-packaging-select="packaging-outro-motion-style"' in html
     assert 'id="packaging-copy-intro-style"' in html
     assert 'id="packaging-show-safe-area"' in html
@@ -1445,7 +1466,7 @@ def test_course_packaging_has_a_separate_design_page():
     assert 'id="packaging-copyright"' in html
     assert 'id="packaging-transition-seconds"' in html
     assert 'id="upload-area"' not in html
-    assert '/static/js/course_packaging.js?v=12' in html
+    assert '/static/js/course_packaging.js?v=13' in html
 
 
 def test_packaging_template_management_crud_and_render_resolution():

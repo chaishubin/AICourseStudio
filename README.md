@@ -54,6 +54,11 @@ export OPENAI_API_KEY='你的 OpenAI API Key'
 export VOLCENGINE_TTS_APPID='你的火山 AppID'
 export VOLCENGINE_TTS_ACCESS_TOKEN='你的火山 Access Token'
 
+# 可选：把预览阶段的 AI 全课质检单独切换到 DeepSeek
+export COURSE_REVIEW_PROVIDER='deepseek'
+export DEEPSEEK_API_KEY='你的 DeepSeek API Key'
+export DEEPSEEK_REVIEW_MODEL='deepseek-v4-pro'
+
 # 输出 course.json、可编辑 PPTX、SRT 和内嵌字幕的 MP4
 ai-course-studio lesson.docx --llm \
   --llm-engine qwen \
@@ -64,6 +69,11 @@ ai-course-studio lesson.docx --llm \
 # 只生成离线草稿 Course JSON 和 PPTX，不调用 LLM/TTS
 ai-course-studio lesson.docx --no-tts --no-video -o outputs/draft
 ```
+
+`COURSE_REVIEW_PROVIDER` 支持 `openai`（默认）和 `deepseek`。该配置只影响
+确认课程草稿阶段的 AI 抽检/全课二审，不改变课程生成所选的 LLM。使用私有
+兼容网关时还可设置 `DEEPSEEK_API_URL`，默认值为 `https://api.deepseek.com`。
+默认质检模型为 `deepseek-v4-pro`；优先控制成本时可改为 `deepseek-v4-flash`。
 
 路线 A 的主要产物：
 

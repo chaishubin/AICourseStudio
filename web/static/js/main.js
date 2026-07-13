@@ -213,6 +213,7 @@ class AICourseStudioApp {
                 aiReviewFindings: document.getElementById('ai-review-findings'),
                 aiReviewSampleBtn: document.getElementById('ai-review-sample-btn'),
                 aiReviewFullBtn: document.getElementById('ai-review-full-btn'),
+                aiReviewFixAllBtn: document.getElementById('ai-review-fix-all-btn'),
                 cutDurationMinutes: document.getElementById('cut-duration-minutes'),
                 smartCutRecommendBtn: document.getElementById('smart-cut-recommend-btn'),
                 smartCutApplyBtn: document.getElementById('smart-cut-apply-btn'),
@@ -1007,6 +1008,9 @@ class AICourseStudioApp {
         );
         this.elements.aiReviewFullBtn.addEventListener(
             'click', () => this.runCourseReview('full')
+        );
+        this.elements.aiReviewFixAllBtn.addEventListener(
+            'click', () => this.applyCourseReviewFixes()
         );
         this.elements.smartCutRecommendBtn.addEventListener(
             'click', () => this.recommendSmartCuts()
@@ -3599,10 +3603,11 @@ class AICourseStudioApp {
         };
         const status = review?.status || (qualityMode === 'economy' ? 'passed' : 'pending');
         this.elements.aiReviewPanel.dataset.status = status;
+        this.elements.aiReviewFixAllBtn.hidden = true;
         if (!review) {
             this.elements.aiReviewSummary.textContent = qualityMode === 'economy'
-                ? '经济模式不自动调用 ChatGPT 审查，可手动抽检或二审'
-                : '等待 ChatGPT 审查结果，也可手动重新发起审查';
+                ? '经济模式不自动调用 AI 质检，可手动抽检或二审'
+                : '等待 AI 质检结果，也可手动重新发起质检';
             this.elements.aiReviewMeta.textContent =
                 `${modeLabels[qualityMode] || '均衡模式'} · ${statusLabels[status]}`;
             this.elements.aiReviewFindings.innerHTML = '';
@@ -3613,37 +3618,95 @@ class AICourseStudioApp {
             ? `已审查 ${review.reviewed_pages.join('、')} 页`
             : '';
         const cost = Number(review.estimated_cost_cny || 0);
+        const providerLabel = review.provider === 'deepseek'
+            ? 'DeepSeek'
+            : (review.provider === 'openai' ? 'OpenAI' : '');
         this.elements.aiReviewSummary.textContent =
             review.summary || statusLabels[status] || '审查完成';
         this.elements.aiReviewMeta.textContent = [
             reviewMode,
             statusLabels[status] || status,
+            providerLabel,
             review.model ? `模型 ${review.model}` : '',
             cost ? `约 ${cost.toFixed(4)} 元` : '',
             pages
         ].filter(Boolean).join(' · ');
         const findings = Array.isArray(review.findings) ? review.findings : [];
+        const fixableFindings = findings.filter(item =>
+            Number(item.page_number) > 0 && String(item.replacement_script || '').trim()
+        );
+        this.elements.aiReviewFixAllBtn.hidden = fixableFindings.length === 0;
         if (!findings.length) {
             this.elements.aiReviewFindings.innerHTML =
                 '<div class="ai-review-empty">暂无具体问题</div>';
             return;
         }
-        this.elements.aiReviewFindings.innerHTML = findings.map(item => `
-            <button type="button" class="ai-review-finding ${this._escAttr(item.level || 'info')}"
-                    data-page-number="${Number(item.page_number) || 0}">
-                <span>第 ${Number(item.page_number) || '-'} 页 · ${this._esc(item.category || '内容质量')}</span>
-                <strong>${this._esc(item.message || '')}</strong>
-                ${item.suggestion ? `<small>${this._esc(item.suggestion)}</small>` : ''}
-            </button>
+        this.elements.aiReviewFindings.innerHTML = findings.map((item, index) => `
+            <div class="ai-review-finding ${this._escAttr(item.level || 'info')}"
+                 data-page-number="${Number(item.page_number) || 0}">
+                <button type="button" class="ai-review-finding-detail">
+                    <span>第 ${Number(item.page_number) || '-'} 页 · ${this._esc(item.category || '内容质量')}</span>
+                    <strong>${this._esc(item.message || '')}</strong>
+                    ${item.suggestion ? `<small>${this._esc(item.suggestion)}</small>` : ''}
+                </button>
+                ${item.replacement_script ? `
+                    <button type="button" class="ai-review-apply-fix" data-finding-index="${index}">
+                        一键修复本页
+                    </button>
+                ` : ''}
+            </div>
         `).join('');
         this.elements.aiReviewFindings
-            .querySelectorAll('.ai-review-finding')
+            .querySelectorAll('.ai-review-finding-detail')
             .forEach(button => {
                 button.addEventListener('click', () => {
-                    const pageNumber = Number(button.dataset.pageNumber);
+                    const pageNumber = Number(button.closest('.ai-review-finding')?.dataset.pageNumber);
                     if (pageNumber) this.goToPreviewPage(pageNumber, { focusEditor: true });
                 });
             });
+        this.elements.aiReviewFindings
+            .querySelectorAll('.ai-review-apply-fix')
+            .forEach(button => {
+                button.addEventListener('click', () => {
+                    const item = findings[Number(button.dataset.findingIndex)];
+                    this.applyCourseReviewFixes(item ? [item] : []);
+                });
+            });
+    }
+
+    async applyCourseReviewFixes(findings = null) {
+        const source = Array.isArray(findings)
+            ? findings
+            : (Array.isArray(this.currentAIReview?.findings) ? this.currentAIReview.findings : []);
+        const fixesByPage = new Map();
+        source.forEach(item => {
+            const pageNumber = Number(item.page_number);
+            const replacement = String(item.replacement_script || '').trim();
+            if (pageNumber > 0 && replacement) fixesByPage.set(pageNumber, replacement);
+        });
+        if (!fixesByPage.size) {
+            this.showStatus('error', '当前质检结果没有可直接应用的修复讲稿');
+            return;
+        }
+        let applied = 0;
+        fixesByPage.forEach((replacement, pageNumber) => {
+            const card = this.previewCardByPage(pageNumber);
+            const textarea = card?.querySelector('.course-preview-script');
+            if (!textarea || textarea.value.trim() === replacement) return;
+            textarea.value = replacement;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            applied += 1;
+        });
+        if (!applied) {
+            this.showStatus('success', '建议讲稿已经应用');
+            return;
+        }
+        clearTimeout(this.previewAutoSaveTimer);
+        const saved = await this.savePreviewScripts({ automatic: true });
+        if (saved) {
+            this.markCourseReviewStale();
+            this.showStatus('success', `已修复并保存 ${applied} 页讲稿，请重新运行全课质检`);
+        }
     }
 
     async runCourseReview(mode) {
@@ -3657,7 +3720,7 @@ class AICourseStudioApp {
         button.disabled = true;
         button.textContent = mode === 'full' ? '二审中…' : '抽检中…';
         this.elements.aiReviewSummary.textContent =
-            mode === 'full' ? 'ChatGPT 正在进行全课二审…' : 'ChatGPT 正在抽检课程讲稿…';
+            mode === 'full' ? 'AI 正在进行全课二审…' : 'AI 正在抽检课程讲稿…';
         try {
             const response = await fetch(`/api/course-review/${taskId}`, {
                 method: 'POST',

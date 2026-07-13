@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=23">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=24">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -371,9 +371,9 @@
                             </select>
                             <label for="quality-mode">质量模式</label>
                             <select id="quality-mode" class="select-input">
-                                <option value="economy">经济：国内模型生成，不调用 ChatGPT 审查</option>
-                                <option value="balanced" selected>均衡：国内模型生成，ChatGPT 抽检</option>
-                                <option value="premium">精品：国内模型生成，ChatGPT 全课二审</option>
+                                <option value="economy">经济：国内模型生成，不调用 AI 质检</option>
+                                <option value="balanced" selected>均衡：国内模型生成，AI 抽检</option>
+                                <option value="premium">精品：国内模型生成，AI 全课二审</option>
                             </select>
                             <label for="visual-theme">PPT 视觉方案</label>
                             <select id="visual-theme" class="select-input">
@@ -487,12 +487,13 @@
                     <div class="ai-review-panel" id="ai-review-panel">
                         <div class="ai-review-header">
                             <div>
-                                <h4>AI 审查</h4>
+                                <h4>AI 全课质检</h4>
                                 <span id="ai-review-summary">等待审查结果</span>
                             </div>
                             <div class="ai-review-actions">
-                                <button type="button" class="btn-secondary" id="ai-review-sample-btn">ChatGPT 抽检</button>
+                                <button type="button" class="btn-secondary" id="ai-review-sample-btn">AI 抽检</button>
                                 <button type="button" class="btn-secondary" id="ai-review-full-btn">全课二审</button>
+                                <button type="button" class="btn-primary" id="ai-review-fix-all-btn" hidden>一键修复全部</button>
                             </div>
                         </div>
                         <div class="ai-review-meta" id="ai-review-meta"></div>
@@ -753,7 +754,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=37"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=38"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

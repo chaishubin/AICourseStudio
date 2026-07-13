@@ -1116,12 +1116,14 @@ def _course_packaging_options(data: dict) -> dict:
             'outro_title': str(data.get('packaging_outro_title', '')).strip()[:80],
             'outro_subtitle': str(data.get('packaging_outro_subtitle', '')).strip()[:100],
             'accent_color': _packaging_color(data.get('packaging_accent_color'), '#D6A239'),
+            'primary_color': _packaging_color(data.get('packaging_primary_color'), ''),
+            'text_color': _packaging_color(data.get('packaging_text_color'), ''),
             'background_style': _packaging_choice(
                 data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'
             ),
             'logo_position': _packaging_choice(
                 data.get('packaging_logo_position'),
-                {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'},
+                {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'custom', 'none'},
                 'top-right',
             ),
             'intro_content_x': _packaging_percent(data.get('packaging_intro_content_x'), 9.5),
@@ -1142,12 +1144,24 @@ def _course_packaging_options(data: dict) -> dict:
             'intro_accent_color': _packaging_color(data.get('packaging_intro_accent_color') or data.get('packaging_accent_color'), '#D6A239'),
             'mid_accent_color': _packaging_color(data.get('packaging_mid_accent_color') or data.get('packaging_accent_color'), '#D6A239'),
             'outro_accent_color': _packaging_color(data.get('packaging_outro_accent_color') or data.get('packaging_accent_color'), '#D6A239'),
+            'intro_primary_color': _packaging_color(data.get('packaging_intro_primary_color') or data.get('packaging_primary_color'), ''),
+            'mid_primary_color': _packaging_color(data.get('packaging_mid_primary_color') or data.get('packaging_primary_color'), ''),
+            'outro_primary_color': _packaging_color(data.get('packaging_outro_primary_color') or data.get('packaging_primary_color'), ''),
+            'intro_text_color': _packaging_color(data.get('packaging_intro_text_color') or data.get('packaging_text_color'), ''),
+            'mid_text_color': _packaging_color(data.get('packaging_mid_text_color') or data.get('packaging_text_color'), ''),
+            'outro_text_color': _packaging_color(data.get('packaging_outro_text_color') or data.get('packaging_text_color'), ''),
             'intro_background_style': _packaging_choice(data.get('packaging_intro_background_style') or data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'),
             'mid_background_style': _packaging_choice(data.get('packaging_mid_background_style') or data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'),
             'outro_background_style': _packaging_choice(data.get('packaging_outro_background_style') or data.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'ppt'),
-            'intro_logo_position': _packaging_choice(data.get('packaging_intro_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, 'top-right'),
-            'mid_logo_position': _packaging_choice(data.get('packaging_mid_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, 'top-right'),
-            'outro_logo_position': _packaging_choice(data.get('packaging_outro_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, 'top-right'),
+            'intro_logo_position': _packaging_choice(data.get('packaging_intro_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'custom', 'none'}, 'top-right'),
+            'mid_logo_position': _packaging_choice(data.get('packaging_mid_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'custom', 'none'}, 'top-right'),
+            'outro_logo_position': _packaging_choice(data.get('packaging_outro_logo_position') or data.get('packaging_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'custom', 'none'}, 'top-right'),
+            'intro_logo_x': _packaging_percent(data.get('packaging_intro_logo_x'), 75.5),
+            'intro_logo_y': _packaging_percent(data.get('packaging_intro_logo_y'), 10.0),
+            'mid_logo_x': _packaging_percent(data.get('packaging_mid_logo_x'), 75.5),
+            'mid_logo_y': _packaging_percent(data.get('packaging_mid_logo_y'), 10.0),
+            'outro_logo_x': _packaging_percent(data.get('packaging_outro_logo_x'), 75.5),
+            'outro_logo_y': _packaging_percent(data.get('packaging_outro_logo_y'), 10.0),
             'intro_motion_style': _packaging_choice(data.get('packaging_intro_motion_style') or data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'),
             'mid_motion_style': _packaging_choice(data.get('packaging_mid_motion_style') or data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'),
             'outro_motion_style': _packaging_choice(data.get('packaging_outro_motion_style') or data.get('packaging_motion_style'), {'zoom', 'pan', 'none'}, 'zoom'),
@@ -2560,19 +2574,27 @@ def _run_course_review(task_id: str, mode: str) -> dict:
     task = tasks.get(task_id)
     if task:
         task['ai_review'] = review
+        provider_label = 'DeepSeek' if review.get('provider') == 'deepseek' else 'ChatGPT'
         task['message'] = (
-            'ChatGPT 全课二审完成'
-            if mode == 'full' else 'ChatGPT 抽检完成'
+            f'{provider_label} 全课二审完成'
+            if mode == 'full' else f'{provider_label} 抽检完成'
         )
         save_state(task_id)
     return review
 
 
 def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dict:
+    provider = str(os.getenv('COURSE_REVIEW_PROVIDER') or 'openai').strip().lower()
+    model = (
+        os.getenv('DEEPSEEK_REVIEW_MODEL') or 'deepseek-v4-pro'
+        if provider == 'deepseek'
+        else os.getenv('OPENAI_REVIEW_MODEL') or os.getenv('OPENAI_LLM_MODEL') or 'openai'
+    )
     review = {
         'status': 'failed',
         'mode': mode,
-        'model': os.getenv('OPENAI_REVIEW_MODEL') or os.getenv('OPENAI_LLM_MODEL') or 'openai',
+        'provider': provider,
+        'model': model,
         'summary': f'AI 审查未完成: {error}',
         'findings': [],
         'reviewed_pages': [],
@@ -3549,7 +3571,7 @@ def get_course_preview(task_id):
 
 @app.route('/api/course-review/<task_id>', methods=['GET', 'POST'])
 def course_review(task_id):
-    """读取或运行预览阶段的 ChatGPT 质量审查。"""
+    """读取或运行预览阶段的 AI 质量审查。"""
     task, error = require_task_access(task_id, manage=request.method == 'POST')
     if error:
         return error
@@ -4977,12 +4999,14 @@ def course_packaging_preview_image():
         'outro_title': str(args.get('packaging_outro_title', '')).strip()[:80],
         'outro_subtitle': str(args.get('packaging_outro_subtitle', '')).strip()[:100],
         'accent_color': _packaging_color(args.get('packaging_accent_color'), '#D6A239'),
+        'primary_color': _packaging_color(args.get('packaging_primary_color'), ''),
+        'text_color': _packaging_color(args.get('packaging_text_color'), ''),
         'background_style': _packaging_choice(
             args.get('packaging_background_style'), {'ppt', 'solid', 'gradient', 'light'}, 'solid'
         ),
         'logo_position': _packaging_choice(
             args.get('packaging_logo_position'),
-            {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'},
+            {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'custom', 'none'},
             'top-right',
         ),
         'intro_content_x': _packaging_percent(args.get('packaging_intro_content_x'), 9.5),
@@ -4998,8 +5022,12 @@ def course_packaging_preview_image():
     }
     options.update({
         f'{kind}_accent_color': _packaging_color(args.get(f'packaging_{kind}_accent_color'), options['accent_color']),
+        f'{kind}_primary_color': _packaging_color(args.get(f'packaging_{kind}_primary_color'), options['primary_color']),
+        f'{kind}_text_color': _packaging_color(args.get(f'packaging_{kind}_text_color'), options['text_color']),
         f'{kind}_background_style': _packaging_choice(args.get(f'packaging_{kind}_background_style'), {'ppt', 'solid', 'gradient', 'light'}, options['background_style']),
-        f'{kind}_logo_position': _packaging_choice(args.get(f'packaging_{kind}_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'none'}, options['logo_position']),
+        f'{kind}_logo_position': _packaging_choice(args.get(f'packaging_{kind}_logo_position'), {'top-right', 'top-left', 'bottom-right', 'bottom-left', 'custom', 'none'}, options['logo_position']),
+        f'{kind}_logo_x': _packaging_percent(args.get(f'packaging_{kind}_logo_x'), 75.5),
+        f'{kind}_logo_y': _packaging_percent(args.get(f'packaging_{kind}_logo_y'), 10.0),
     })
     background_path = None
     try:

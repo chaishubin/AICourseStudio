@@ -878,8 +878,19 @@ def _base_background(
 def _palette(options: dict) -> dict:
     palette = dict(TEMPLATES.get(options.get("template"), TEMPLATES["academic"]))
     accent = str(options.get("accent_color") or "").strip()
+    primary = str(options.get("primary_color") or "").strip()
+    text = str(options.get("text_color") or "").strip()
     if _is_hex_color(accent):
         palette["accent"] = accent
+    if _is_hex_color(primary):
+        palette["background"] = primary
+        palette["panel"] = primary
+    if _is_hex_color(text):
+        palette["text"] = text
+        muted_rgb = _blend_hex_colors(
+            primary if _is_hex_color(primary) else palette["background"], text, 0.72
+        )
+        palette["muted"] = "#" + "".join(f"{channel:02X}" for channel in muted_rgb)
     return palette
 
 
@@ -916,8 +927,8 @@ def _side_options(options: dict, kind: str) -> dict:
     """将片头或片尾的独立设置映射到现有渲染字段。"""
     resolved = dict(options)
     for name in (
-        "background_path", "music_path", "accent_color", "background_style",
-        "logo_position", "motion_style", "music_style", "use_slide_background",
+        "background_path", "music_path", "accent_color", "primary_color", "text_color",
+        "background_style", "logo_position", "logo_x", "logo_y", "motion_style", "music_style", "use_slide_background",
         "enable_motion", "enable_music",
     ):
         specific = options.get(f"{kind}_{name}")
@@ -1095,11 +1106,20 @@ def _paste_logo(image: Image.Image, logo_path: Path, config: ProcessConfig, opti
     logo.thumbnail((max_width, max_height))
     margin_x = round(config.video_width * 0.065)
     margin_y = round(config.video_height * 0.10)
-    if position.endswith("left"):
+    if position == "custom":
+        try:
+            x = round(config.video_width * max(0.0, min(82.0, float(options.get("logo_x", 75.5)))) / 100)
+            y = round(config.video_height * max(0.0, min(84.0, float(options.get("logo_y", 10.0)))) / 100)
+        except (TypeError, ValueError):
+            x = config.video_width - margin_x - logo.width
+            y = margin_y
+    elif position.endswith("left"):
         x = margin_x
     else:
         x = config.video_width - margin_x - logo.width
-    if position.startswith("bottom"):
+    if position == "custom":
+        pass
+    elif position.startswith("bottom"):
         y = config.video_height - margin_y - logo.height
     else:
         y = margin_y

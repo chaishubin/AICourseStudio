@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any
 
+from ..engines.llm.deepseek_llm_engine import DeepSeekLLMEngine
 from ..engines.llm.openai_llm_engine import OpenAILLMEngine
 
 
@@ -19,17 +20,36 @@ class CourseReviewer:
         "gpt-5.4-mini": {"input": 0.375, "output": 2.25},
         "gpt-5.5": {"input": 2.50, "output": 15.00},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "deepseek-v4-flash": {"input": 0.14, "output": 0.28},
+        "deepseek-v4-pro": {"input": 0.435, "output": 0.87},
     }
     USD_TO_CNY = 7.2
 
-    def __init__(self, model: str | None = None, engine: Any | None = None):
-        self.model = (
-            model
-            or os.getenv("OPENAI_REVIEW_MODEL")
-            or os.getenv("OPENAI_LLM_MODEL")
-            or OpenAILLMEngine.DEFAULT_MODEL
-        )
-        self.engine = engine or OpenAILLMEngine(model=self.model)
+    def __init__(
+        self,
+        model: str | None = None,
+        engine: Any | None = None,
+        provider: str | None = None,
+    ):
+        self.provider = str(
+            provider or os.getenv("COURSE_REVIEW_PROVIDER") or "openai"
+        ).strip().lower()
+        if self.provider not in {"openai", "deepseek"}:
+            raise ValueError("COURSE_REVIEW_PROVIDER 只能是 openai 或 deepseek")
+        if self.provider == "deepseek":
+            self.model = (
+                model or os.getenv("DEEPSEEK_REVIEW_MODEL")
+                or DeepSeekLLMEngine.DEFAULT_MODEL
+            )
+            self.engine = engine or DeepSeekLLMEngine(model=self.model)
+        else:
+            self.model = (
+                model
+                or os.getenv("OPENAI_REVIEW_MODEL")
+                or os.getenv("OPENAI_LLM_MODEL")
+                or OpenAILLMEngine.DEFAULT_MODEL
+            )
+            self.engine = engine or OpenAILLMEngine(model=self.model)
 
     def review(self, preview: dict, mode: str = "sample") -> dict:
         if mode not in {"sample", "full"}:
@@ -40,10 +60,15 @@ class CourseReviewer:
             raise ValueError("没有可审查的讲稿页面")
 
         prompt = self._build_prompt(pages, mode)
-        raw = self.engine.summarize(prompt, system_prompt=self._system_prompt(mode))
+        raw = self.engine.summarize(
+            prompt,
+            system_prompt=self._system_prompt(mode),
+            response_format={"type": "json_object"},
+        )
         parsed = self._parse_json(raw)
         review = self._normalize_review(parsed, pages, mode)
         review["model"] = self.model
+        review["provider"] = self.provider
         review["estimated_cost_cny"] = self.estimate_cost_cny(prompt, raw)
         review["created_at"] = time.time()
         return review
@@ -115,7 +140,9 @@ class CourseReviewer:
                 "检查课程结构是否连贯，是否有明显重复或断裂。",
                 "检查讲稿是否自然口语化，适合 TTS 配音。",
                 "检查每页讲稿是否过长、过短或缺少承上启下。",
-                "只给审查建议，不要重写整套讲稿。",
+                "每页最多返回一条综合问题，避免同一页的修复建议互相覆盖。",
+                "发现可修复问题时给出 replacement_script，内容必须是可直接替换该页的完整讲稿。",
+                "replacement_script 要保留原知识事实，只修复已指出的问题；无需修复时返回空字符串。",
             ],
             "pages": [
                 {
@@ -137,7 +164,7 @@ class CourseReviewer:
             "请只输出一个 JSON 对象，不要 Markdown，不要解释。"
             "JSON 字段必须包含 status、summary、findings。"
             "status 只能是 passed、warning、failed。"
-            "findings 是数组，每项包含 page_number、level、category、message、suggestion；"
+            "findings 是数组，每项包含 page_number、level、category、message、suggestion、replacement_script；"
             "level 只能是 info、warning、critical。"
         )
 
@@ -181,6 +208,9 @@ class CourseReviewer:
                 "category": str(item.get("category") or "内容质量")[:40],
                 "message": str(item.get("message") or "").strip()[:400],
                 "suggestion": str(item.get("suggestion") or "").strip()[:400],
+                "replacement_script": str(
+                    item.get("replacement_script") or ""
+                ).strip()[:12000],
             })
         return {
             "status": status,

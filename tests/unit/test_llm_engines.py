@@ -263,6 +263,19 @@ class TestOpenAICallApi:
             assert call_kwargs["json"]["max_tokens"] == 1024
             assert "Bearer test-key" in call_kwargs["headers"]["Authorization"]
 
+    def test_call_api_forwards_json_response_format(self):
+        engine = OpenAILLMEngine(api_key="test-key")
+        mock_httpx, mock_client, _ = self._make_mock_httpx()
+
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            engine._call_api(
+                [{"role": "user", "content": "返回 JSON"}],
+                response_format={"type": "json_object"},
+            )
+
+        payload = mock_client.post.call_args[1]["json"]
+        assert payload["response_format"] == {"type": "json_object"}
+
     def _make_mock_httpx(self):
         """创建 mock httpx 模块，异常类继承 BaseException"""
         mock_response = MagicMock()

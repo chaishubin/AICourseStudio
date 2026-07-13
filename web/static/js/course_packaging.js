@@ -9,6 +9,11 @@ class CoursePackagingDesigner {
             mid: { x: 9.5, y: 34, width: 70 },
             outro: { x: 9.5, y: 34, width: 70 }
         };
+        this.logoLayout = {
+            intro: { x: 75.5, y: 10 },
+            mid: { x: 75.5, y: 10 },
+            outro: { x: 75.5, y: 10 }
+        };
         this.assets = {
             intro_background: null,
             mid_background: null,
@@ -45,12 +50,30 @@ class CoursePackagingDesigner {
             packaging_intro_accent_color: 'packaging-intro-accent-color',
             packaging_mid_accent_color: 'packaging-mid-accent-color',
             packaging_outro_accent_color: 'packaging-outro-accent-color',
+            packaging_intro_primary_color: 'packaging-intro-primary-color',
+            packaging_mid_primary_color: 'packaging-mid-primary-color',
+            packaging_outro_primary_color: 'packaging-outro-primary-color',
+            packaging_intro_text_color: 'packaging-intro-text-color',
+            packaging_mid_text_color: 'packaging-mid-text-color',
+            packaging_outro_text_color: 'packaging-outro-text-color',
+            packaging_intro_visual_preset: 'packaging-intro-visual-preset',
+            packaging_mid_visual_preset: 'packaging-mid-visual-preset',
+            packaging_outro_visual_preset: 'packaging-outro-visual-preset',
+            packaging_intro_background_source: 'packaging-intro-background-source',
+            packaging_mid_background_source: 'packaging-mid-background-source',
+            packaging_outro_background_source: 'packaging-outro-background-source',
             packaging_intro_background_style: 'packaging-intro-background-style',
             packaging_mid_background_style: 'packaging-mid-background-style',
             packaging_outro_background_style: 'packaging-outro-background-style',
             packaging_intro_logo_position: 'packaging-intro-logo-position',
             packaging_mid_logo_position: 'packaging-mid-logo-position',
             packaging_outro_logo_position: 'packaging-outro-logo-position',
+            packaging_intro_logo_x: 'packaging-intro-logo-x',
+            packaging_intro_logo_y: 'packaging-intro-logo-y',
+            packaging_mid_logo_x: 'packaging-mid-logo-x',
+            packaging_mid_logo_y: 'packaging-mid-logo-y',
+            packaging_outro_logo_x: 'packaging-outro-logo-x',
+            packaging_outro_logo_y: 'packaging-outro-logo-y',
             packaging_intro_motion_style: 'packaging-intro-motion-style',
             packaging_mid_motion_style: 'packaging-mid-motion-style',
             packaging_outro_motion_style: 'packaging-outro-motion-style',
@@ -104,6 +127,10 @@ class CoursePackagingDesigner {
                 const value = Number(strategy[`packaging_${kind}_content_${name}`]);
                 if (Number.isFinite(value)) this.layout[kind][name] = value;
             });
+            ['x', 'y'].forEach(name => {
+                const value = Number(strategy[`packaging_${kind}_logo_${name}`]);
+                if (Number.isFinite(value)) this.logoLayout[kind][name] = value;
+            });
         });
         ['intro', 'mid', 'outro'].forEach(side => {
             this.assets[`${side}_background`] = strategy[`packaging_${side}_background_path`] || strategy.packaging_background_path || null;
@@ -127,7 +154,7 @@ class CoursePackagingDesigner {
         this.element('packaging-show-safe-area').addEventListener('change', event => {
             document.querySelector('.packaging-preview-panel').classList.toggle('show-safe-area', event.target.checked);
         });
-        this.element('packaging-copy-intro-style').addEventListener('click', () => this.copyIntroStyle());
+        this.element('packaging-copy-intro-style').addEventListener('click', () => this.copyCurrentStyle());
         this.element('packaging-template').addEventListener('change', event => {
             const template = this.templates.get(event.target.value);
             if (template && !template.builtin) this.applyTemplateConfig(template);
@@ -145,9 +172,36 @@ class CoursePackagingDesigner {
                 });
             });
         });
+        document.querySelectorAll('[data-packaging-presets]').forEach(group => {
+            group.querySelectorAll('[data-preset]').forEach(button => {
+                button.addEventListener('click', () => this.applyVisualPreset(group.dataset.packagingPresets, button));
+            });
+        });
+        document.querySelectorAll('[data-packaging-source]').forEach(group => {
+            group.querySelectorAll('[data-value]').forEach(button => {
+                button.addEventListener('click', () => {
+                    this.setBackgroundSource(group.dataset.packagingSource, button.dataset.value);
+                    this.refreshPreview(group.dataset.packagingSource);
+                });
+            });
+        });
+        document.querySelectorAll('[data-packaging-palettes]').forEach(group => {
+            group.querySelectorAll('button').forEach(button => {
+                button.addEventListener('click', () => this.applyPalette(group.dataset.packagingPalettes, button.dataset));
+            });
+        });
+        document.querySelectorAll('[data-logo-position-grid]').forEach(group => {
+            group.querySelectorAll('[data-value]').forEach(button => {
+                button.addEventListener('click', () => this.setLogoPosition(group.dataset.logoPositionGrid, button.dataset.value));
+            });
+        });
         document.querySelectorAll('.packaging-manager-page input, .packaging-manager-page select').forEach(control => {
             if (control.type !== 'file') control.addEventListener('change', () => {
                 this.markDirty();
+                if (/-(primary|accent|text)-color$/.test(control.id)) {
+                    const side = control.id.split('-')[1];
+                    this.element(`packaging-${side}-visual-preset`).value = 'custom';
+                }
                 this.syncDesignerState();
             });
         });
@@ -171,12 +225,14 @@ class CoursePackagingDesigner {
             });
             this.element(`packaging-${side}-video-library`).addEventListener('change', event => {
                 this.assets[`${side}_video`] = event.target.value || null;
+                if (this.assets[`${side}_video`]) this.setBackgroundSource(side, 'video');
                 this.syncAssets();
                 this.markDirty();
                 this.refreshPreview();
             });
         });
         this.bindLayoutEditor();
+        this.bindLogoEditor();
     }
 
     async loadTemplates() {
@@ -222,6 +278,7 @@ class CoursePackagingDesigner {
         if (heading) heading.textContent = `编辑模板：${template.name}`;
         if (description) description.textContent = '正在编辑此模板保存的片头、片中、片尾内容、视觉、动效、声音和版式；保存后，所有使用该模板的新任务都会应用更新。';
         this.element('packaging-save-btn').textContent = '保存模板详细内容';
+        this.element('packaging-save-scope').textContent = '保存范围：共享模板（影响后续使用）';
         this.element('packaging-save-status').textContent = '模板详细内容已载入';
     }
 
@@ -240,10 +297,20 @@ class CoursePackagingDesigner {
                 const value = Number(config[`packaging_${side}_content_${name}`]);
                 if (Number.isFinite(value)) this.layout[side][name] = value;
             });
+            ['x', 'y'].forEach(name => {
+                const value = Number(config[`packaging_${side}_logo_${name}`]);
+                if (Number.isFinite(value)) this.logoLayout[side][name] = value;
+            });
             ['background', 'music', 'video'].forEach(media => {
                 const key = `packaging_${side}_${media}_path`;
                 if (config[key] !== undefined) this.assets[`${side}_${media}`] = config[key] || null;
             });
+            if (!config[`packaging_${side}_background_source`]) {
+                const inferred = this.assets[`${side}_video`] ? 'video'
+                    : this.assets[`${side}_background`] ? 'image'
+                        : config[`packaging_${side}_background_style`] === 'ppt' ? 'ppt' : 'theme';
+                this.element(`packaging-${side}-background-source`).value = inferred;
+            }
         });
         this.syncLayoutBoxes();
         this.syncAssets();
@@ -285,9 +352,26 @@ class CoursePackagingDesigner {
             const enabled = this.element(`enable-${side}`)?.checked;
             const tab = this.element(`packaging-${side}-tab`);
             tab?.classList.toggle('is-disabled', !enabled);
-            const color = this.element(`packaging-${side}-accent-color`);
-            const colorLabel = document.querySelector(`[data-packaging-color-label="${side}"]`);
-            if (color && colorLabel) colorLabel.textContent = color.value.toUpperCase();
+            ['primary', 'accent', 'text'].forEach(name => {
+                const color = this.element(`packaging-${side}-${name}-color`);
+                const colorLabel = document.querySelector(`[data-packaging-color-label="${side}-${name}"]`);
+                if (color && colorLabel) colorLabel.textContent = color.value.toUpperCase();
+            });
+            const preset = this.element(`packaging-${side}-visual-preset`)?.value;
+            document.querySelectorAll(`[data-packaging-presets="${side}"] [data-preset]`).forEach(button => {
+                button.classList.toggle('is-active', button.dataset.preset === preset);
+            });
+            const source = this.element(`packaging-${side}-background-source`)?.value || 'ppt';
+            document.querySelectorAll(`[data-packaging-source="${side}"] [data-value]`).forEach(button => {
+                button.classList.toggle('is-active', button.dataset.value === source);
+            });
+            document.querySelectorAll(`#packaging-${side}-panel [data-background-source-panel]`).forEach(panel => {
+                panel.hidden = panel.dataset.backgroundSourcePanel !== source;
+            });
+            const logoPosition = this.element(`packaging-${side}-logo-position`)?.value;
+            document.querySelectorAll(`[data-logo-position-grid="${side}"] [data-value]`).forEach(button => {
+                button.classList.toggle('is-active', button.dataset.value === logoPosition);
+            });
         });
         document.querySelectorAll('[data-packaging-select]').forEach(group => {
             const value = this.element(group.dataset.packagingSelect)?.value;
@@ -297,22 +381,73 @@ class CoursePackagingDesigner {
                 button.setAttribute('aria-pressed', String(active));
             });
         });
+        this.syncLogoGuides();
     }
 
-    copyIntroStyle() {
-        const fieldSuffixes = ['accent-color', 'background-style', 'logo-position'];
-        const checkboxSuffixes = ['use-slide-background'];
-        ['mid', 'outro'].forEach(side => {
+    copyCurrentStyle() {
+        const source = this.activeSide;
+        const fieldSuffixes = ['visual-preset', 'background-source', 'primary-color', 'accent-color', 'text-color', 'background-style', 'logo-position', 'logo-x', 'logo-y', 'motion-style', 'music-style'];
+        const checkboxSuffixes = ['use-slide-background', 'enable-motion', 'enable-music'];
+        ['intro', 'mid', 'outro'].filter(side => side !== source).forEach(side => {
             fieldSuffixes.forEach(suffix => {
-                this.element(`packaging-${side}-${suffix}`).value = this.element(`packaging-intro-${suffix}`).value;
+                this.element(`packaging-${side}-${suffix}`).value = this.element(`packaging-${source}-${suffix}`).value;
             });
             checkboxSuffixes.forEach(suffix => {
-                this.element(`packaging-${side}-${suffix}`).checked = this.element(`packaging-intro-${suffix}`).checked;
+                this.element(`packaging-${side}-${suffix}`).checked = this.element(`packaging-${source}-${suffix}`).checked;
             });
+            this.logoLayout[side] = { ...this.logoLayout[source] };
         });
         this.syncDesignerState();
         this.markDirty();
-        this.element('packaging-save-status').textContent = '已将片头样式应用到片中和片尾，尚未保存';
+        this.element('packaging-save-status').textContent = '已将当前段视觉应用到其他分段，尚未保存';
+    }
+
+    applyVisualPreset(side, button) {
+        this.element(`packaging-${side}-visual-preset`).value = button.dataset.preset;
+        this.element(`packaging-${side}-primary-color`).value = button.dataset.primary;
+        this.element(`packaging-${side}-accent-color`).value = button.dataset.accent;
+        this.element(`packaging-${side}-text-color`).value = button.dataset.text;
+        this.element(`packaging-${side}-motion-style`).value = button.dataset.motion;
+        this.setBackgroundSource(side, button.dataset.source, button.dataset.style);
+        this.markDirty();
+        this.syncDesignerState();
+        this.refreshPreview(side);
+    }
+
+    applyPalette(side, palette) {
+        this.element(`packaging-${side}-primary-color`).value = palette.primary;
+        this.element(`packaging-${side}-accent-color`).value = palette.accent;
+        this.element(`packaging-${side}-text-color`).value = palette.text;
+        this.element(`packaging-${side}-visual-preset`).value = 'custom';
+        this.syncDesignerState();
+        this.markDirty();
+        this.refreshPreview(side);
+    }
+
+    setBackgroundSource(side, source, style = null) {
+        this.element(`packaging-${side}-background-source`).value = source;
+        const backgroundStyle = this.element(`packaging-${side}-background-style`);
+        const usePpt = this.element(`packaging-${side}-use-slide-background`);
+        if (style) backgroundStyle.value = style;
+        if (source === 'ppt') { backgroundStyle.value = 'ppt'; usePpt.checked = true; }
+        if (source === 'theme') { if (backgroundStyle.value === 'ppt') backgroundStyle.value = 'gradient'; usePpt.checked = false; }
+        if (source === 'image') { backgroundStyle.value = 'ppt'; usePpt.checked = false; }
+        if (source === 'video') usePpt.checked = false;
+        this.syncDesignerState();
+        this.markDirty();
+    }
+
+    setLogoPosition(side, position) {
+        this.element(`packaging-${side}-logo-position`).value = position;
+        const fixed = {
+            'top-left': { x: 6.5, y: 10 }, 'top-right': { x: 75.5, y: 10 },
+            'bottom-left': { x: 6.5, y: 72 }, 'bottom-right': { x: 75.5, y: 72 }
+        }[position];
+        if (fixed) this.logoLayout[side] = fixed;
+        this.writeLogoLayout(side);
+        this.syncDesignerState();
+        this.markDirty();
+        this.refreshPreview(side);
     }
 
     markDirty() { this.element('packaging-save-status').textContent = '有未保存修改'; }
@@ -326,6 +461,9 @@ class CoursePackagingDesigner {
         Object.entries(this.checkboxes).forEach(([key, id]) => { options[key] = this.element(id).checked; });
         Object.entries(this.assets).forEach(([kind, path]) => { options[`packaging_${kind}_path`] = path; });
         ['intro', 'mid', 'outro'].forEach(kind => {
+            const source = this.element(`packaging-${kind}-background-source`).value;
+            if (source !== 'image') options[`packaging_${kind}_background_path`] = null;
+            if (source !== 'video') options[`packaging_${kind}_video_path`] = null;
             options[`packaging_${kind}_content_x`] = this.layout[kind].x;
             options[`packaging_${kind}_content_y`] = this.layout[kind].y;
             options[`packaging_${kind}_content_width`] = this.layout[kind].width;
@@ -380,6 +518,9 @@ class CoursePackagingDesigner {
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || '素材上传失败');
                 this.assets[kind] = result.asset_path;
+                const [side, media] = kind.split('_');
+                if (media === 'background') this.setBackgroundSource(side, 'image');
+                if (media === 'video') this.setBackgroundSource(side, 'video');
                 this.syncAssets();
                 if (kind.endsWith('_music')) await this.loadMusicLibrary();
                 if (kind.endsWith('_video')) await this.loadVideoLibraries();
@@ -392,6 +533,11 @@ class CoursePackagingDesigner {
     bindRemove(kind, buttonId) {
         this.element(buttonId).addEventListener('click', () => {
             this.assets[kind] = null;
+            const [side, media] = kind.split('_');
+            if ((media === 'background' && this.element(`packaging-${side}-background-source`).value === 'image')
+                || (media === 'video' && this.element(`packaging-${side}-background-source`).value === 'video')) {
+                this.setBackgroundSource(side, 'theme');
+            }
             this.syncAssets();
             this.markDirty();
             if (!kind.endsWith('_music')) this.refreshPreview();
@@ -504,6 +650,56 @@ class CoursePackagingDesigner {
                 box.addEventListener('pointercancel', up);
                 event.preventDefault();
             });
+        });
+    }
+
+    bindLogoEditor() {
+        document.querySelectorAll('[data-packaging-logo]').forEach(guide => {
+            guide.addEventListener('pointerdown', event => {
+                const kind = guide.dataset.packagingLogo;
+                if (this.element(`packaging-${kind}-logo-position`).value === 'none') return;
+                const canvas = guide.parentElement;
+                const rect = canvas.getBoundingClientRect();
+                const start = { x: event.clientX, y: event.clientY };
+                const original = { ...this.logoLayout[kind] };
+                guide.classList.add('is-editing');
+                guide.setPointerCapture(event.pointerId);
+                const move = moveEvent => {
+                    this.logoLayout[kind].x = Math.max(0, Math.min(82, original.x + (moveEvent.clientX - start.x) / rect.width * 100));
+                    this.logoLayout[kind].y = Math.max(0, Math.min(84, original.y + (moveEvent.clientY - start.y) / rect.height * 100));
+                    this.element(`packaging-${kind}-logo-position`).value = 'custom';
+                    this.writeLogoLayout(kind);
+                    this.syncDesignerState();
+                };
+                const up = () => {
+                    guide.removeEventListener('pointermove', move);
+                    guide.removeEventListener('pointerup', up);
+                    guide.removeEventListener('pointercancel', up);
+                    guide.classList.remove('is-editing');
+                    this.markDirty();
+                    this.refreshPreview(kind);
+                };
+                guide.addEventListener('pointermove', move);
+                guide.addEventListener('pointerup', up);
+                guide.addEventListener('pointercancel', up);
+                event.preventDefault();
+            });
+        });
+    }
+
+    writeLogoLayout(kind) {
+        this.element(`packaging-${kind}-logo-x`).value = this.logoLayout[kind].x.toFixed(2);
+        this.element(`packaging-${kind}-logo-y`).value = this.logoLayout[kind].y.toFixed(2);
+    }
+
+    syncLogoGuides() {
+        document.querySelectorAll('[data-packaging-logo]').forEach(guide => {
+            const kind = guide.dataset.packagingLogo;
+            const position = this.element(`packaging-${kind}-logo-position`)?.value;
+            const layout = this.logoLayout[kind];
+            guide.hidden = position === 'none';
+            guide.style.left = `${layout.x}%`;
+            guide.style.top = `${layout.y}%`;
         });
     }
 
