@@ -1236,23 +1236,14 @@ def test_index_contains_editable_course_preview():
     assert 'id="smart-cut-apply-btn"' in html
     assert 'id="packaging-template"' in html
     assert 'id="packaging-manage-btn"' in html
-    assert 'id="packaging-manager-overlay"' in html
-    assert 'id="packaging-intro-preview"' in html
-    assert 'id="packaging-outro-preview"' in html
-    assert 'id="packaging-intro-label"' in html
-    assert 'id="packaging-intro-duration"' in html
-    assert 'id="packaging-outro-duration"' in html
-    assert 'id="packaging-accent-color"' in html
-    assert 'id="packaging-background-style"' in html
-    assert 'id="packaging-logo-position"' in html
-    assert 'id="packaging-motion-style"' in html
-    assert 'id="packaging-music-style"' in html
+    assert 'href="/course-packaging"' in html
+    assert 'id="packaging-manager-overlay"' not in html
+    assert 'id="packaging-intro-preview"' not in html
+    assert 'id="packaging-accent-color"' not in html
     assert 'id="packaging-use-slide-background"' in html
     assert 'id="packaging-enable-motion"' in html
     assert 'id="packaging-enable-music"' in html
-    assert 'id="packaging-layout-reset"' in html
-    assert 'data-packaging-layout="intro"' in html
-    assert 'data-packaging-layout="outro"' in html
+    assert 'id="packaging-layout-reset"' not in html
     assert 'id="course-duration-estimate"' in html
     assert '预计完整视频总时长' in html
     assert '约 -- 分 -- 秒' in html
@@ -1326,6 +1317,71 @@ def test_course_packaging_background_asset_can_be_uploaded(monkeypatch, temp_dir
         "packaging_background_path": str(asset_path),
     })["course_packaging"]
     assert options["background_path"] == str(asset_path)
+
+
+def test_course_packaging_music_library_lists_uploaded_assets(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    music = temp_dir / "packaging_music_abc__opening-theme.mp3"
+    music.write_bytes(b"fake mp3")
+
+    response = web_app.app.test_client().get(
+        "/api/course-packaging-assets", query_string={"kind": "music"}
+    )
+
+    assert response.status_code == 200
+    assets = response.get_json()["assets"]
+    assert assets == [{
+        "name": "opening-theme",
+        "path": str(music),
+        "url": f"/api/course-packaging-asset/{music.name}",
+    }]
+
+
+def test_course_packaging_intro_video_can_be_uploaded_and_selected(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    response = web_app.app.test_client().post(
+        "/api/course-packaging-asset-upload",
+        data={"kind": "intro_video", "asset": (io.BytesIO(b"video"), "campus.mp4")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    asset_path = Path(response.get_json()["asset_path"])
+    options = web_app._course_packaging_options({
+        "packaging_intro_video_path": str(asset_path),
+    })["course_packaging"]
+    assert options["intro_video_path"] == str(asset_path)
+
+
+def test_course_workspace_exposes_packaging_media_library_controls():
+    import web.app as web_app
+
+    html = web_app.app.test_client().get("/").get_data(as_text=True)
+    assert '进入包装设计' in html
+    assert 'id="packaging-music-library"' not in html
+    assert 'id="packaging-intro-video-input"' not in html
+    assert '/static/js/main.js?v=34' in html
+
+
+def test_course_packaging_has_a_separate_design_page():
+    import web.app as web_app
+
+    client = web_app.app.test_client()
+    html = client.get('/course-packaging').get_data(as_text=True)
+
+    assert '片头片尾设计' in html
+    assert 'class="nav-item active" href="/course-packaging"' in html
+    assert 'id="packaging-save-btn"' in html
+    assert 'id="packaging-intro-preview"' in html
+    assert 'id="packaging-outro-preview"' in html
+    assert 'id="packaging-music-library"' in html
+    assert 'id="packaging-intro-video-input"' in html
+    assert 'id="upload-area"' not in html
+    assert '/static/js/course_packaging.js?v=1' in html
 
 
 def test_management_pages_are_separate_from_course_workspace():

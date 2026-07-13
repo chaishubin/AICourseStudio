@@ -150,22 +150,29 @@ def _render_packaging_clip(
     enable_music = bool(options.get("enable_music", True))
     motion_style = str(options.get("motion_style") or "zoom").strip().lower()
     video_filter = _video_filter(config, duration, enable_motion, motion_style)
-    command = [
-        ffmpeg,
-        "-y",
-        "-loop",
-        "1",
-        "-t",
-        f"{duration:.2f}",
-        "-i",
-        str(image_path),
-    ]
+    video_path = Path(str(options.get(f"{kind}_video_path") or ""))
+    use_video_background = video_path.is_file()
+    command = [ffmpeg, "-y"]
+    if use_video_background:
+        command.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", str(video_path)])
+        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(image_path)])
+        video_filter = (
+            f"[0:v]scale={config.video_width}:{config.video_height}:force_original_aspect_ratio=increase,"
+            f"crop={config.video_width}:{config.video_height},setsar=1[bg];"
+            "[1:v]format=rgba,colorchannelmixer=aa=0.82[card];"
+            f"[bg][card]overlay=shortest=1,{_video_filter(config, duration, enable_motion, motion_style)}"
+        )
+        next_input = 2
+    else:
+        command.extend(["-loop", "1", "-t", f"{duration:.2f}", "-i", str(image_path)])
+        next_input = 1
     if enable_music:
         music_path = Path(str(options.get("music_path") or ""))
         if music_path.is_file():
             command.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", str(music_path)])
+            music_input = next_input
             audio_filter = (
-                "[1:a]volume=0.16,afade=t=in:st=0:d=0.35,"
+                f"[{music_input}:a]volume=0.16,afade=t=in:st=0:d=0.35,"
                 f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
             )
         else:
@@ -175,11 +182,11 @@ def _render_packaging_clip(
                     f"sine=frequency={frequency}:sample_rate={config.audio_sample_rate}",
                 ])
             audio_filter = (
-                "[1:a][2:a][3:a]amix=inputs=3:duration=shortest,volume=0.018,"
+                f"[{next_input}:a][{next_input + 1}:a][{next_input + 2}:a]amix=inputs=3:duration=shortest,volume=0.018,"
                 "afade=t=in:st=0:d=0.35,"
                 f"afade=t=out:st={max(0.0, duration - 0.5):.2f}:d=0.45[a]"
             )
-        filter_complex = f"[0:v]{video_filter}[v];{audio_filter}"
+        filter_complex = f"{video_filter}[v];{audio_filter}" if use_video_background else f"[0:v]{video_filter}[v];{audio_filter}"
     else:
         command.extend([
             "-f",
@@ -189,7 +196,11 @@ def _render_packaging_clip(
             "-i",
             f"anullsrc=channel_layout=mono:sample_rate={config.audio_sample_rate}",
         ])
-        filter_complex = f"[0:v]{video_filter}[v];[1:a]anull[a]"
+        silence_input = next_input
+        filter_complex = (
+            f"{video_filter}[v];[{silence_input}:a]anull[a]"
+            if use_video_background else f"[0:v]{video_filter}[v];[{silence_input}:a]anull[a]"
+        )
     command.extend([
         "-filter_complex",
         filter_complex,

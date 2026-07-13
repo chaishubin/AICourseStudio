@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>课程包装 - AI Course Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=23">
+</head>
+<body>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="brand">
+                <div class="brand-mark">AI</div>
+                <div><strong>Course Studio</strong><span>课程生产管理平台</span></div>
+            </div>
+            <nav class="admin-nav" aria-label="主导航">
+                <a class="nav-item" href="{{ url_for('index') }}"><span class="nav-icon">▦</span><span>生产工作台</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#upload-module"><span class="nav-icon">⇧</span><span>素材与任务</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#course-preview-module"><span class="nav-icon">✎</span><span>内容审核</span></a>
+                <a class="nav-item" href="{{ url_for('index') }}#results-module"><span class="nav-icon">□</span><span>课程资产</span></a>
+                <a class="nav-item active" href="{{ url_for('course_packaging_page') }}"><span class="nav-icon">◈</span><span>课程包装</span></a>
+                <a class="nav-item" href="{{ url_for('data_management_page') }}"><span class="nav-icon">☷</span><span>数据管理</span></a>
+                <a class="nav-item" href="{{ url_for('operation_logs_page') }}"><span class="nav-icon">◴</span><span>操作日志</span></a>
+                {% if can_manage_accounts %}<a class="nav-item" href="{{ url_for('accounts_page') }}"><span class="nav-icon">◎</span><span>账号管理</span></a>{% endif %}
+                {% if can_view_debug %}<a class="nav-item" href="{{ url_for('debug_page') }}"><span class="nav-icon">◇</span><span>调试工作台</span></a>{% endif %}
+            </nav>
+            <div class="sidebar-meta"><span class="status-dot"></span><div><strong>服务运行中</strong><small>AI 生产引擎已连接</small></div></div>
+        </aside>
+
+        <div class="admin-main">
+            <header class="admin-topbar">
+                <div><p class="breadcrumb">AI 课程生产 / 课程包装</p><h1>片头片尾设计</h1></div>
+                <div class="topbar-actions">
+                    <span class="environment-badge"><span></span>模板工作台</span>
+                    <span class="admin-user-name">{{ current_user }}{% if is_super_admin %} · 超级管理员{% endif %}</span>
+                    <div class="admin-avatar">{{ current_user[:1] | upper }}</div>
+                    <form method="post" action="{{ url_for('logout') }}"><button class="logout-button" type="submit">退出登录</button></form>
+                </div>
+            </header>
+
+            <main class="content management-page packaging-design-page">
+                <section class="workspace-intro packaging-page-intro">
+                    <div><h2>统一设计课程片头与片尾</h2><p>在这里管理品牌内容、视觉素材、动效和声音；保存后，生产工作台会自动使用当前配置。</p></div>
+                    <div class="packaging-page-actions">
+                        <span id="packaging-save-status">尚未修改</span>
+                        <button type="button" class="btn-preview" id="packaging-preview-refresh">刷新预览</button>
+                        <button type="button" class="btn-convert" id="packaging-save-btn">保存为当前配置</button>
+                    </div>
+                </section>
+
+                <section class="card packaging-manager packaging-manager-page" aria-labelledby="packaging-manager-title">
+                    <div class="packaging-manager-header">
+                        <div><span class="section-kicker">课程包装</span><h4 id="packaging-manager-title">模板与应用范围</h4><span>课程确认页只保留选择、启用和本课程常用字段。</span></div>
+                        <a class="btn-preview" href="{{ url_for('index') }}#course-preview-module">返回生产工作台</a>
+                    </div>
+                    <div class="packaging-manager-controls packaging-base-controls">
+                        <fieldset>
+                            <legend>模板与基础信息</legend>
+                            <label>包装模板<select id="packaging-template" class="select-input"><option value="academic">高校课程</option><option value="university">高校片头</option><option value="credits">片尾鸣谢</option><option value="modern">现代培训</option><option value="minimal">简洁微课</option></select></label>
+                            <label>单位/机构<input id="packaging-organization" class="text-input" maxlength="60" placeholder="例如：某某大学"></label>
+                            <label>主讲人<input id="packaging-instructor" class="text-input" maxlength="40" placeholder="可选"></label>
+                            <label>默认时长<input id="packaging-duration" class="number-input" type="number" min="2" max="8" step="0.5" value="4"></label>
+                            <label class="packaging-toggle"><input type="checkbox" id="enable-intro" checked>启用片头</label>
+                            <label class="packaging-toggle"><input type="checkbox" id="enable-outro" checked>启用片尾</label>
+                            <label class="packaging-toggle"><input type="checkbox" id="packaging-apply-segments">分段视频加短片头</label>
+                        </fieldset>
+                        <fieldset>
+                            <legend>片头内容</legend>
+                            <label>片头标签<input id="packaging-intro-label" class="text-input" maxlength="30" value="在线开放课程"></label>
+                            <label>片头标题<input id="packaging-intro-title" class="text-input" maxlength="80" placeholder="默认使用课程名或分段标题"></label>
+                            <label>片头副标题<input id="packaging-intro-subtitle" class="text-input" maxlength="100" placeholder="例如：AI 赋能教学创新"></label>
+                            <label>片头时长<input id="packaging-intro-duration" class="number-input" type="number" min="2" max="10" step="0.5" value="4"></label>
+                        </fieldset>
+                        <fieldset>
+                            <legend>片尾内容</legend>
+                            <label>片尾标题<input id="packaging-outro-title" class="text-input" maxlength="80" placeholder="默认使用课程名"></label>
+                            <label>片尾副标题<input id="packaging-outro-subtitle" class="text-input" maxlength="100" placeholder="例如：请完成平台练习与讨论"></label>
+                            <label>片尾文案<input id="packaging-outro-text" class="text-input" maxlength="120" value="感谢观看"></label>
+                            <label>片尾时长<input id="packaging-outro-duration" class="number-input" type="number" min="2" max="10" step="0.5" value="4"></label>
+                        </fieldset>
+                        <fieldset>
+                            <legend>视觉样式与素材</legend>
+                            <label class="packaging-asset-field">自定义背景图<input id="packaging-background-input" type="file" accept=".png,.jpg,.jpeg,.webp" hidden><button type="button" class="btn-preview" id="packaging-background-button">上传替换</button><button type="button" class="btn-preview" id="packaging-background-remove" hidden>恢复默认</button><small id="packaging-background-status">片头片尾共用</small></label>
+                            <label class="packaging-asset-field">片头动态背景<input id="packaging-intro-video-input" type="file" accept=".mp4,.mov,.m4v,.webm" hidden><button type="button" class="btn-preview" id="packaging-intro-video-button">上传视频</button><button type="button" class="btn-preview" id="packaging-intro-video-remove" hidden>移除</button><small id="packaging-intro-video-status">支持 MP4/MOV</small></label>
+                            <label class="packaging-asset-field">片尾动态背景<input id="packaging-outro-video-input" type="file" accept=".mp4,.mov,.m4v,.webm" hidden><button type="button" class="btn-preview" id="packaging-outro-video-button">上传视频</button><button type="button" class="btn-preview" id="packaging-outro-video-remove" hidden>移除</button><small id="packaging-outro-video-status">可使用不同素材</small></label>
+                            <label>品牌色<input id="packaging-accent-color" class="color-input" type="color" value="#D6A239"></label>
+                            <label>背景模式<select id="packaging-background-style" class="select-input"><option value="ppt">使用 PPT 背景</option><option value="solid">纯色背景</option><option value="gradient">渐变背景</option><option value="light">浅色背景</option></select></label>
+                            <label>Logo 位置<select id="packaging-logo-position" class="select-input"><option value="top-right">右上角</option><option value="top-left">左上角</option><option value="bottom-right">右下角</option><option value="bottom-left">左下角</option><option value="none">不显示</option></select></label>
+                            <label class="packaging-toggle"><input type="checkbox" id="packaging-use-slide-background" checked>使用 PPT 背景</label>
+                        </fieldset>
+                        <fieldset>
+                            <legend>动态与声音</legend>
+                            <label class="packaging-asset-field">自定义背景音乐<input id="packaging-music-input" type="file" accept=".mp3,.wav,.m4a,.aac" hidden><button type="button" class="btn-preview" id="packaging-music-button">上传替换</button><button type="button" class="btn-preview" id="packaging-music-remove" hidden>恢复内置</button><small id="packaging-music-status">自动裁剪到包装时长</small></label>
+                            <label>音乐素材库<select id="packaging-music-library" class="select-input"><option value="">使用内置风格音乐</option></select></label>
+                            <label>音乐试听<audio id="packaging-music-preview" controls preload="none"></audio></label>
+                            <label>动效<select id="packaging-motion-style" class="select-input"><option value="zoom">缓慢推近</option><option value="pan">横向平移</option><option value="none">无动画</option></select></label>
+                            <label>音乐风格<select id="packaging-music-style" class="select-input"><option value="warm">温和</option><option value="calm">沉稳</option><option value="bright">明亮</option><option value="tech">科技</option></select></label>
+                            <label class="packaging-toggle"><input type="checkbox" id="packaging-enable-motion" checked>启用动画</label>
+                            <label class="packaging-toggle"><input type="checkbox" id="packaging-enable-music" checked>启用音乐</label>
+                        </fieldset>
+                    </div>
+                    <div class="packaging-manager-toolbar"><button type="button" class="btn-preview" id="packaging-layout-reset">重置内容位置</button><span id="packaging-preview-status">使用当前表单参数</span></div>
+                    <div class="packaging-preview-grid">
+                        <figure><figcaption>片头预览</figcaption><div class="packaging-preview-canvas"><img id="packaging-intro-preview" alt="课程片头模板预览"><div class="packaging-layout-box" data-packaging-layout="intro" tabindex="0"><span>片头内容区</span><i aria-hidden="true"></i></div></div></figure>
+                        <figure><figcaption>片尾预览</figcaption><div class="packaging-preview-canvas"><img id="packaging-outro-preview" alt="课程片尾模板预览"><div class="packaging-layout-box" data-packaging-layout="outro" tabindex="0"><span>片尾内容区</span><i aria-hidden="true"></i></div></div></figure>
+                    </div>
+                    <div class="packaging-template-notes"><span>拖动虚线框调整内容位置，拖动右下角调整宽度；学校 Logo 仍由生产工作台的生成策略提供。</span></div>
+                </section>
+            </main>
+            <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/course_packaging.js') }}?v=1"></script>
+</body>
+</html>

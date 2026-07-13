@@ -460,6 +460,52 @@ def test_course_packaging_renders_credits_template_images(temp_dir):
         assert len(rendered.getcolors(maxcolors=1_000_000)) > 1
 
 
+def test_course_packaging_uses_local_video_as_animated_background(temp_dir, monkeypatch):
+    from unittest.mock import Mock
+
+    from vidppt.utils import course_packaging
+
+    video = temp_dir / "campus.mp4"
+    video.write_bytes(b"video")
+    output = temp_dir / "intro.mp4"
+    config = ProcessConfig(
+        input_path=temp_dir / "source.pptx",
+        output_dir=temp_dir,
+        video_width=960,
+        video_height=540,
+    )
+    run = Mock()
+    monkeypatch.setattr(course_packaging.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        course_packaging,
+        "_render_packaging_image",
+        lambda path, *args, **kwargs: path.write_bytes(b"png"),
+    )
+    monkeypatch.setattr(course_packaging.subprocess, "run", run)
+
+    course_packaging._render_packaging_clip(
+        output,
+        config,
+        {
+            "intro_video_path": str(video),
+            "enable_music": False,
+            "enable_motion": False,
+            "use_slide_background": False,
+        },
+        kind="intro",
+        course_title="人工智能导论",
+        segment_title="",
+        logo_path=None,
+        background_path=None,
+    )
+
+    command = run.call_args.args[0]
+    assert str(video) in command
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "[bg][card]overlay=shortest=1" in filter_complex
+    assert "colorchannelmixer=aa=0.82" in filter_complex
+
+
 def test_course_pipeline_scales_subtitle_design_units_for_video_resolution(temp_dir):
     from vidppt.course_pipeline import CoursePipeline
 

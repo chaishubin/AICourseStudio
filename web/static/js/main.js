@@ -12,6 +12,8 @@ class AICourseStudioApp {
             logoPath: null,
             packagingBackgroundPath: null,
             packagingMusicPath: null,
+            packagingIntroVideoPath: null,
+            packagingOutroVideoPath: null,
             activeEventSources: new Map()  // taskId → EventSource
         };
 
@@ -158,6 +160,16 @@ class AICourseStudioApp {
                 packagingMusicButton: document.getElementById('packaging-music-button'),
                 packagingMusicRemove: document.getElementById('packaging-music-remove'),
                 packagingMusicStatus: document.getElementById('packaging-music-status'),
+                packagingMusicLibrary: document.getElementById('packaging-music-library'),
+                packagingMusicPreview: document.getElementById('packaging-music-preview'),
+                packagingIntroVideoInput: document.getElementById('packaging-intro-video-input'),
+                packagingIntroVideoButton: document.getElementById('packaging-intro-video-button'),
+                packagingIntroVideoRemove: document.getElementById('packaging-intro-video-remove'),
+                packagingIntroVideoStatus: document.getElementById('packaging-intro-video-status'),
+                packagingOutroVideoInput: document.getElementById('packaging-outro-video-input'),
+                packagingOutroVideoButton: document.getElementById('packaging-outro-video-button'),
+                packagingOutroVideoRemove: document.getElementById('packaging-outro-video-remove'),
+                packagingOutroVideoStatus: document.getElementById('packaging-outro-video-status'),
                 advancedToggle: document.getElementById('advanced-toggle'),
                 workflowBadge: document.getElementById('workflow-badge'),
                 workflowDescription: document.getElementById('workflow-description'),
@@ -900,6 +912,8 @@ class AICourseStudioApp {
         this.state.logoPath = strategy.school_logo_path || null;
         this.state.packagingBackgroundPath = strategy.packaging_background_path || null;
         this.state.packagingMusicPath = strategy.packaging_music_path || null;
+        this.state.packagingIntroVideoPath = strategy.packaging_intro_video_path || null;
+        this.state.packagingOutroVideoPath = strategy.packaging_outro_video_path || null;
         this.syncPackagingAssetState();
         this.syncSubtitleStyleTemplateSelection();
         this.syncSubtitleFontPreview();
@@ -1625,6 +1639,12 @@ class AICourseStudioApp {
     }
 
     collectCoursePackagingOptions() {
+        let saved = {};
+        try {
+            saved = JSON.parse(localStorage.getItem(this.strategyDraftStorageKey) || '{}') || {};
+        } catch (error) {
+            console.warn('读取课程包装默认配置失败:', error);
+        }
         return {
             enable_intro: this.elements.enableIntro?.checked ?? true,
             enable_outro: this.elements.enableOutro?.checked ?? true,
@@ -1637,20 +1657,22 @@ class AICourseStudioApp {
             packaging_use_slide_background: this.elements.packagingUseSlideBackground?.checked ?? true,
             packaging_enable_motion: this.elements.packagingEnableMotion?.checked ?? true,
             packaging_enable_music: this.elements.packagingEnableMusic?.checked ?? true,
-            packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() || '在线开放课程',
-            packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || '',
-            packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() || '',
-            packaging_intro_duration_seconds: Number(this.elements.packagingIntroDuration?.value) || Number(this.elements.packagingDuration?.value) || 4,
-            packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() || '',
-            packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() || '',
-            packaging_outro_duration_seconds: Number(this.elements.packagingOutroDuration?.value) || Number(this.elements.packagingDuration?.value) || 4,
-            packaging_accent_color: this.elements.packagingAccentColor?.value || '#D6A239',
-            packaging_background_style: this.elements.packagingBackgroundStyle?.value || 'ppt',
-            packaging_logo_position: this.elements.packagingLogoPosition?.value || 'top-right',
-            packaging_motion_style: this.elements.packagingMotionStyle?.value || 'zoom',
-            packaging_music_style: this.elements.packagingMusicStyle?.value || 'warm',
+            packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() || saved.packaging_intro_label || '在线开放课程',
+            packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || saved.packaging_intro_title || '',
+            packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() || saved.packaging_intro_subtitle || '',
+            packaging_intro_duration_seconds: Number(this.elements.packagingIntroDuration?.value) || Number(saved.packaging_intro_duration_seconds) || Number(this.elements.packagingDuration?.value) || 4,
+            packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() || saved.packaging_outro_title || '',
+            packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() || saved.packaging_outro_subtitle || '',
+            packaging_outro_duration_seconds: Number(this.elements.packagingOutroDuration?.value) || Number(saved.packaging_outro_duration_seconds) || Number(this.elements.packagingDuration?.value) || 4,
+            packaging_accent_color: this.elements.packagingAccentColor?.value || saved.packaging_accent_color || '#D6A239',
+            packaging_background_style: this.elements.packagingBackgroundStyle?.value || saved.packaging_background_style || 'ppt',
+            packaging_logo_position: this.elements.packagingLogoPosition?.value || saved.packaging_logo_position || 'top-right',
+            packaging_motion_style: this.elements.packagingMotionStyle?.value || saved.packaging_motion_style || 'zoom',
+            packaging_music_style: this.elements.packagingMusicStyle?.value || saved.packaging_music_style || 'warm',
             packaging_background_path: this.state.packagingBackgroundPath,
             packaging_music_path: this.state.packagingMusicPath,
+            packaging_intro_video_path: this.state.packagingIntroVideoPath,
+            packaging_outro_video_path: this.state.packagingOutroVideoPath,
             packaging_intro_content_x: this.packagingLayout.intro.x,
             packaging_intro_content_y: this.packagingLayout.intro.y,
             packaging_intro_content_width: this.packagingLayout.intro.width,
@@ -1670,7 +1692,9 @@ class AICourseStudioApp {
     bindPackagingAssetUploads() {
         const bindings = [
             ['background', this.elements.packagingBackgroundButton, this.elements.packagingBackgroundInput],
-            ['music', this.elements.packagingMusicButton, this.elements.packagingMusicInput]
+            ['music', this.elements.packagingMusicButton, this.elements.packagingMusicInput],
+            ['intro_video', this.elements.packagingIntroVideoButton, this.elements.packagingIntroVideoInput],
+            ['outro_video', this.elements.packagingOutroVideoButton, this.elements.packagingOutroVideoInput]
         ];
         bindings.forEach(([kind, button, input]) => {
             button?.addEventListener('click', () => input.click());
@@ -1691,25 +1715,48 @@ class AICourseStudioApp {
             this.syncPackagingAssetState();
             this.saveCurrentStrategy();
         });
+        ['intro', 'outro'].forEach(side => {
+            const remove = this.elements[`packaging${side[0].toUpperCase()}${side.slice(1)}VideoRemove`];
+            remove?.addEventListener('click', () => {
+                this.state[`packaging${side[0].toUpperCase()}${side.slice(1)}VideoPath`] = null;
+                this.syncPackagingAssetState();
+                this.saveCurrentStrategy();
+            });
+        });
+        this.elements.packagingMusicLibrary?.addEventListener('change', event => {
+            const selected = event.target.selectedOptions[0];
+            this.state.packagingMusicPath = event.target.value || null;
+            if (this.elements.packagingMusicPreview) {
+                this.elements.packagingMusicPreview.src = selected?.dataset.url || '';
+            }
+            this.syncPackagingAssetState();
+            this.saveCurrentStrategy();
+        });
+        this.loadPackagingMusicLibrary();
     }
 
     async uploadPackagingAsset(kind, file) {
         const formData = new FormData();
         formData.append('kind', kind);
         formData.append('asset', file);
-        const status = kind === 'background'
-            ? this.elements.packagingBackgroundStatus : this.elements.packagingMusicStatus;
+        const status = kind === 'background' ? this.elements.packagingBackgroundStatus
+            : kind === 'music' ? this.elements.packagingMusicStatus
+            : kind === 'intro_video' ? this.elements.packagingIntroVideoStatus
+            : this.elements.packagingOutroVideoStatus;
         status.textContent = '上传中...';
         try {
             const response = await fetch('/api/course-packaging-asset-upload', { method: 'POST', body: formData });
             const result = await response.json();
             if (!response.ok) throw new Error(result.error || '素材上传失败');
             if (kind === 'background') this.state.packagingBackgroundPath = result.asset_path;
-            else this.state.packagingMusicPath = result.asset_path;
+            else if (kind === 'music') this.state.packagingMusicPath = result.asset_path;
+            else if (kind === 'intro_video') this.state.packagingIntroVideoPath = result.asset_path;
+            else this.state.packagingOutroVideoPath = result.asset_path;
             if (kind === 'background' && this.elements.packagingBackgroundStyle) {
                 this.elements.packagingBackgroundStyle.value = 'ppt';
             }
             this.syncPackagingAssetState();
+            if (kind === 'music') await this.loadPackagingMusicLibrary();
             if (kind === 'background') this.refreshPackagingPreview();
             this.saveCurrentStrategy();
         } catch (error) {
@@ -1721,13 +1768,41 @@ class AICourseStudioApp {
     syncPackagingAssetState() {
         const hasBackground = Boolean(this.state.packagingBackgroundPath);
         const hasMusic = Boolean(this.state.packagingMusicPath);
+        const hasIntroVideo = Boolean(this.state.packagingIntroVideoPath);
+        const hasOutroVideo = Boolean(this.state.packagingOutroVideoPath);
         if (this.elements.packagingBackgroundRemove) this.elements.packagingBackgroundRemove.hidden = !hasBackground;
         if (this.elements.packagingMusicRemove) this.elements.packagingMusicRemove.hidden = !hasMusic;
+        if (this.elements.packagingIntroVideoRemove) this.elements.packagingIntroVideoRemove.hidden = !hasIntroVideo;
+        if (this.elements.packagingOutroVideoRemove) this.elements.packagingOutroVideoRemove.hidden = !hasOutroVideo;
         if (this.elements.packagingBackgroundStatus) {
             this.elements.packagingBackgroundStatus.textContent = hasBackground ? '已使用自定义背景图' : '片头片尾共用，可恢复为 PPT 背景';
         }
         if (this.elements.packagingMusicStatus) {
             this.elements.packagingMusicStatus.textContent = hasMusic ? '已使用自定义背景音乐' : '自动裁剪到片头片尾时长';
+        }
+        if (this.elements.packagingIntroVideoStatus) this.elements.packagingIntroVideoStatus.textContent = hasIntroVideo ? '已使用本地片头视频' : '支持 MP4/MOV，自动循环并裁剪';
+        if (this.elements.packagingOutroVideoStatus) this.elements.packagingOutroVideoStatus.textContent = hasOutroVideo ? '已使用本地片尾视频' : '可与片头使用不同素材';
+        if (this.elements.packagingMusicLibrary) this.elements.packagingMusicLibrary.value = this.state.packagingMusicPath || '';
+    }
+
+    async loadPackagingMusicLibrary() {
+        const select = this.elements.packagingMusicLibrary;
+        if (!select) return;
+        try {
+            const response = await fetch('/api/course-packaging-assets?kind=music');
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '音乐素材库加载失败');
+            select.replaceChildren(new Option('使用内置风格音乐', ''));
+            result.assets.forEach(asset => {
+                const option = new Option(asset.name, asset.path);
+                option.dataset.url = asset.url;
+                select.add(option);
+            });
+            select.value = this.state.packagingMusicPath || '';
+            const selected = select.selectedOptions[0];
+            if (this.elements.packagingMusicPreview) this.elements.packagingMusicPreview.src = selected?.dataset.url || '';
+        } catch (error) {
+            console.warn('加载音乐素材库失败:', error);
         }
     }
 

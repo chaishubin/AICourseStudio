@@ -2148,6 +2148,7 @@ body {
 
 .packaging-manage-btn {
     flex: 0 0 auto;
+    text-decoration: none;
 }
 
 .course-packaging-grid {
@@ -2213,6 +2214,36 @@ body {
     border-radius: var(--radius-sm);
     background: var(--color-surface);
     box-shadow: 0 26px 74px rgba(0, 0, 0, 0.42);
+}
+
+.packaging-design-page {
+    max-width: 1440px;
+}
+
+.packaging-page-intro {
+    align-items: center;
+}
+
+.packaging-page-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.packaging-page-actions > span {
+    color: var(--color-text-3);
+    font-size: 12px;
+}
+
+.packaging-manager-page {
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+    box-shadow: none;
+}
+
+.packaging-manager-page .packaging-base-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .packaging-manager-header {

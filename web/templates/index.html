@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=22">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=23">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -29,6 +29,9 @@
                 </a>
                 <a class="nav-item" href="#results-module">
                     <span class="nav-icon">□</span><span>课程资产</span>
+                </a>
+                <a class="nav-item" href="{{ url_for('course_packaging_page') }}">
+                    <span class="nav-icon">◈</span><span>课程包装</span>
                 </a>
                 <a class="nav-item" href="{{ url_for('data_management_page') }}">
                     <span class="nav-icon">☷</span><span>数据管理</span>
@@ -528,9 +531,10 @@
                                 <h4>课程包装</h4>
                                 <span>生成统一片头片尾，主视频默认应用，分段视频可单独开启短片头。</span>
                             </div>
-                            <button type="button" class="btn-preview packaging-manage-btn" id="packaging-manage-btn">
-                                管理模板
-                            </button>
+                            <a class="btn-preview packaging-manage-btn" id="packaging-manage-btn"
+                               href="{{ url_for('course_packaging_page') }}">
+                                进入包装设计
+                            </a>
                         </div>
                         <div class="course-packaging-grid">
                             <label>包装模板
@@ -583,134 +587,6 @@
                                 背景音乐
                             </label>
                         </div>
-                    </div>
-                    <div class="packaging-manager-overlay" id="packaging-manager-overlay" hidden>
-                        <section class="packaging-manager" role="dialog" aria-modal="true" aria-labelledby="packaging-manager-title">
-                            <div class="packaging-manager-header">
-                                <div>
-                                    <h4 id="packaging-manager-title">课程包装模板</h4>
-                                    <span>在这里预览片头片尾效果，生成页只保留常用开关和当前模板。</span>
-                                </div>
-                                <button type="button" class="packaging-manager-close" id="packaging-manager-close" aria-label="关闭">×</button>
-                            </div>
-                            <div class="packaging-manager-toolbar">
-                                <button type="button" class="btn-preview" id="packaging-preview-refresh">刷新预览</button>
-                                <button type="button" class="btn-preview" id="packaging-layout-reset">重置位置</button>
-                                <span id="packaging-preview-status">使用当前表单参数</span>
-                            </div>
-                            <div class="packaging-manager-controls">
-                                <fieldset>
-                                    <legend>片头内容</legend>
-                                    <label>片头标签
-                                        <input id="packaging-intro-label" class="text-input" type="text"
-                                               maxlength="30" value="在线开放课程">
-                                    </label>
-                                    <label>片头标题
-                                        <input id="packaging-intro-title" class="text-input" type="text"
-                                               maxlength="80" placeholder="默认使用课程名或分段标题">
-                                    </label>
-                                    <label>片头副标题
-                                        <input id="packaging-intro-subtitle" class="text-input" type="text"
-                                               maxlength="100" placeholder="例如：AI 赋能教学创新">
-                                    </label>
-                                    <label>片头时长
-                                        <input id="packaging-intro-duration" class="number-input" type="number"
-                                               min="2" max="10" step="0.5" value="4">
-                                    </label>
-                                </fieldset>
-                                <fieldset>
-                                    <legend>片尾内容</legend>
-                                    <label>片尾标题
-                                        <input id="packaging-outro-title" class="text-input" type="text"
-                                               maxlength="80" placeholder="默认使用课程名">
-                                    </label>
-                                    <label>片尾副标题
-                                        <input id="packaging-outro-subtitle" class="text-input" type="text"
-                                               maxlength="100" placeholder="例如：请完成平台练习与讨论">
-                                    </label>
-                                    <label>片尾时长
-                                        <input id="packaging-outro-duration" class="number-input" type="number"
-                                               min="2" max="10" step="0.5" value="4">
-                                    </label>
-                                </fieldset>
-                                <fieldset>
-                                    <legend>视觉样式</legend>
-                                    <label class="packaging-asset-field">自定义背景图
-                                        <input id="packaging-background-input" type="file" accept=".png,.jpg,.jpeg,.webp" hidden>
-                                        <button type="button" class="btn-preview" id="packaging-background-button">上传替换</button>
-                                        <button type="button" class="btn-preview" id="packaging-background-remove" hidden>恢复默认</button>
-                                        <small id="packaging-background-status">片头片尾共用，可恢复为 PPT 背景</small>
-                                    </label>
-                                    <label>品牌色
-                                        <input id="packaging-accent-color" class="color-input" type="color" value="#D6A239">
-                                    </label>
-                                    <label>背景模式
-                                        <select id="packaging-background-style" class="select-input">
-                                            <option value="ppt">使用 PPT 背景</option>
-                                            <option value="solid">纯色背景</option>
-                                            <option value="gradient">渐变背景</option>
-                                            <option value="light">浅色背景</option>
-                                        </select>
-                                    </label>
-                                    <label>Logo 位置
-                                        <select id="packaging-logo-position" class="select-input">
-                                            <option value="top-right">右上角</option>
-                                            <option value="top-left">左上角</option>
-                                            <option value="bottom-right">右下角</option>
-                                            <option value="bottom-left">左下角</option>
-                                            <option value="none">不显示</option>
-                                        </select>
-                                    </label>
-                                </fieldset>
-                                <fieldset>
-                                    <legend>动态与声音</legend>
-                                    <label class="packaging-asset-field">自定义背景音乐
-                                        <input id="packaging-music-input" type="file" accept=".mp3,.wav,.m4a,.aac" hidden>
-                                        <button type="button" class="btn-preview" id="packaging-music-button">上传替换</button>
-                                        <button type="button" class="btn-preview" id="packaging-music-remove" hidden>恢复内置</button>
-                                        <small id="packaging-music-status">自动裁剪到片头片尾时长</small>
-                                    </label>
-                                    <label>动效
-                                        <select id="packaging-motion-style" class="select-input">
-                                            <option value="zoom">缓慢推近</option>
-                                            <option value="pan">横向平移</option>
-                                            <option value="none">无动画</option>
-                                        </select>
-                                    </label>
-                                    <label>音乐风格
-                                        <select id="packaging-music-style" class="select-input">
-                                            <option value="warm">温和</option>
-                                            <option value="calm">沉稳</option>
-                                            <option value="bright">明亮</option>
-                                            <option value="tech">科技</option>
-                                        </select>
-                                    </label>
-                                </fieldset>
-                            </div>
-                            <div class="packaging-preview-grid">
-                                <figure>
-                                    <figcaption>片头预览</figcaption>
-                                    <div class="packaging-preview-canvas" data-packaging-kind="intro">
-                                        <img id="packaging-intro-preview" alt="课程片头模板预览">
-                                        <div class="packaging-layout-box" data-packaging-layout="intro" tabindex="0">
-                                            <span>片头内容区</span><i aria-hidden="true"></i>
-                                        </div>
-                                    </div>
-                                </figure>
-                                <figure>
-                                    <figcaption>片尾预览</figcaption>
-                                    <div class="packaging-preview-canvas" data-packaging-kind="outro">
-                                        <img id="packaging-outro-preview" alt="课程片尾模板预览">
-                                        <div class="packaging-layout-box" data-packaging-layout="outro" tabindex="0">
-                                            <span>片尾内容区</span><i aria-hidden="true"></i>
-                                        </div>
-                                    </div>
-                                </figure>
-                            </div>
-                            <div class="packaging-template-notes">
-                                <span>拖动虚线框调整内容位置，拖动右下角调整宽度；学校 Logo 继续使用生成策略中的学校 Logo。</span>
-                            </div>
-                        </section>
                     </div>
                     <div class="course-subtitle-panel">
                         <div class="course-subtitle-panel-header">
@@ -863,7 +739,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=32"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=34"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

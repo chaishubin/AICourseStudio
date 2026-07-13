@@ -58,10 +58,12 @@ app = Flask(__name__,
             template_folder=Path(__file__).parent / 'templates',
             static_folder=Path(__file__).parent / 'static')
 app.secret_key = os.environ.get('VIDPPT_SECRET_KEY') or secrets.token_hex(32)
+DEVELOPMENT_MODE = os.environ.get('VIDPPT_DEVELOPMENT', 'false').lower() == 'true'
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=os.environ.get('VIDPPT_COOKIE_SECURE', 'false').lower() == 'true',
+    SEND_FILE_MAX_AGE_DEFAULT=0 if DEVELOPMENT_MODE else None,
 )
 
 AUTH_USERNAME = os.environ.get('VIDPPT_AUTH_USERNAME', 'admin')
@@ -138,6 +140,7 @@ OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'ppt', 'pptx'}
 ALLOWED_LOGO_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 ALLOWED_PACKAGING_AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'aac'}
+ALLOWED_PACKAGING_VIDEO_EXTENSIONS = {'mp4', 'mov', 'm4v', 'webm'}
 DEFAULT_STATE_FILE = OUTPUT_FOLDER / 'state.json'
 STATE_FILE = DEFAULT_STATE_FILE
 TASK_DB_FILE = Path(os.environ.get(
@@ -1007,6 +1010,12 @@ def _course_packaging_options(data: dict) -> dict:
     music_path = _packaging_asset_path(
         data.get('packaging_music_path'), ALLOWED_PACKAGING_AUDIO_EXTENSIONS
     )
+    intro_video_path = _packaging_asset_path(
+        data.get('packaging_intro_video_path'), ALLOWED_PACKAGING_VIDEO_EXTENSIONS
+    )
+    outro_video_path = _packaging_asset_path(
+        data.get('packaging_outro_video_path'), ALLOWED_PACKAGING_VIDEO_EXTENSIONS
+    )
     return {
         'course_packaging': {
             'enable_intro': bool(data.get('enable_intro', True)),
@@ -1023,6 +1032,8 @@ def _course_packaging_options(data: dict) -> dict:
             'outro_text': outro_text,
             'background_path': background_path,
             'music_path': music_path,
+            'intro_video_path': intro_video_path,
+            'outro_video_path': outro_video_path,
             'intro_label': str(data.get('packaging_intro_label', '在线开放课程')).strip()[:30] or '在线开放课程',
             'intro_title': str(data.get('packaging_intro_title', '')).strip()[:80],
             'intro_subtitle': str(data.get('packaging_intro_subtitle', '')).strip()[:100],
@@ -1523,6 +1534,23 @@ def data_management_page():
     )
 
 
+@app.route('/course-packaging')
+def course_packaging_page():
+    """渲染独立的课程片头片尾包装设计页面。"""
+    user = current_user_context()
+    return render_template(
+        'course_packaging.html',
+        current_user=user['display_name'],
+        current_username=user['username'],
+        current_role=user['role'],
+        is_super_admin=user['role'] == SUPER_ADMIN_ROLE,
+        can_manage_accounts=can_manage_accounts(),
+        can_view_debug=has_permission('view_debug'),
+        can_view_all_tasks=can_view_all_tasks(),
+        can_view_all_logs=has_permission('view_operation_logs'),
+    )
+
+
 @app.route('/operation-logs-page')
 def operation_logs_page():
     """渲染操作日志页面。"""
@@ -1653,24 +1681,30 @@ def upload_logo():
 
 @app.route('/api/course-packaging-asset-upload', methods=['POST'])
 def upload_course_packaging_asset():
-    """上传片头片尾共用的背景图或音乐素材。"""
+    """上传片头片尾背景图、背景视频或音乐素材。"""
     from PIL import Image, UnidentifiedImageError
 
     kind = str(request.form.get('kind') or '').strip().lower()
     file = request.files.get('asset')
-    if kind not in {'background', 'music'} or not file or not file.filename:
+    if kind not in {'background', 'music', 'intro_video', 'outro_video'} or not file or not file.filename:
         return jsonify({'error': '未选择有效的包装素材'}), 400
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    allowed = ALLOWED_LOGO_EXTENSIONS if kind == 'background' else ALLOWED_PACKAGING_AUDIO_EXTENSIONS
+    if kind == 'background':
+        allowed = ALLOWED_LOGO_EXTENSIONS
+    elif kind == 'music':
+        allowed = ALLOWED_PACKAGING_AUDIO_EXTENSIONS
+    else:
+        allowed = ALLOWED_PACKAGING_VIDEO_EXTENSIONS
     if ext not in allowed:
-        return jsonify({'error': '背景仅支持 PNG/JPG/WebP，音乐仅支持 MP3/WAV/M4A/AAC'}), 400
+        return jsonify({'error': '背景支持 PNG/JPG/WebP，视频支持 MP4/MOV/M4V/WebM，音乐支持 MP3/WAV/M4A/AAC'}), 400
     file.seek(0, 2)
     size = file.tell()
     file.seek(0)
-    limit = 15 * 1024 * 1024 if kind == 'background' else 30 * 1024 * 1024
+    limit = 15 * 1024 * 1024 if kind == 'background' else (200 * 1024 * 1024 if kind.endswith('_video') else 30 * 1024 * 1024)
     if size <= 0 or size > limit:
         return jsonify({'error': f'素材文件不能为空且不能超过 {limit // 1024 // 1024}MB'}), 400
-    asset_path = UPLOAD_FOLDER / f"packaging_{kind}_{uuid.uuid4().hex}.{ext}"
+    safe_original = secure_filename(Path(file.filename).stem)[:48] or kind
+    asset_path = UPLOAD_FOLDER / f"packaging_{kind}_{uuid.uuid4().hex}__{safe_original}.{ext}"
     file.save(asset_path)
     if kind == 'background':
         try:
@@ -1679,7 +1713,47 @@ def upload_course_packaging_asset():
         except (UnidentifiedImageError, OSError):
             asset_path.unlink(missing_ok=True)
             return jsonify({'error': '背景图片无法识别或已损坏'}), 400
-    return jsonify({'success': True, 'asset_path': str(asset_path), 'kind': kind})
+    return jsonify({
+        'success': True,
+        'asset_path': str(asset_path),
+        'kind': kind,
+        'name': Path(file.filename).stem,
+    })
+
+
+@app.route('/api/course-packaging-assets')
+def list_course_packaging_assets():
+    """列出可复用的片头片尾音乐和本地视频素材。"""
+    kind = str(request.args.get('kind') or 'music').strip().lower()
+    allowed_kinds = {
+        'music': ALLOWED_PACKAGING_AUDIO_EXTENSIONS,
+        'intro_video': ALLOWED_PACKAGING_VIDEO_EXTENSIONS,
+        'outro_video': ALLOWED_PACKAGING_VIDEO_EXTENSIONS,
+    }
+    if kind not in allowed_kinds:
+        return jsonify({'error': '不支持的素材库类型'}), 400
+    assets = []
+    for path in sorted(UPLOAD_FOLDER.glob(f'packaging_{kind}_*'), key=lambda item: item.stat().st_mtime, reverse=True):
+        if path.is_file() and path.suffix.lower().lstrip('.') in allowed_kinds[kind]:
+            label = path.stem.split('__', 1)[-1].replace('_', ' ')
+            assets.append({
+                'name': label,
+                'path': str(path),
+                'url': url_for('serve_course_packaging_asset', filename=path.name),
+            })
+    return jsonify({'kind': kind, 'assets': assets})
+
+
+@app.route('/api/course-packaging-asset/<path:filename>')
+def serve_course_packaging_asset(filename):
+    """试听或预览已上传的受控包装素材。"""
+    if Path(filename).name != filename or not filename.startswith('packaging_'):
+        return jsonify({'error': '素材路径无效'}), 400
+    path = UPLOAD_FOLDER / filename
+    allowed = ALLOWED_PACKAGING_AUDIO_EXTENSIONS | ALLOWED_PACKAGING_VIDEO_EXTENSIONS
+    if not path.is_file() or path.suffix.lower().lstrip('.') not in allowed:
+        return jsonify({'error': '素材不存在'}), 404
+    return send_file(path, conditional=True)
 
 
 class WebProgressTracker:
@@ -4902,11 +4976,16 @@ if __name__ == '__main__':
     parser.description = 'AI Course Studio - Web Server'
     parser.add_argument('port', nargs='?', type=int, default=5000, help='端口号 (默认: 5000)')
     args = parser.parse_args()
-    resume_queued_tasks()
     debug_enabled = os.environ.get('VIDPPT_DEBUG', 'false').lower() == 'true'
+    reload_enabled = os.environ.get('VIDPPT_RELOAD', 'false').lower() == 'true'
+    # Werkzeug 重载器会先启动一个监控父进程，再启动真正提供服务的子进程。
+    # 只在服务进程恢复队列，避免开发模式下一项任务被父子进程重复入队。
+    if not reload_enabled or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        resume_queued_tasks()
     app.run(
         debug=debug_enabled,
-        use_reloader=False,
+        use_reloader=reload_enabled,
+        reloader_type='stat',
         threaded=True,
         host='0.0.0.0',
         port=args.port,

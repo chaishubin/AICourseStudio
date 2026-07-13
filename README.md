@@ -139,7 +139,21 @@ docker compose --env-file .env \
   up -d
 ```
 
-此模式下，前端模板、JS、CSS 修改后刷新浏览器即可生效；Python 后端修改后重启容器即可，无需重新构建镜像。
+此模式会把 `web/` 和 `vidppt/` 直接挂载进容器，并启用 Flask 自动重载：
+
+- HTML、JS、CSS 修改后刷新浏览器即可生效，开发模式会关闭静态资源缓存。
+- Python 修改后服务进程会自动重载，无需重启容器或重建镜像。
+- 修改 `pyproject.toml`、Dockerfile、系统字体或系统依赖时，仍需重新构建镜像。
+- 自动重载会中断正在执行的本地生成任务；长视频渲染期间应避免修改 Python 文件。
+
+查看自动重载日志：
+
+```bash
+docker compose --env-file .env \
+  -f docker/docker-compose.yml \
+  -f docker/docker-compose.dev.yml \
+  logs -f vidppt
+```
 
 ---
 
