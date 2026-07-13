@@ -18,6 +18,7 @@ import shutil
 import secrets
 import subprocess
 import tempfile
+import glob
 from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
@@ -148,6 +149,8 @@ TASK_DB_FILE = Path(os.environ.get(
     str(OUTPUT_FOLDER / 'tasks.db'),
 ))
 VOICE_PREVIEW_FOLDER = OUTPUT_FOLDER / 'voice_previews'
+RUNTIME_LOG_FOLDER = OUTPUT_FOLDER / '_system'
+RUNTIME_LOG_FILE = RUNTIME_LOG_FOLDER / 'vidppt-runtime.log'
 VOICE_PREVIEW_TEXT = "你好，欢迎使用 AI 课程工作室，这是当前音色的试听效果。"
 SUBTITLE_FONT_FALLBACKS = [
     'Noto Sans CJK SC',
@@ -197,6 +200,19 @@ RESOURCE_CHECK_INTERVAL = float(os.environ.get('VIDPPT_RESOURCE_CHECK_INTERVAL',
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 VOICE_PREVIEW_FOLDER.mkdir(parents=True, exist_ok=True)
+RUNTIME_LOG_FOLDER.mkdir(parents=True, exist_ok=True)
+
+# Web 进程的 Loguru 日志此前只写 stdout/stderr，管理员无法在页面内追溯。
+# 保留 7 天轮换文件，供只读调试工作台检索和下载。
+logger.add(
+    str(RUNTIME_LOG_FILE),
+    format='{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}',
+    level=os.environ.get('VIDPPT_LOG_LEVEL', 'INFO').upper(),
+    rotation='20 MB',
+    retention='7 days',
+    encoding='utf-8',
+    enqueue=True,
+)
 
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['OUTPUT_FOLDER'] = str(OUTPUT_FOLDER)
@@ -756,6 +772,121 @@ def _debug_env_status() -> list[dict]:
         'VIDPPT_TASK_DB',
     ]
     return [{'name': key, 'configured': bool(os.environ.get(key))} for key in keys]
+
+
+def _debug_diagnostics(all_tasks: list[dict], paths: dict, tools: list[dict], env_status: list[dict]) -> dict:
+    """把底层调试数据翻译成管理员可执行的诊断结论。"""
+    items = []
+    tool_map = {item['name']: item for item in tools}
+    missing_tools = [name for name in ('ffmpeg', 'ffprobe') if not tool_map.get(name, {}).get('available')]
+    office_available = any(tool_map.get(name, {}).get('available') for name in ('soffice', 'libreoffice'))
+    if missing_tools:
+        items.append({
+            'severity': 'error',
+            'title': '视频工具不可用',
+            'detail': f"缺少 {', '.join(missing_tools)}，视频合成或媒体检测会失败。",
+            'action': '检查容器镜像或服务器 PATH，安装后重新启动服务。',
+        })
+    if not office_available:
+        items.append({
+            'severity': 'error',
+            'title': 'PPT 渲染工具不可用',
+            'detail': '未检测到 LibreOffice，选择 LibreOffice 渲染时无法生成幻灯片图片。',
+            'action': '检查 LibreOffice 安装，并确认 soffice 命令可执行。',
+        })
+    required_path_names = {'upload_folder', 'output_folder', 'task_db_file', 'runtime_log_file'}
+    missing_paths = [
+        name for name, info in paths.items()
+        if name in required_path_names and not info.get('exists')
+    ]
+    if missing_paths:
+        items.append({
+            'severity': 'error',
+            'title': '关键存储路径异常',
+            'detail': f"以下路径不存在：{', '.join(missing_paths)}。",
+            'action': '检查目录挂载和读写权限，避免任务状态或产物丢失。',
+        })
+    failed_tasks = [task for task in all_tasks if task.get('status') in {'error', 'interrupted'}]
+    if failed_tasks:
+        items.append({
+            'severity': 'warning',
+            'title': f'存在 {len(failed_tasks)} 个异常任务',
+            'detail': '这些任务已失败或中断，不代表服务整体停止。',
+            'action': '在任务快照中点击异常任务，先查看错误信息，再按任务号过滤运行日志。',
+        })
+    configured = {item['name']: item['configured'] for item in env_status}
+    if not any(configured.get(name) for name in ('DASHSCOPE_API_KEY', 'MINIMAX_API_KEY', 'VOLCENGINE_TTS_APPID')):
+        items.append({
+            'severity': 'info',
+            'title': '未检测到云端生成服务配置',
+            'detail': 'AI 文本或云端语音能力可能不可用，本地基础转换不受影响。',
+            'action': '如需使用相关能力，请在服务环境变量中配置对应账号。',
+        })
+    if not items:
+        items.append({
+            'severity': 'success',
+            'title': '未发现明显异常',
+            'detail': '关键目录和基础工具均可用，当前没有失败或中断任务。',
+            'action': '无需处理；若用户仍反馈异常，可按任务号查看运行日志。',
+        })
+    rank = {'success': 0, 'info': 1, 'warning': 2, 'error': 3}
+    overall = max(items, key=lambda item: rank[item['severity']])['severity']
+    return {'status': overall, 'items': items}
+
+
+def _runtime_log_files() -> list[Path]:
+    """返回当前及轮换日志，按时间从旧到新排列。"""
+    candidates = [Path(path) for path in glob.glob(str(RUNTIME_LOG_FOLDER / 'vidppt-runtime*.log'))]
+    return sorted(
+        (path for path in candidates if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+
+_LOG_SECRET_PATTERN = re.compile(
+    r'''(?i)((?:["']?(?:api[_-]?key|access[_-]?token|secret(?:[_-]?key)?|password|authorization|token)["']?\s*[:=]\s*["']?))([^"'\s,;}]+)'''
+)
+_LOG_BEARER_PATTERN = re.compile(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+')
+_LOG_PROVIDER_TOKEN_PATTERN = re.compile(r'\bsk-[A-Za-z0-9_-]{12,}\b')
+
+
+def _redact_log_text(value: str) -> str:
+    text = _LOG_SECRET_PATTERN.sub(r'\1[已隐藏]', str(value))
+    text = _LOG_BEARER_PATTERN.sub(r'\1[已隐藏]', text)
+    return _LOG_PROVIDER_TOKEN_PATTERN.sub('[已隐藏]', text)
+
+
+def _read_runtime_log_lines(limit: int = 1000, keyword: str = '', level: str = '', task_id: str = '') -> dict:
+    """读取运行日志尾部；下载接口可输出全部轮换文件。"""
+    limit = max(1, min(limit, 5000))
+    matched = []
+    total_matched = 0
+    keyword_lower = keyword.lower()
+    level_marker = f'| {level.upper()}' if level else ''
+    for path in _runtime_log_files():
+        try:
+            with path.open('r', encoding='utf-8', errors='replace') as stream:
+                for raw_line in stream:
+                    line = _redact_log_text(raw_line.rstrip('\n'))
+                    lower = line.lower()
+                    if keyword_lower and keyword_lower not in lower:
+                        continue
+                    if task_id and task_id.lower() not in lower:
+                        continue
+                    if level_marker and level_marker not in line.upper():
+                        continue
+                    total_matched += 1
+                    matched.append(line)
+                    if len(matched) > limit:
+                        matched.pop(0)
+        except OSError:
+            continue
+    return {
+        'lines': matched,
+        'matched_count': total_matched,
+        'truncated': total_matched > len(matched),
+        'files': len(_runtime_log_files()),
+    }
 
 
 class ConversionQueue:
@@ -2147,6 +2278,7 @@ class WebProgressTracker:
             'stage_percentage': 0,
             'message': message
         })
+        logger.info(f'task={self.task_id} stage={stage} message={message or "开始处理"}')
 
     def complete(self, video_path: str = None, **artifacts):
         """标记完成"""
@@ -2173,6 +2305,7 @@ class WebProgressTracker:
         }
         event.update(artifacts)
         self.queue.put(event)
+        logger.info(f'task={self.task_id} stage=complete video={video_path or "-"}')
 
     def preview_ready(self, preview_path: str, **artifacts):
         """暂停任务并通知前端进入逐页讲稿确认阶段。"""
@@ -2191,6 +2324,7 @@ class WebProgressTracker:
             'message': '预览已生成，请确认逐页讲稿',
             **artifacts,
         })
+        logger.info(f'task={self.task_id} stage=preview status=awaiting_confirmation')
 
     def error(self, error_msg: str):
         """标记错误"""
@@ -2205,6 +2339,7 @@ class WebProgressTracker:
             'type': 'error',
             'message': error_msg
         })
+        logger.error(f'task={self.task_id} stage={self.current_stage or "unknown"} error={error_msg}')
 
     def rollback(self, error_msg: str, failed_stage: str):
         """媒体阶段失败时回到讲稿确认，不丢弃已完成的中间产物。"""
@@ -2227,6 +2362,7 @@ class WebProgressTracker:
             'course_json_path': task.get('course_json_path'),
             'presentation_path': task.get('presentation_path'),
         })
+        logger.warning(f'task={self.task_id} stage={failed_stage} rollback error={error_msg}')
 
 
 def run_conversion(task_id: str, file_path: str, output_dir: Path,
@@ -2381,8 +2517,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         progress.preview_ready(str(preview_path))
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f'task={task_id} PPT 转换失败')
         progress.error(str(e))
 
 
@@ -2502,8 +2637,7 @@ def run_course_generation(
             presentation_path=str(result.presentation),
         )
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f'task={task_id} 教案课程生成失败')
         progress.error(str(e))
 
 
@@ -3307,12 +3441,10 @@ def run_media_generation(task_id: str):
             video_segments=segment_artifacts,
         )
     except InterruptedError as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f'task={task_id} 媒体生成已中断')
         progress.rollback(str(e), '生成已停止')
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f'task={task_id} 媒体生成失败')
         failed_stage = (
             '视频合成' if progress.current_stage == 'video' else '配音生成'
         )
@@ -3366,8 +3498,7 @@ def run_render_only(task_id: str, file_path: str, output_dir: Path,
         })
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f'task={task_id} 幻灯片渲染失败')
         tasks[task_id]['status'] = 'error'
         tasks[task_id]['error'] = str(e)
         save_state(task_id)
@@ -4623,19 +4754,24 @@ def debug_overview():
     for task in all_tasks:
         status = task.get('status') or 'unknown'
         counts[status] = counts.get(status, 0) + 1
+    paths = {
+        'upload_folder': _path_info(UPLOAD_FOLDER),
+        'output_folder': _path_info(OUTPUT_FOLDER),
+        'state_file': _path_info(STATE_FILE),
+        'task_db_file': _path_info(TASK_DB_FILE),
+        'voice_preview_folder': _path_info(VOICE_PREVIEW_FOLDER),
+        'runtime_log_file': _path_info(RUNTIME_LOG_FILE),
+    }
+    env_status = _debug_env_status()
+    tools = _debug_tool_status()
     return jsonify({
         'tasks': _redact_debug_value(all_tasks),
         'counts': counts,
         'queue_size': conversion_queue.size(),
         'progress_queue_count': len(progress_queues),
         'cancellation_event_count': len(cancellation_events),
-        'paths': {
-            'upload_folder': _path_info(UPLOAD_FOLDER),
-            'output_folder': _path_info(OUTPUT_FOLDER),
-            'state_file': _path_info(STATE_FILE),
-            'task_db_file': _path_info(TASK_DB_FILE),
-            'voice_preview_folder': _path_info(VOICE_PREVIEW_FOLDER),
-        },
+        'paths': paths,
+        'diagnostics': _debug_diagnostics(all_tasks, paths, tools, env_status),
         'environment': {
             'dashboard_enabled': DASHBOARD_ENABLED,
             'login_disabled': bool(app.config.get('LOGIN_DISABLED')),
@@ -4645,8 +4781,8 @@ def debug_overview():
                 'min_disk_gb': RESOURCE_MIN_DISK_GB,
                 'check_interval_seconds': RESOURCE_CHECK_INTERVAL,
             },
-            'env_status': _debug_env_status(),
-            'tools': _debug_tool_status(),
+            'env_status': env_status,
+            'tools': tools,
         },
     })
 
@@ -4715,8 +4851,56 @@ def debug_logs():
         ]
     return jsonify({
         'logs': logs,
-        'note': '此处显示应用操作日志；容器 stdout/stderr 仍通过 docker logs 查看，避免调试页直接控制 Docker。',
+        'note': '此处是账号操作审计；下方“完整运行日志”用于查看任务处理和服务异常。',
     })
+
+
+@app.route('/api/debug/runtime-logs')
+def debug_runtime_logs():
+    """检索或下载 Web 进程持久化运行日志。"""
+    blocked = _require_super_admin()
+    if blocked:
+        return blocked
+    keyword = (request.args.get('q') or '').strip()
+    task_id = (request.args.get('task_id') or '').strip()
+    level = (request.args.get('level') or '').strip().upper()
+    if level not in {'', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}:
+        return jsonify({'error': '不支持的日志级别'}), 400
+    if request.args.get('download') == '1':
+        files = _runtime_log_files()
+
+        def generate():
+            for path in files:
+                yield f'===== {path.name} =====\n'
+                try:
+                    with path.open('r', encoding='utf-8', errors='replace') as stream:
+                        for raw_line in stream:
+                            line = _redact_log_text(raw_line.rstrip('\n'))
+                            lower = line.lower()
+                            if keyword and keyword.lower() not in lower:
+                                continue
+                            if task_id and task_id.lower() not in lower:
+                                continue
+                            if level and f'| {level}' not in line.upper():
+                                continue
+                            yield f'{line}\n'
+                except OSError as exc:
+                    yield f'[日志文件读取失败：{exc}]\n'
+
+        response = Response(generate(), mimetype='text/plain; charset=utf-8')
+        response.headers['Content-Disposition'] = 'attachment; filename="vidppt-runtime-full.log"'
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    try:
+        limit = int(request.args.get('limit', 1000))
+    except (TypeError, ValueError):
+        limit = 1000
+    payload = _read_runtime_log_lines(limit, keyword, level, task_id)
+    payload.update({
+        'log_path': str(RUNTIME_LOG_FILE),
+        'note': '页面显示最近匹配的日志；“下载完整日志”会输出保留期内所有轮换日志，并应用当前筛选条件。',
+    })
+    return jsonify(payload)
 
 
 @app.route('/api/active-task')

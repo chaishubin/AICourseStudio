@@ -8,6 +8,16 @@ class DebugWorkbench {
         this.logNote = document.getElementById('debug-log-note');
         this.logSearch = document.getElementById('debug-log-search');
         this.refreshBtn = document.getElementById('debug-refresh-btn');
+        this.diagnostics = document.getElementById('debug-diagnostics');
+        this.healthBadge = document.getElementById('debug-health-badge');
+        this.runtimeOutput = document.getElementById('debug-runtime-output');
+        this.runtimeNote = document.getElementById('debug-runtime-note');
+        this.runtimeSearch = document.getElementById('debug-runtime-search');
+        this.runtimeTask = document.getElementById('debug-runtime-task');
+        this.runtimeLevel = document.getElementById('debug-runtime-level');
+        this.runtimeRefresh = document.getElementById('debug-runtime-refresh');
+        this.runtimeCopy = document.getElementById('debug-runtime-copy');
+        this.runtimeDownload = document.getElementById('debug-runtime-download');
         this.selectedTaskId = null;
         this.init();
     }
@@ -15,8 +25,14 @@ class DebugWorkbench {
     init() {
         this.refreshBtn?.addEventListener('click', () => this.loadOverview());
         this.logSearch?.addEventListener('input', () => this.loadLogs());
+        this.runtimeRefresh?.addEventListener('click', () => this.loadRuntimeLogs());
+        this.runtimeSearch?.addEventListener('input', () => this.loadRuntimeLogs());
+        this.runtimeTask?.addEventListener('input', () => this.loadRuntimeLogs());
+        this.runtimeLevel?.addEventListener('change', () => this.loadRuntimeLogs());
+        this.runtimeCopy?.addEventListener('click', () => this.copyRuntimeLogs());
         this.loadOverview();
         this.loadLogs();
+        this.loadRuntimeLogs();
     }
 
     async loadOverview() {
@@ -26,6 +42,7 @@ class DebugWorkbench {
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '读取调试概览失败');
             this.renderMetrics(data);
+            this.renderDiagnostics(data.diagnostics || {});
             this.renderTasks(data.tasks || []);
             this.renderEnvironment(data);
             if (this.selectedTaskId) this.loadTask(this.selectedTaskId);
@@ -43,6 +60,20 @@ class DebugWorkbench {
         this.setText('debug-review', counts.awaiting_confirmation || 0);
         this.setText('debug-progress-queues', data.progress_queue_count || 0);
         this.setText('debug-queue-size', data.queue_size || 0);
+    }
+
+    renderDiagnostics(diagnostics) {
+        const items = diagnostics.items || [];
+        const labels = { success: '运行正常', info: '请注意', warning: '建议处理', error: '需要处理' };
+        const status = diagnostics.status || 'info';
+        this.healthBadge.textContent = labels[status] || '请检查';
+        this.healthBadge.className = `debug-health-badge debug-health-${status}`;
+        this.diagnostics.innerHTML = items.map(item => `
+            <article class="debug-diagnostic debug-diagnostic-${this.escapeAttr(item.severity || 'info')}">
+                <span class="debug-diagnostic-icon">${item.severity === 'success' ? '✓' : item.severity === 'error' ? '!' : 'i'}</span>
+                <div><strong>${this.escape(item.title || '诊断提示')}</strong><p>${this.escape(item.detail || '')}</p><small>建议：${this.escape(item.action || '无需处理')}</small></div>
+            </article>
+        `).join('') || '<div class="debug-empty">暂无诊断结论</div>';
     }
 
     renderTasks(tasks) {
@@ -114,6 +145,8 @@ class DebugWorkbench {
 
     async loadTask(taskId) {
         this.selectedTaskId = taskId;
+        if (this.runtimeTask) this.runtimeTask.value = taskId;
+        this.loadRuntimeLogs();
         this.detailTitle.textContent = taskId;
         this.detail.innerHTML = '<div class="debug-empty">正在读取任务详情...</div>';
         this.taskBody?.querySelectorAll('[data-task-id]').forEach(row => {
@@ -133,7 +166,28 @@ class DebugWorkbench {
         const paths = data.paths || {};
         const files = data.output_files || [];
         const artifact = data.json_artifacts || {};
+        const task = data.task || {};
+        const status = this.statusText(task.status);
+        const issue = task.error || task.message || '未记录异常信息';
+        const nextStep = task.status === 'error'
+            ? '先查看下方运行日志中的 ERROR，再检查缺失文件或外部服务配置。'
+            : task.status === 'interrupted'
+                ? '确认是否由管理员停止或服务重启；如需继续，请回到生产工作台重新提交。'
+                : task.status === 'awaiting_confirmation'
+                    ? '任务正在等待内容审核，不是系统故障。'
+                    : '当前无需人工处理；如进度长时间不变，可按任务 ID 查看运行日志。';
         this.detail.innerHTML = `
+            <div class="debug-detail-section">
+                <h4>管理员摘要</h4>
+                <div class="debug-admin-summary">
+                    <div><span>当前状态</span><strong>${this.escape(status)}</strong></div>
+                    <div><span>当前阶段</span><strong>${this.escape(this.stageText(task.stage))}</strong></div>
+                    <div class="debug-summary-wide"><span>系统信息</span><strong>${this.escape(issue)}</strong></div>
+                    <div class="debug-summary-wide"><span>处理建议</span><strong>${this.escape(nextStep)}</strong></div>
+                </div>
+            </div>
+            <details class="debug-technical-details">
+                <summary>展开技术详情（路径、原始状态与 JSON）</summary>
             <div class="debug-detail-section">
                 <h4>关键路径</h4>
                 <div class="debug-kv-list">
@@ -165,6 +219,7 @@ class DebugWorkbench {
                 <h4>输出文件</h4>
                 ${this.renderFiles(files)}
             </div>
+            </details>
         `;
     }
 
@@ -232,6 +287,47 @@ class DebugWorkbench {
         `).join('');
     }
 
+    runtimeParams(includeDownload = false) {
+        const params = new URLSearchParams({ limit: '1000' });
+        const keyword = (this.runtimeSearch?.value || '').trim();
+        const taskId = (this.runtimeTask?.value || '').trim();
+        const level = this.runtimeLevel?.value || '';
+        if (keyword) params.set('q', keyword);
+        if (taskId) params.set('task_id', taskId);
+        if (level) params.set('level', level);
+        if (includeDownload) params.set('download', '1');
+        return params;
+    }
+
+    async loadRuntimeLogs() {
+        if (!this.runtimeOutput) return;
+        this.runtimeRefresh.disabled = true;
+        try {
+            const params = this.runtimeParams();
+            const response = await fetch(`/api/debug/runtime-logs?${params.toString()}`);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '读取运行日志失败');
+            this.runtimeOutput.textContent = (data.lines || []).join('\n') || '暂无匹配的运行日志。';
+            const shown = (data.lines || []).length;
+            const prefix = data.truncated ? `共匹配 ${data.matched_count} 行，页面显示最近 ${shown} 行。` : `共匹配 ${data.matched_count} 行。`;
+            this.runtimeNote.textContent = `${prefix} ${data.note || ''}`;
+            this.runtimeDownload.href = `/api/debug/runtime-logs?${this.runtimeParams(true).toString()}`;
+        } catch (error) {
+            this.runtimeOutput.textContent = error.message;
+        } finally {
+            this.runtimeRefresh.disabled = false;
+        }
+    }
+
+    async copyRuntimeLogs() {
+        try {
+            await navigator.clipboard.writeText(this.runtimeOutput?.textContent || '');
+            window.VidPPTUI?.toast('当前日志已复制', { type: 'success' });
+        } catch (error) {
+            window.VidPPTUI?.toast('复制失败，请手动选择日志文本', { type: 'error' });
+        }
+    }
+
     statusText(status) {
         const labels = {
             queued: '排队中',
@@ -243,6 +339,16 @@ class DebugWorkbench {
             interrupted: '已中断'
         };
         return labels[status] || status || '-';
+    }
+
+    stageText(stage) {
+        const labels = {
+            queue: '等待资源', extract: '提取内容', analyze: '分析内容',
+            course: '生成课程', render: '渲染幻灯片', tts: '生成语音',
+            subtitle: '生成字幕', video: '合成视频', packaging: '课程包装',
+            review: '内容审核', completed: '已完成'
+        };
+        return labels[stage] || stage || '未开始';
     }
 
     setText(id, value) {

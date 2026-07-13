@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>调试工作台 - AI Course Studio</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=22">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=23">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -96,9 +96,19 @@
                     </article>
                 </section>
 
+                <section class="card management-card debug-diagnostics-card">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">管理员诊断</span><h3>当前是否需要处理</h3></div>
+                        <span id="debug-health-badge" class="debug-health-badge">正在检查</span>
+                    </div>
+                    <div id="debug-diagnostics" class="debug-diagnostics-list">
+                        <div class="debug-empty">正在汇总任务、工具和存储状态...</div>
+                    </div>
+                </section>
+
                 <section class="card management-card">
                     <div class="section-heading">
-                        <div><span class="section-kicker">任务快照</span><h3>任务状态与产物路径</h3></div>
+                        <div><span class="section-kicker">任务快照</span><h3>任务状态与产物</h3><p class="debug-heading-help">点击任务可查看错误、文件和技术详情。</p></div>
                         <button id="debug-refresh-btn" class="btn-secondary" type="button">刷新</button>
                     </div>
                     <div class="management-table-wrap">
@@ -121,13 +131,13 @@
                 <section class="debug-grid">
                     <article class="card debug-panel">
                         <div class="section-heading">
-                            <div><span class="section-kicker">单任务详情</span><h3 id="debug-detail-title">选择一个任务查看详情</h3></div>
+                            <div><span class="section-kicker">单任务详情</span><h3 id="debug-detail-title">选择一个任务查看详情</h3><p class="debug-heading-help">优先查看“管理员摘要”，原始数据供技术排查使用。</p></div>
                         </div>
                         <div id="debug-task-detail" class="debug-empty">从上方任务列表点击任意一行。</div>
                     </article>
                     <article class="card debug-panel">
                         <div class="section-heading">
-                            <div><span class="section-kicker">运行环境</span><h3>路径、工具与配置</h3></div>
+                            <div><span class="section-kicker">运行环境</span><h3>路径、工具与配置</h3><p class="debug-heading-help">只显示是否可用，不显示密钥内容。</p></div>
                         </div>
                         <div id="debug-environment" class="debug-kv-list"></div>
                     </article>
@@ -135,7 +145,7 @@
 
                 <section class="card management-card debug-log-card">
                     <div class="section-heading">
-                        <div><span class="section-kicker">最近日志</span><h3>浏览器可见操作记录</h3></div>
+                        <div><span class="section-kicker">操作审计</span><h3>账号操作记录</h3><p class="debug-heading-help">用于追查谁在什么时间做了什么，不等同于程序运行日志。</p></div>
                         <label class="debug-search">
                             <span>过滤</span>
                             <input id="debug-log-search" class="select-input" type="search" placeholder="task_id / 操作 / 账号 / IP">
@@ -158,12 +168,34 @@
                         </table>
                     </div>
                 </section>
+
+                <section class="card management-card debug-runtime-log-card">
+                    <div class="section-heading debug-runtime-heading">
+                        <div>
+                            <span class="section-kicker">完整运行日志</span>
+                            <h3>任务处理与服务异常</h3>
+                            <p class="debug-heading-help">日志从本次版本启动后持续写入，保留 7 天并自动轮换。</p>
+                        </div>
+                        <div class="debug-log-actions">
+                            <button id="debug-runtime-refresh" class="btn-secondary" type="button">刷新日志</button>
+                            <button id="debug-runtime-copy" class="btn-secondary" type="button">复制当前结果</button>
+                            <a id="debug-runtime-download" class="btn-primary-link" href="/api/debug/runtime-logs?download=1">下载完整日志</a>
+                        </div>
+                    </div>
+                    <div class="debug-runtime-filters">
+                        <label class="debug-search"><span>关键词</span><input id="debug-runtime-search" class="select-input" type="search" placeholder="错误内容 / 文件名 / 模块"></label>
+                        <label class="debug-search"><span>任务 ID</span><input id="debug-runtime-task" class="select-input" type="search" placeholder="点击任务后自动带入"></label>
+                        <label class="debug-search"><span>日志级别</span><select id="debug-runtime-level" class="select-input"><option value="">全部级别</option><option value="INFO">信息</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="CRITICAL">严重错误</option></select></label>
+                    </div>
+                    <div id="debug-runtime-note" class="debug-note"></div>
+                    <pre id="debug-runtime-output" class="debug-json debug-runtime-output">正在读取运行日志...</pre>
+                </section>
             </main>
             <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
         </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/debug.js') }}?v=2"></script>
+    <script src="{{ url_for('static', filename='js/debug.js') }}?v=3"></script>
 </body>
 </html>

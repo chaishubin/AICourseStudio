@@ -1636,10 +1636,13 @@ def test_management_pages_are_separate_from_course_workspace():
     assert 'js/admin_pages.js' in logs_page
     assert 'id="debug-task-body"' in debug_page
     assert 'id="debug-task-detail"' in debug_page
+    assert 'id="debug-diagnostics"' in debug_page
+    assert 'id="debug-runtime-output"' in debug_page
+    assert '下载完整日志' in debug_page
     assert 'IP 地址' in debug_page
     assert 'id="upload-area"' not in debug_page
     assert 'js/debug.js' in debug_page
-    assert '/static/js/debug.js?v=2' in debug_page
+    assert '/static/js/debug.js?v=3' in debug_page
 
 
 def test_accounts_page_is_separate_admin_page():
@@ -1705,6 +1708,55 @@ def test_debug_logs_can_filter_by_ip_address():
     assert response.status_code == 200
     assert len(logs) == 1
     assert logs[0]["ip_address"] == "203.0.113.21"
+
+
+def test_debug_runtime_logs_are_filterable_and_redacted(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    log_file = temp_dir / 'vidppt-runtime.log'
+    log_file.write_text(
+        '2026-07-13 10:00:00.000 | INFO     | web.app - task=task-a started\n'
+        '2026-07-13 10:00:01.000 | ERROR    | web.app - task=task-b api_key=secret-value failed\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(web_app, '_runtime_log_files', lambda: [log_file])
+
+    response = web_app.app.test_client().get(
+        '/api/debug/runtime-logs?task_id=task-b&level=ERROR'
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload['matched_count'] == 1
+    assert 'task-b' in payload['lines'][0]
+    assert 'secret-value' not in payload['lines'][0]
+    assert 'api_key=[已隐藏]' in payload['lines'][0]
+
+    downloaded = web_app.app.test_client().get(
+        '/api/debug/runtime-logs?task_id=task-b&download=1'
+    )
+    downloaded_text = downloaded.get_data(as_text=True)
+    assert downloaded.status_code == 200
+    assert 'attachment; filename="vidppt-runtime-full.log"' in downloaded.headers['Content-Disposition']
+    assert 'task-b' in downloaded_text
+    assert 'secret-value' not in downloaded_text
+
+
+def test_debug_overview_includes_admin_diagnostics(monkeypatch):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, '_debug_tool_status', lambda: [
+        {'name': 'ffmpeg', 'path': '/usr/bin/ffmpeg', 'available': True},
+        {'name': 'ffprobe', 'path': '/usr/bin/ffprobe', 'available': True},
+        {'name': 'soffice', 'path': '/usr/bin/soffice', 'available': True},
+        {'name': 'libreoffice', 'path': None, 'available': False},
+    ])
+    response = web_app.app.test_client().get('/api/debug/overview')
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload['diagnostics']['status'] in {'success', 'info', 'warning', 'error'}
+    assert payload['diagnostics']['items'][0]['action']
 
 
 def test_debug_task_detail_reads_artifacts(monkeypatch, temp_dir):
