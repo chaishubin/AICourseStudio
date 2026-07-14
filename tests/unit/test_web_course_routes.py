@@ -10,6 +10,38 @@ from types import SimpleNamespace
 from PIL import Image
 
 
+def test_render_only_keeps_rendered_status_after_final_progress(monkeypatch, temp_dir):
+    import web.app as web_app
+    from vidppt.core import registry
+
+    task_id = "render-only-task"
+    queue = Queue()
+    monkeypatch.setattr(web_app, "tasks", {task_id: {"status": "pending"}})
+    monkeypatch.setattr(web_app, "progress_queues", {task_id: queue})
+    monkeypatch.setattr(web_app, "save_state", lambda _task_id: None)
+
+    class Processor:
+        def render_pages(self, _config):
+            return [temp_dir / "1" / "slide.png"]
+
+    monkeypatch.setattr(
+        registry.ProcessorRegistry,
+        "get_processor",
+        lambda _path: Processor,
+    )
+
+    web_app.run_render_only(
+        task_id,
+        str(temp_dir / "source.pptx"),
+        temp_dir / task_id,
+        "libreoffice",
+    )
+
+    assert web_app.tasks[task_id]["status"] == "rendered"
+    assert web_app.tasks[task_id]["slide_count"] == 1
+    assert any(event.get("type") == "rendered" for event in list(queue.queue))
+
+
 def test_upload_accepts_docx_and_uses_safe_disk_name(monkeypatch, temp_dir):
     import web.app as web_app
 
@@ -28,6 +60,23 @@ def test_upload_accepts_docx_and_uses_safe_disk_name(monkeypatch, temp_dir):
     assert stored.parent == temp_dir
     assert stored.suffix == ".docx"
     assert stored.exists()
+
+
+def test_upload_accepts_epub_and_uses_safe_disk_name(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    monkeypatch.setattr(web_app, "UPLOAD_FOLDER", temp_dir)
+    client = web_app.app.test_client()
+    response = client.post(
+        "/api/upload",
+        data={"file": (io.BytesIO(b"epub-content"), "课程.epub")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["original_name"] == "课程.epub"
+    assert Path(payload["file_path"]).suffix == ".epub"
 
 
 def test_logo_upload_accepts_image_and_rejects_fake_image(monkeypatch, temp_dir):
@@ -80,6 +129,8 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
             "voice": "zh_female_cancan_mars_bigtts",
             "llm_enabled": True,
             "llm_engine": "qwen",
+            "narration_style": "case",
+            "target_duration_minutes": 15,
             "quality_mode": "balanced",
             "visual_theme": "technology",
             "burn_subtitles": False,
@@ -104,6 +155,8 @@ def test_convert_dispatches_docx_to_course_pipeline(monkeypatch, temp_dir):
     assert web_app.tasks[task_id]["course_name"] == "自定义课程名"
     assert web_app.tasks[task_id]["strategy"]["burn_subtitles"] is False
     assert web_app.tasks[task_id]["strategy"]["quality_mode"] == "balanced"
+    assert web_app.tasks[task_id]["strategy"]["narration_style"] == "case"
+    assert web_app.tasks[task_id]["strategy"]["target_duration_minutes"] == 15
     assert web_app.tasks[task_id]["strategy"]["subtitle_y"] == 940
     assert web_app.tasks[task_id]["strategy"]["subtitle_font_size"] == 48
     assert web_app.tasks[task_id]["strategy"]["video_width"] == 1280
@@ -1564,7 +1617,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=42' in html
+    assert '/static/js/main.js?v=45' in html
 
 
 def test_course_packaging_has_a_separate_design_page():

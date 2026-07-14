@@ -55,17 +55,36 @@ REFINEMENT_INSTRUCTIONS = {
     "strong": "高度精炼：只保留核心结论、关键依据和必要过渡，讲稿简洁有力。",
 }
 
+NARRATION_STYLE_INSTRUCTIONS = {
+    "faithful": "原稿保真：保持原文表达顺序，只做必要的口语化整理，不新增例子。",
+    "lecture": (
+        "教师讲授：不要逐句复述原文或机械朗读页面要点。先讲清结论，再解释原因、关系或方法；"
+        "可用一个贴近原文的解释性例子帮助理解，并用自然过渡衔接前后页。"
+    ),
+    "plain": "通俗解释：用容易理解的语言解释专业内容，必要时使用类比，但保留专业术语和准确含义。",
+    "case": "案例引导：优先用问题或简短情境引出知识点，再回到原文结论；不得虚构具体数据、政策或事实。",
+    "micro": "简洁微课：开门见山说明本页核心结论，只保留必要解释和过渡，避免寒暄与重复总结。",
+}
+
 
 class CourseBuilder:
     def __init__(
         self,
         llm_engine: Optional[LLMEngine] = None,
         refinement_level: str = "standard",
+        narration_style: str = "lecture",
+        target_duration_minutes: int = 0,
     ):
         self.llm_engine = llm_engine
         if refinement_level not in REFINEMENT_INSTRUCTIONS:
             raise ValueError(f"不支持的精炼程度: {refinement_level}")
         self.refinement_level = refinement_level
+        if narration_style not in NARRATION_STYLE_INSTRUCTIONS:
+            raise ValueError(f"不支持的讲解风格: {narration_style}")
+        if target_duration_minutes < 0 or target_duration_minutes > 180:
+            raise ValueError("目标时长必须在 0 到 180 分钟之间")
+        self.narration_style = narration_style
+        self.target_duration_minutes = target_duration_minutes
 
     def build(
         self,
@@ -77,7 +96,21 @@ class CourseBuilder:
             prompt_parts = [
                 COURSE_PROMPT,
                 REFINEMENT_INSTRUCTIONS[self.refinement_level],
+                NARRATION_STYLE_INSTRUCTIONS[self.narration_style],
+                (
+                    "口播稿负责解释页面要点之间的关系，不要逐项念标题和项目符号。"
+                    "专业术语、法规条款、公式、数字和结论必须忠于原文；"
+                    "不得增加原文无依据的事实。每页只讲本页内容，避免与相邻页重复。"
+                ),
             ]
+            if self.target_duration_minutes:
+                minimum = self.target_duration_minutes * 220
+                maximum = self.target_duration_minutes * 260
+                prompt_parts.append(
+                    f"整套课程口播目标约 {self.target_duration_minutes} 分钟，"
+                    f"全部页面讲稿合计控制在约 {minimum}-{maximum} 个汉字；"
+                    "按各页知识量合理分配，不要平均硬凑字数。"
+                )
             if reserve_subtitle_area:
                 prompt_parts.append(SUBTITLE_SAFE_AREA_PROMPT)
             raw = self.llm_engine.summarize(
@@ -166,7 +199,7 @@ class CourseBuilder:
                     title=source.title,
                     section_title=source.title,
                     bullets=bullets,
-                    script="。".join(bullet.rstrip("。") for bullet in bullets) + "。",
+                    script=_build_offline_narration(source.title, bullets),
                     notes=source.text,
                     knowledge_points=[
                         KnowledgePoint(
@@ -185,6 +218,23 @@ class CourseBuilder:
             source_path=document.source_path,
             metadata={"generator": "draft"},
         )
+
+
+def _build_offline_narration(title: str, bullets: list[str]) -> str:
+    """无模型时生成可听的讲授草稿，避免把页面项目符号直接拼成逐字稿。"""
+    if not bullets:
+        return f"这一部分我们重点理解{title}。"
+    lead = f"这一部分我们来理解{title}。"
+    if len(bullets) == 1:
+        return f"{lead}核心是{bullets[0].rstrip('。')}。理解这一点，有助于把握本节的主要内容。"
+    middle = "；".join(
+        f"{label}{bullet.rstrip('。')}"
+        for label, bullet in zip(
+            ("首先，", "其次，", "接着，", "同时，", "最后，", "还需要注意，"),
+            bullets,
+        )
+    )
+    return f"{lead}{middle}。这些内容相互关联，需要结合起来理解。"
 
 
 def _extract_json(raw: str) -> str:

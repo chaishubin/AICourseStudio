@@ -36,13 +36,17 @@ class CoursePipeline:
         self,
         llm_engine: Optional[LLMEngine] = None,
         refinement_level: str = "standard",
+        narration_style: str = "lecture",
+        target_duration_minutes: int = 0,
         illustration_generator=None,
         max_illustrations: int = 3,
         footer_text: str = "AI COURSE STUDIO",
         logo_path: Optional[Path] = None,
         visual_theme: str = "auto",
     ):
-        self.builder = CourseBuilder(llm_engine, refinement_level)
+        self.builder = CourseBuilder(
+            llm_engine, refinement_level, narration_style, target_duration_minutes
+        )
         self.pptx_renderer = PPTXRenderer()
         self.subtitle_renderer = SubtitleRenderer()
         self.illustration_generator = illustration_generator

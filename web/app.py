@@ -153,7 +153,7 @@ if DASHBOARD_ENABLED:
 # 配置
 UPLOAD_FOLDER = Path(__file__).parent / 'uploads'
 OUTPUT_FOLDER = Path(__file__).parent / 'outputs'
-ALLOWED_EXTENSIONS = {'docx', 'pdf', 'ppt', 'pptx'}
+ALLOWED_EXTENSIONS = {'docx', 'pdf', 'epub', 'ppt', 'pptx'}
 ALLOWED_LOGO_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 ALLOWED_PACKAGING_AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'aac'}
 ALLOWED_PACKAGING_VIDEO_EXTENSIONS = {'mp4', 'mov', 'm4v', 'webm'}
@@ -1729,7 +1729,14 @@ def load_state():
                     error='任务执行被服务重启中断',
                 )
                 status = 'interrupted'
-        if status in ('queued', 'awaiting_confirmation', 'completed', 'error', 'interrupted'):
+        if status in (
+            'queued',
+            'awaiting_confirmation',
+            'rendered',
+            'completed',
+            'error',
+            'interrupted',
+        ):
             tasks[task_id] = entry
 
 
@@ -2384,6 +2391,7 @@ class WebProgressTracker:
             percentage=50,
             message='预览已生成，请确认逐页讲稿',
             preview_path=preview_path,
+            stop_requested=False,
             **artifacts,
         )
         self.queue.put({
@@ -2445,6 +2453,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
         return
 
     progress = WebProgressTracker(task_id, queue)
+    cancel_event = cancellation_events.setdefault(task_id, threading.Event())
 
     try:
         # 1. 初始化
@@ -2519,7 +2528,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                 logger.warning(f'提取 PPT 讲解焦点候选失败: {exc}')
 
         # 4c. LLM 文本摘要
-        if llm_enabled:
+        if llm_enabled and not cancel_event.is_set():
             progress.set_stage('llm', 'LLM 文本摘要...')
 
             llm_provider = pipeline.llm_engine
@@ -2542,6 +2551,8 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                 original_texts = [page.text for page in content.pages]
                 previous_script = ""
                 for i, page in enumerate(content.pages, 1):
+                    if cancel_event.is_set():
+                        break
                     if not page.text or not page.text.strip():
                         progress.update('llm', i, total_pages, f'第 {i} 页无文本，跳过')
                         continue
@@ -2581,12 +2592,14 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                             + refinement_prompt + focus_instruction
                         ),
                     )
+                    if cancel_event.is_set():
+                        break
                     page.text, page.metadata['focus_cues'] = _parse_page_focus_response(
                         raw_summary
                     )
                     previous_script = page.text
                     progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
-            elif llm_mode == "whole-document":
+            elif llm_mode == "whole-document" and not cancel_event.is_set():
                 pages_text = [page.text for page in content.pages]
                 summary = llm_provider.summarize_document(pages_text)
                 content.pages[0].text = summary
@@ -2594,7 +2607,8 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     page.text = ""
                 progress.update('llm', total_pages, total_pages, '整文档摘要完成')
 
-            progress.update('llm', total_pages, total_pages, '文本摘要完成')
+            if not cancel_event.is_set():
+                progress.update('llm', total_pages, total_pages, '文本摘要完成')
 
         preview_path = _write_preview(
             task_id,
@@ -2620,12 +2634,15 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                 for page in content.pages
             ],
         )
-        _auto_review_preview(task_id)
+        if not cancel_event.is_set():
+            _auto_review_preview(task_id)
         progress.preview_ready(str(preview_path))
 
     except Exception as e:
         logger.exception(f'task={task_id} PPT 转换失败')
         progress.error(str(e))
+    finally:
+        cancellation_events.pop(task_id, None)
 
 
 def run_course_generation(
@@ -2638,6 +2655,8 @@ def run_course_generation(
     llm_enabled: bool,
     llm_engine: str,
     refinement_level: str,
+    narration_style: str,
+    target_duration_minutes: int,
     illustrations_enabled: bool,
     max_illustrations: int,
     ppt_footer_text: str,
@@ -2700,6 +2719,8 @@ def run_course_generation(
         result = CoursePipeline(
             llm_provider,
             refinement_level,
+            narration_style,
+            target_duration_minutes,
             illustration_generator=illustration_generator,
             max_illustrations=max_illustrations,
             footer_text=ppt_footer_text,
@@ -3899,11 +3920,11 @@ def run_render_only(task_id: str, file_path: str, output_dir: Path,
         slide_images = processor.render_pages(config)
         total = len(slide_images)
 
+        progress.update('render', total, total, f'渲染完成，共 {total} 页')
+
         tasks[task_id]['status'] = 'rendered'
         tasks[task_id]['slide_count'] = total
         save_state(task_id)
-
-        progress.update('render', total, total, f'渲染完成，共 {total} 页')
 
         queue.put({
             'type': 'rendered',
@@ -3950,6 +3971,11 @@ def convert_ppt():
     llm_mode = data.get('llm_mode', 'per-page')
     llm_engine = data.get('llm_engine', 'qwen')
     refinement_level = data.get('refinement_level', 'standard')
+    narration_style = str(data.get('narration_style', 'lecture')).strip().lower()
+    try:
+        target_duration_minutes = int(data.get('target_duration_minutes', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': '目标口播时长必须为整数分钟'}), 400
     quality_mode = str(data.get('quality_mode', 'balanced')).strip().lower()
     illustrations_enabled = bool(data.get('illustrations_enabled', False))
     max_illustrations = int(data.get('max_illustrations', 3))
@@ -3970,6 +3996,10 @@ def convert_ppt():
     strategy_source = data.get('strategy_source', 'batch')
     if refinement_level not in {'light', 'standard', 'strong'}:
         return jsonify({'error': '不支持的精炼程度'}), 400
+    if narration_style not in {'faithful', 'lecture', 'plain', 'case', 'micro'}:
+        return jsonify({'error': '不支持的讲解风格'}), 400
+    if target_duration_minutes < 0 or target_duration_minutes > 180:
+        return jsonify({'error': '目标口播时长必须在 0 到 180 分钟之间'}), 400
     if quality_mode not in QUALITY_MODES:
         return jsonify({'error': '不支持的质量模式'}), 400
     if max_illustrations not in {1, 2, 3, 4}:
@@ -4015,6 +4045,8 @@ def convert_ppt():
         'llm_engine': llm_engine,
         'llm_mode': llm_mode,
         'refinement_level': refinement_level,
+        'narration_style': narration_style,
+        'target_duration_minutes': target_duration_minutes,
         'quality_mode': quality_mode,
         'illustrations_enabled': illustrations_enabled,
         'max_illustrations': max_illustrations,
@@ -4066,12 +4098,13 @@ def convert_ppt():
     log_operation('create_task', task_id=task_id, target_name=course_name or original_name)
 
     suffix = Path(file_path).suffix.lower()
-    if suffix in {'.docx', '.pdf'}:
+    if suffix in {'.docx', '.pdf', '.epub'}:
         conversion_queue.enqueue(
             run_course_generation, task_id, file_path, output_dir,
             tts_engine, voice, render_engine, llm_enabled, llm_engine,
-            refinement_level, illustrations_enabled, max_illustrations,
-            ppt_footer_text, school_logo_path, visual_theme
+            refinement_level, narration_style, target_duration_minutes,
+            illustrations_enabled, max_illustrations, ppt_footer_text,
+            school_logo_path, visual_theme
         )
     else:
         conversion_queue.enqueue(
@@ -6094,7 +6127,7 @@ def resume_queued_tasks():
             resumed += 1
             continue
         suffix = Path(file_path).suffix.lower()
-        if suffix in {'.docx', '.pdf'}:
+        if suffix in {'.docx', '.pdf', '.epub'}:
             conversion_queue.enqueue(
                 run_course_generation,
                 task_id,
@@ -6106,6 +6139,8 @@ def resume_queued_tasks():
                 strategy.get('llm_enabled', False),
                 strategy.get('llm_engine', 'qwen'),
                 strategy.get('refinement_level', 'standard'),
+                strategy.get('narration_style', 'lecture'),
+                int(strategy.get('target_duration_minutes', 0)),
                 strategy.get('illustrations_enabled', False),
                 int(strategy.get('max_illustrations', 3)),
                 strategy.get('ppt_footer_text', 'AI COURSE STUDIO'),

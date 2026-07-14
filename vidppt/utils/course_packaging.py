@@ -1172,12 +1172,16 @@ def _concat_with_ffmpeg(
         command.extend(["-i", str(clip)])
     transition = max(0.0, min(0.8, float(transition_seconds or 0.0)))
     durations = [_probe_media_duration(clip) for clip in clips]
+    filters = []
     if transition > 0 and len(clips) > 1 and all(duration > 0 for duration in durations):
         transition = min(transition, min(durations) / 2)
-        filters = []
         concat_parts = []
         for index in range(len(clips)):
-            video_filters = [f"fps={config.video_fps}", "setpts=PTS-STARTPTS"]
+            video_filters = [
+                f"fps={config.video_fps}",
+                "setsar=1",
+                "setpts=PTS-STARTPTS",
+            ]
             audio_filters = [
                 f"aresample={config.audio_sample_rate}:async=1:first_pts=0",
                 "asetpts=PTS-STARTPTS",
@@ -1203,8 +1207,16 @@ def _concat_with_ffmpeg(
     else:
         parts = []
         for index in range(len(clips)):
-            parts.append(f"[{index}:v:0][{index}:a:0]")
-        filter_complex = "".join(parts) + f"concat=n={len(clips)}:v=1:a=1[v][a]"
+            filters.append(
+                f"[{index}:v:0]fps={config.video_fps},setsar=1,setpts=PTS-STARTPTS[v{index}]"
+            )
+            filters.append(
+                f"[{index}:a:0]aresample={config.audio_sample_rate}:async=1:first_pts=0,"
+                f"asetpts=PTS-STARTPTS[a{index}]"
+            )
+            parts.append(f"[v{index}][a{index}]")
+        filters.append("".join(parts) + f"concat=n={len(clips)}:v=1:a=1[v][a]")
+        filter_complex = ";".join(filters)
     command.extend(
         [
             "-filter_complex",

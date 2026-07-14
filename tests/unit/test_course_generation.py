@@ -122,6 +122,42 @@ def test_llm_builder_adds_subtitle_safe_area_instruction(temp_dir):
     assert "底部约 15%" in llm.system_prompt
 
 
+def test_llm_builder_applies_teaching_style_and_target_duration(temp_dir):
+    class FakeLLM:
+        system_prompt = ""
+
+        def summarize(self, text, **kwargs):
+            self.system_prompt = kwargs["system_prompt"]
+            return '{"title":"课程","slides":[{"title":"正文","script":"讲稿"}]}'
+
+    llm = FakeLLM()
+    source = SourceDocument(
+        title="原始标题",
+        source_path=temp_dir / "lesson.docx",
+        sections=[SourceSection(title="正文", paragraphs=["原始内容"])],
+    )
+
+    CourseBuilder(llm, "standard", "lecture", 10).build(source)
+
+    assert "不要逐句复述原文" in llm.system_prompt
+    assert "目标约 10 分钟" in llm.system_prompt
+    assert "2200-2600 个汉字" in llm.system_prompt
+
+
+def test_draft_builder_does_not_join_bullets_as_verbatim_script(temp_dir):
+    source = SourceDocument(
+        title="测试课程",
+        source_path=temp_dir / "lesson.docx",
+        sections=[SourceSection(title="风险管理", paragraphs=["技术风险；进度风险；成本风险"])],
+    )
+
+    script = CourseBuilder().build(source).sections[1].script
+
+    assert script.startswith("这一部分我们来理解风险管理")
+    assert "首先，技术风险" in script
+    assert script != "技术风险。进度风险。成本风险。"
+
+
 def test_course_new_fields_round_trip():
     payload = {
         "title": "课程",
@@ -756,6 +792,7 @@ def test_course_packaging_soft_transition_keeps_timeline_length(temp_dir, monkey
     )
 
     filter_complex = commands[0][commands[0].index("-filter_complex") + 1]
+    assert filter_complex.count("setsar=1") == 2
     assert "fade=t=out:st=3.650:d=0.350" in filter_complex
     assert "fade=t=in:st=0:d=0.350" in filter_complex
     assert "concat=n=2:v=1:a=1" in filter_complex

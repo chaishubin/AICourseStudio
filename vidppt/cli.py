@@ -24,11 +24,11 @@ from .processors.pdf_processor import PDFProcessor
 def main():
     """主入口函数"""
     supported_formats = ", ".join(
-        sorted(set(ProcessorRegistry.list_supported_extensions()) | {".docx"})
+        sorted(set(ProcessorRegistry.list_supported_extensions()) | {".docx", ".epub"})
     )
 
     parser = argparse.ArgumentParser(
-        description="AI Course Studio - AI 课程生产平台\n从教案（Word/PDF）或演示文稿（PPT）经 AI 理解与知识建模，生成课程视频、幻灯片、HTML 三路输出。",
+        description="AI Course Studio - AI 课程生产平台\n从教案（Word/PDF/EPUB）或演示文稿（PPT）经 AI 理解与知识建模，生成课程视频、幻灯片、HTML 三路输出。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 示例:
@@ -439,7 +439,7 @@ LLM 文本摘要示例:
         sys.exit(1)
 
     # 路线 A：教案先生成 Course JSON 和可编辑 PPTX，再复用媒体组件。
-    if config.input_path.suffix.lower() in {".docx", ".pdf"}:
+    if config.input_path.suffix.lower() in {".docx", ".pdf", ".epub"}:
         llm_engine = None
         if config.llm_enabled:
             if config.llm_engine == "qwen":

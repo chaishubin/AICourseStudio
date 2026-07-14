@@ -126,6 +126,21 @@ class TestLoadState:
         assert tasks["restored"]["status"] == "completed"
         assert tasks["restored"]["original_name"] == "测试.pptx"
 
+    def test_restores_render_only_task(self):
+        from web.app import load_state, tasks, STATE_FILE
+
+        STATE_FILE.write_text(json.dumps({
+            "task_id": "rendered-slides",
+            "status": "rendered",
+            "stage": "render",
+            "slide_count": 17,
+        }), encoding="utf-8")
+
+        load_state()
+
+        assert tasks["rendered-slides"]["status"] == "rendered"
+        assert tasks["rendered-slides"]["slide_count"] == 17
+
     def test_restores_error_task(self):
         from web.app import load_state, tasks, STATE_FILE
 

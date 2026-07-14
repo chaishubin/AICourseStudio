@@ -1,8 +1,12 @@
-"""将 Word/PDF 教案读取为保留标题层级的 SourceDocument。"""
+"""将 Word/PDF/EPUB 教案读取为保留标题层级的 SourceDocument。"""
 
 from __future__ import annotations
 
 from pathlib import Path
+from html.parser import HTMLParser
+import posixpath
+import xml.etree.ElementTree as ET
+from zipfile import BadZipFile, ZipFile
 
 from .models import SourceDocument, SourceSection
 
@@ -14,7 +18,9 @@ def read_source_document(path: Path) -> SourceDocument:
         return _read_docx(path)
     if suffix == ".pdf":
         return _read_pdf(path)
-    raise ValueError(f"教案输入仅支持 .docx 和 .pdf，收到: {suffix or '无扩展名'}")
+    if suffix == ".epub":
+        return _read_epub(path)
+    raise ValueError(f"教案输入仅支持 .docx、.pdf 和 .epub，收到: {suffix or '无扩展名'}")
 
 
 def _read_docx(path: Path) -> SourceDocument:
@@ -93,4 +99,117 @@ def _read_pdf(path: Path) -> SourceDocument:
         source_path=path,
         sections=sections,
         metadata={"format": "pdf", "page_count": len(sections)},
+    )
+
+
+class _EPUBHTMLParser(HTMLParser):
+    """提取 EPUB 内容文档中的标题与段落，忽略样式和脚本。"""
+
+    _block_tags = {"p", "li", "blockquote", "pre", "div", "section", "article"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.items: list[tuple[str, int, str]] = []
+        self._capture: tuple[str, int] | None = None
+        self._parts: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "svg"}:
+            self._ignored_depth += 1
+            return
+        if self._ignored_depth or self._capture is not None:
+            return
+        if len(tag) == 2 and tag[0] == "h" and tag[1].isdigit():
+            self._capture = ("heading", int(tag[1]))
+            self._parts = []
+        elif tag in self._block_tags:
+            self._capture = ("paragraph", 0)
+            self._parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "svg"} and self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if self._ignored_depth or self._capture is None:
+            return
+        kind, level = self._capture
+        expected = f"h{level}" if kind == "heading" else tag
+        if kind == "heading" and tag != expected:
+            return
+        if kind == "paragraph" and tag not in self._block_tags:
+            return
+        text = " ".join("".join(self._parts).split())
+        if text:
+            self.items.append((kind, level, text))
+        self._capture = None
+        self._parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._capture is not None and not self._ignored_depth:
+            self._parts.append(data)
+
+
+def _read_epub(path: Path) -> SourceDocument:
+    try:
+        with ZipFile(path) as archive:
+            container = ET.fromstring(archive.read("META-INF/container.xml"))
+            rootfile = next(
+                element for element in container.iter() if element.tag.endswith("rootfile")
+            ).attrib["full-path"]
+            package = ET.fromstring(archive.read(rootfile))
+            title = next(
+                (
+                    (element.text or "").strip()
+                    for element in package.iter()
+                    if element.tag.endswith("title") and (element.text or "").strip()
+                ),
+                path.stem,
+            )
+            manifest = {
+                element.attrib.get("id"): element.attrib.get("href")
+                for element in package.iter()
+                if element.tag.endswith("item")
+            }
+            spine = [
+                element.attrib.get("idref")
+                for element in package.iter()
+                if element.tag.endswith("itemref")
+            ]
+            base_dir = posixpath.dirname(rootfile)
+            documents = [manifest.get(item_id) for item_id in spine]
+            sections: list[SourceSection] = []
+            current: SourceSection | None = None
+
+            for href in documents:
+                if not href:
+                    continue
+                member = posixpath.normpath(posixpath.join(base_dir, href.split("#", 1)[0]))
+                parser = _EPUBHTMLParser()
+                parser.feed(archive.read(member).decode("utf-8", errors="replace"))
+                for kind, level, text in parser.items:
+                    if kind == "heading":
+                        if current and current.paragraphs:
+                            sections.append(current)
+                        current = SourceSection(title=text, level=level)
+                    else:
+                        if current is None:
+                            current = SourceSection(title=f"章节 {len(sections) + 1}", level=1)
+                        current.paragraphs.append(text)
+                if current and current.paragraphs:
+                    sections.append(current)
+                    current = None
+    except (BadZipFile, KeyError, StopIteration, ET.ParseError) as exc:
+        raise ValueError("EPUB 文件结构无效或内容已损坏") from exc
+
+    if not sections:
+        raise ValueError("EPUB 未提取到可用正文")
+
+    return SourceDocument(
+        title=title,
+        source_path=path,
+        sections=sections,
+        metadata={"format": "epub", "section_count": len(sections)},
     )

@@ -115,7 +115,7 @@
                         <span class="section-state">支持批量上传</span>
                     </div>
                     <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" accept=".docx,.pdf,.ppt,.pptx" multiple hidden>
+                        <input type="file" id="file-input" accept=".docx,.pdf,.epub,.ppt,.pptx" multiple hidden>
                         <div class="upload-placeholder" id="upload-placeholder">
                             <div class="upload-icon-wrap">
                                 <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -125,7 +125,7 @@
                                 </svg>
                             </div>
                             <p class="upload-text">拖拽文件至此处，或点击上传</p>
-                            <p class="upload-hint">支持 .docx / .pdf / .ppt / .pptx，可多选</p>
+                            <p class="upload-hint">支持 .docx / .pdf / .epub / .ppt / .pptx，可多选</p>
                         </div>
                         <div class="upload-progress" id="upload-progress" hidden>
                             <div class="progress-bar">
@@ -363,11 +363,28 @@
                                 <option value="per-page">逐页讲稿</option>
                                 <option value="whole-document">整篇理解</option>
                             </select>
-                            <label for="refinement-level">提炼程度</label>
+                            <label for="refinement-level">内容保留度</label>
                             <select id="refinement-level" class="select-input">
-                                <option value="light">轻度：尽量保留原文</option>
-                                <option value="standard" selected>标准：精炼且完整</option>
-                                <option value="strong">高度：只保留核心内容</option>
+                                <option value="light">完整：尽量保留原文</option>
+                                <option value="standard" selected>平衡：精炼且完整</option>
+                                <option value="strong">核心：只保留关键内容</option>
+                            </select>
+                            <label for="narration-style">讲解风格</label>
+                            <select id="narration-style" class="select-input">
+                                <option value="faithful">原稿保真</option>
+                                <option value="lecture" selected>教师讲授（推荐）</option>
+                                <option value="plain">通俗解释</option>
+                                <option value="case">案例引导</option>
+                                <option value="micro">简洁微课</option>
+                            </select>
+                            <label for="target-duration-minutes">目标口播时长</label>
+                            <select id="target-duration-minutes" class="select-input">
+                                <option value="0" selected>智能匹配内容</option>
+                                <option value="5">约 5 分钟</option>
+                                <option value="10">约 10 分钟</option>
+                                <option value="15">约 15 分钟</option>
+                                <option value="20">约 20 分钟</option>
+                                <option value="30">约 30 分钟</option>
                             </select>
                             <label for="quality-mode">质量模式</label>
                             <select id="quality-mode" class="select-input">
@@ -767,7 +784,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=42"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=45"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

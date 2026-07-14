@@ -112,6 +112,8 @@ class AICourseStudioApp {
                 llmModeGroup: document.getElementById('llm-mode-group'),
                 llmMode: document.getElementById('llm-mode'),
                 refinementLevel: document.getElementById('refinement-level'),
+                narrationStyle: document.getElementById('narration-style'),
+                targetDurationMinutes: document.getElementById('target-duration-minutes'),
                 qualityMode: document.getElementById('quality-mode'),
                 visualTheme: document.getElementById('visual-theme'),
                 illustrationsEnabled: document.getElementById('illustrations-enabled'),
@@ -820,6 +822,8 @@ class AICourseStudioApp {
             llmEngine: 'llm_engine',
             llmMode: 'llm_mode',
             refinementLevel: 'refinement_level',
+            narrationStyle: 'narration_style',
+            targetDurationMinutes: 'target_duration_minutes',
             qualityMode: 'quality_mode',
             visualTheme: 'visual_theme',
             maxIllustrations: 'max_illustrations',
@@ -1361,7 +1365,7 @@ class AICourseStudioApp {
 
     // ── Multi-file upload ──────────────────────────────
     async handleFileSelect(file) {
-        const allowedExtensions = ['.docx', '.pdf', '.ppt', '.pptx'];
+        const allowedExtensions = ['.docx', '.pdf', '.epub', '.ppt', '.pptx'];
         const ext = '.' + file.name.split('.').pop().toLowerCase();
         if (!allowedExtensions.includes(ext)) {
             window.VidPPTUI.alert('不支持的文件类型，请上传 Word、PDF 或 PowerPoint 文件', { type: 'warning' });
@@ -1379,7 +1383,7 @@ class AICourseStudioApp {
             filePath: null,
             fileName: file.name,
             courseName: this.defaultCourseName(file.name),
-            sourceType: ['.docx', '.pdf'].includes(ext) ? 'lesson-plan' : 'presentation',
+            sourceType: ['.docx', '.pdf', '.epub'].includes(ext) ? 'lesson-plan' : 'presentation',
             taskId: null,
             status: 'uploading',
             percentage: 0,
@@ -1485,7 +1489,8 @@ class AICourseStudioApp {
                     <button type="button" class="file-strategy-button"
                             title="把当前生成策略只应用到此文件">仅配置此项</button>` : ''}
                 ${showMiniProgress ? `<div class="mini-progress-bar"><div class="mini-progress-fill" style="width:${this._displayProgressValue(item)}%"></div></div>` : ''}
-                <button class="file-list-remove" data-index="${index}" title="移除">&times;</button>
+                <button class="file-list-remove" data-index="${index}"
+                        title="${['pending', 'queued', 'processing'].includes(item.status) && item.taskId ? '停止生成并返回编辑' : item.taskId ? '删除课程产物' : '移除'}">&times;</button>
             `;
 
             row.querySelector('.file-list-remove').addEventListener('click', () => this.removeFile(index));
@@ -1648,6 +1653,8 @@ class AICourseStudioApp {
             llm_engine: this.elements.llmEngine.value,
             llm_mode: this.elements.llmMode.value,
             refinement_level: this.elements.refinementLevel.value,
+            narration_style: this.elements.narrationStyle.value,
+            target_duration_minutes: Number(this.elements.targetDurationMinutes.value),
             quality_mode: this.elements.qualityMode.value,
             visual_theme: this.elements.visualTheme.value,
             illustrations_enabled: this.elements.illustrationsEnabled.checked,
@@ -2057,6 +2064,8 @@ class AICourseStudioApp {
                 llm_engine: 'qwen',
                 llm_mode: 'per-page',
                 refinement_level: 'standard',
+                narration_style: 'lecture',
+                target_duration_minutes: 0,
                 quality_mode: 'balanced',
                 illustrations_enabled: true,
                 max_illustrations: 3
@@ -2067,6 +2076,8 @@ class AICourseStudioApp {
                 llm_engine: 'qwen',
                 llm_mode: 'per-page',
                 refinement_level: 'light',
+                narration_style: 'faithful',
+                target_duration_minutes: 0,
                 quality_mode: 'economy',
                 illustrations_enabled: false,
                 max_illustrations: 1
@@ -2077,6 +2088,8 @@ class AICourseStudioApp {
                 llm_engine: 'qwen',
                 llm_mode: 'per-page',
                 refinement_level: 'strong',
+                narration_style: 'micro',
+                target_duration_minutes: 10,
                 quality_mode: 'premium',
                 illustrations_enabled: true,
                 max_illustrations: 2
@@ -2334,6 +2347,10 @@ class AICourseStudioApp {
     // ── Remove file ────────────────────────────────────
     async removeFile(index) {
         const item = this.state.files[index];
+        if (item?.taskId && ['pending', 'queued', 'processing'].includes(item.status)) {
+            await this.stopTask(item.taskId);
+            return;
+        }
         if (
             item?.taskId
             && ['completed', 'error', 'interrupted', 'awaiting_confirmation'].includes(item.status)
@@ -3359,7 +3376,7 @@ class AICourseStudioApp {
                     fileName: t.original_name || '未知文件',
                     sourceFileExists: Boolean(t.source_file_exists),
                     courseName: t.course_name || this.defaultCourseName(t.original_name || ''),
-                    sourceType: /\.(docx|pdf)$/i.test(t.original_name || '') ? 'lesson-plan' : 'presentation',
+                    sourceType: /\.(docx|pdf|epub)$/i.test(t.original_name || '') ? 'lesson-plan' : 'presentation',
                     taskId: t.task_id,
                     status: this._taskStatus(t.status),
                     percentage: t.percentage || 0,
