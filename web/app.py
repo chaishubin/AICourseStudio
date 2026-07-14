@@ -1757,6 +1757,18 @@ def _safe_filename_stem(value: str) -> str:
     return text[:120]
 
 
+def _artifact_filename_stem(value: str, max_bytes: int = 120) -> str:
+    """Return a readable, deterministic stem that leaves room for MoviePy temp suffixes."""
+    text = _safe_filename_stem(value) or 'course'
+    encoded = text.encode('utf-8')
+    if len(encoded) <= max_bytes:
+        return text
+    digest = hashlib.sha256(encoded).hexdigest()[:10]
+    prefix_budget = max(1, max_bytes - len(digest) - 1)
+    prefix = encoded[:prefix_budget].decode('utf-8', errors='ignore').rstrip(' ._')
+    return f'{prefix or "course"}_{digest}'
+
+
 def _normalize_course_name(value: str | None, fallback_name: str) -> str:
     explicit = _safe_filename_stem(value or '')
     if explicit:
@@ -3589,7 +3601,9 @@ def run_media_generation(task_id: str):
                 encoding='utf-8',
             )
 
-        stem = _safe_filename_stem(task.get('course_name')) or Path(task['file_path']).stem
+        stem = _artifact_filename_stem(
+            task.get('course_name') or Path(task['file_path']).stem
+        )
         subtitles = SubtitleRenderer().render_course(
             timed_pages,
             config.output_dir / f'{stem}.srt',
@@ -3764,7 +3778,7 @@ def run_media_generation(task_id: str):
                     },
                 )
                 segment_title = _safe_filename_stem(segment.get('title', ''))
-                segment_stem = (
+                segment_stem = _artifact_filename_stem(
                     f"{stem}_{index:02d}_{segment_title}"
                     if segment_title else f"{stem}_{index:02d}_pages_{start_page}_{end_page}"
                 )

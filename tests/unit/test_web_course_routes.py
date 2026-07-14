@@ -62,6 +62,20 @@ def test_upload_accepts_docx_and_uses_safe_disk_name(monkeypatch, temp_dir):
     assert stored.exists()
 
 
+def test_artifact_filename_stem_bounds_long_chinese_names():
+    import web.app as web_app
+
+    title = "从匠人到巨匠——工匠成长路径与方法" + "专业技术人员继续教育公需课" * 20
+    first = web_app._artifact_filename_stem(title)
+    second = web_app._artifact_filename_stem(title)
+
+    assert first == second
+    assert len(first.encode("utf-8")) <= 120
+    assert first.endswith(web_app.hashlib.sha256(
+        web_app._safe_filename_stem(title).encode("utf-8")
+    ).hexdigest()[:10])
+
+
 def test_upload_accepts_epub_and_uses_safe_disk_name(monkeypatch, temp_dir):
     import web.app as web_app
 
