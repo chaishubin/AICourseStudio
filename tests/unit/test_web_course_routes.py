@@ -668,7 +668,7 @@ def test_task_delete_rejects_running_and_ignores_unsafe_recorded_path(
     assert "unsafe-task" not in web_app.tasks
 
 
-def test_task_delete_accepts_interrupted_and_awaiting_confirmation(
+def test_task_delete_accepts_terminal_non_video_statuses(
     monkeypatch,
     temp_dir,
 ):
@@ -677,8 +677,8 @@ def test_task_delete_accepts_interrupted_and_awaiting_confirmation(
     output_root = temp_dir / "outputs"
     output_root.mkdir()
     state_file = output_root / "state.json"
-    task_ids = ("interrupted-task", "preview-task")
-    statuses = ("interrupted", "awaiting_confirmation")
+    task_ids = ("interrupted-task", "preview-task", "rendered-task")
+    statuses = ("interrupted", "awaiting_confirmation", "rendered")
     task_map = {}
     for task_id, status in zip(task_ids, statuses):
         output_dir = output_root / task_id
@@ -1617,7 +1617,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=45' in html
+    assert '/static/js/main.js?v=46' in html
 
 
 def test_course_packaging_has_a_separate_design_page():

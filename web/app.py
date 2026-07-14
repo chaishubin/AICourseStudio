@@ -4696,6 +4696,7 @@ def delete_task(task_id):
     if error:
         return error
     deletable_statuses = {
+        'rendered',
         'completed',
         'error',
         'interrupted',

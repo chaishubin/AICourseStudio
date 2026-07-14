@@ -309,6 +309,7 @@ class AICourseStudioApp {
     }
 
     _taskStatus(status) {
+        if (status === 'rendered') return 'completed';
         return ['pending', 'processing'].includes(status) ? 'processing' : status;
     }
 
