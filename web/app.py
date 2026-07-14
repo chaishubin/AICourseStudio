@@ -3018,6 +3018,8 @@ def _generate_audio_with_focus_segments(
 ) -> None:
     """Generate cue audio independently and persist its real page-local timeline."""
     from moviepy import AudioFileClip, concatenate_audioclips
+    from moviepy.audio.fx.AudioFadeIn import AudioFadeIn
+    from moviepy.audio.fx.AudioFadeOut import AudioFadeOut
     from vidppt.core.models import DocumentContent, PageContent
     from vidppt.utils.progress import ProgressTracker
 
@@ -3068,6 +3070,15 @@ def _generate_audio_with_focus_segments(
         try:
             for cue, segment in page_segments:
                 clip = AudioFileClip(str(segment.audio))
+                # Cue-level TTS produces many independently encoded files.  A
+                # hard cut at a non-zero waveform creates clicks and can sound
+                # like a brief dropout, so smooth only the first/last 10 ms.
+                # This is short enough to preserve consonants and cue timing.
+                edge_fade = min(0.01, max(0.001, float(clip.duration) / 4))
+                clip = clip.with_effects([
+                    AudioFadeIn(edge_fade),
+                    AudioFadeOut(edge_fade),
+                ])
                 clips.append(clip)
                 cue_duration = float(clip.duration)
                 cue['start'] = round(cursor, 3)
@@ -3080,7 +3091,11 @@ def _generate_audio_with_focus_segments(
             combined = concatenate_audioclips(clips)
             try:
                 combined.write_audiofile(
-                    str(page_audio), codec='libmp3lame', logger=None
+                    str(page_audio),
+                    codec='libmp3lame',
+                    fps=config.audio_sample_rate,
+                    bitrate=config.audio_bitrate,
+                    logger=None,
                 )
             finally:
                 combined.close()

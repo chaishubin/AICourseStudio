@@ -1430,12 +1430,20 @@ def test_segmented_focus_audio_persists_real_cue_timeline(monkeypatch, temp_dir)
     class FakeAudioClip:
         def __init__(self, path):
             self.duration = 1.25 if "/1/" in path else 2.5
+            self.effects = []
+
+        def with_effects(self, effects):
+            self.effects = effects
+            return self
 
         def close(self):
             pass
 
     class FakeCombined:
+        write_kwargs = None
+
         def write_audiofile(self, path, **kwargs):
+            self.write_kwargs = kwargs
             Path(path).write_bytes(b"combined")
 
         def close(self):
@@ -1443,7 +1451,14 @@ def test_segmented_focus_audio_persists_real_cue_timeline(monkeypatch, temp_dir)
 
     monkeypatch.setattr(web_app, "Pipeline", FakePipeline)
     monkeypatch.setattr(moviepy, "AudioFileClip", FakeAudioClip)
-    monkeypatch.setattr(moviepy, "concatenate_audioclips", lambda clips: FakeCombined())
+    combined = FakeCombined()
+    captured_clips = []
+
+    def fake_concatenate(clips):
+        captured_clips.extend(clips)
+        return combined
+
+    monkeypatch.setattr(moviepy, "concatenate_audioclips", fake_concatenate)
 
     cues = [
         {"text": "先介绍学习目标", "target_id": "p1-a2"},
@@ -1470,6 +1485,9 @@ def test_segmented_focus_audio_persists_real_cue_timeline(monkeypatch, temp_dir)
         (0.0, 1.25), (1.25, 3.75),
     ]
     assert all(cue["timing_source"] == "segment_audio" for cue in cues)
+    assert all(len(clip.effects) == 2 for clip in captured_clips)
+    assert combined.write_kwargs["fps"] == config.audio_sample_rate
+    assert combined.write_kwargs["bitrate"] == config.audio_bitrate
 
 
 def test_course_packaging_preview_image_endpoint():
