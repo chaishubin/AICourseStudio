@@ -94,6 +94,8 @@ def test_volcengine_payload_and_rate():
     assert payload["audio"]["emotion_scale"] == 5
     assert payload["audio"]["pitch_ratio"] == 1.1
     assert payload["audio"]["volume_ratio"] == 1.2
+    assert payload["audio"]["explicit_language"] == "zh-cn"
+    assert "language" not in payload["audio"]
     assert payload["request"]["silence_duration"] == "350"
     assert payload["request"]["with_frontend"] == "1"
     assert payload["request"]["operation"] == "query"

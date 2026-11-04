@@ -227,6 +227,13 @@ class Pipeline:
             page_texts = []
             cached_pages = []
             skipped_pages = []
+            api_cache_options = {
+                k: v
+                for k, v in self.config.tts_options.items()
+                if k not in {"api_key", "access_token"}
+            }
+            if self.config.tts_engine == "volcengine":
+                api_cache_options["_speech_revision"] = "explicit-language-v2"
 
             for page in content.pages:
                 # 跳过没有文本的页面
@@ -278,11 +285,7 @@ class Pipeline:
                         voice=self._api_voice(),
                         rate=self.config.tts_rate,
                         input_path=str(self.config.input_path),
-                        **{
-                            k: v
-                            for k, v in self.config.tts_options.items()
-                            if k not in {"api_key", "access_token"}
-                        },
+                        **api_cache_options,
                     )
 
                 if cached_audio:
@@ -391,11 +394,7 @@ class Pipeline:
                             voice=self._api_voice(),
                             rate=self.config.tts_rate,
                             input_path=str(self.config.input_path),
-                            **{
-                                k: v
-                                for k, v in self.config.tts_options.items()
-                                if k not in {"api_key", "access_token"}
-                            },
+                            **api_cache_options,
                         )
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
 

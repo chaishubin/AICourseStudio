@@ -11,7 +11,8 @@ from pptx import Presentation
 from .subtitle_rules import subtitle_chunks
 
 
-FOCUS_CUES_VERSION = 5
+FOCUS_CUES_VERSION = 6
+_QUOTED_ENGLISH = re.compile(r"""[‘“'"]([A-Za-z]+(?: +[A-Za-z]+)+)[’”'"]""")
 _MIN_VISIBLE_FOCUS_CONFIDENCE = 0.34
 _IGNORED_TEXT = {
     "AI COURSE STUDIO",
@@ -303,8 +304,12 @@ def _narration_units(text: str) -> list[str]:
     ]
     units = []
     for sentence in sentences:
-        chunks = subtitle_chunks(sentence)
-        units.extend(chunks or [sentence])
+        # Keep quoted English phrases intact for speech synthesis.
+        for index, part in enumerate(_QUOTED_ENGLISH.split(sentence)):
+            if index % 2:
+                units.append(part)
+            else:
+                units.extend(subtitle_chunks(part))
     return units
 
 

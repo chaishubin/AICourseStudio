@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -30,7 +31,7 @@ class VolcengineTTSEngine(TTSEngine):
         pitch_ratio: float = 1.0,
         emotion: Optional[str] = None,
         emotion_scale: float = 4.0,
-        language: str = "cn",
+        language: Optional[str] = None,
         silence_duration: Optional[int] = None,
         **kwargs,
     ):
@@ -54,7 +55,7 @@ class VolcengineTTSEngine(TTSEngine):
         self.pitch_ratio = self._clamp(pitch_ratio, 0.1, 3.0, 1.0)
         self.emotion = emotion
         self.emotion_scale = self._clamp(emotion_scale, 1.0, 5.0, 4.0)
-        self.language = language
+        self.explicit_language = kwargs.get("explicit_language", language)
         self.silence_duration = silence_duration
         self.options = kwargs
 
@@ -84,6 +85,14 @@ class VolcengineTTSEngine(TTSEngine):
         **kwargs,
     ) -> dict:
         selected_emotion = emotion or kwargs.get("emotion") or self.emotion
+        language = kwargs.get(
+            "explicit_language", kwargs.get("language", self.explicit_language)
+        )
+        if language is None:
+            english_phrase = re.fullmatch(
+                r"[A-Za-z]+(?: +[A-Za-z]+)+[.!?]?", text.strip()
+            )
+            language = "en" if english_phrase else "zh-cn"
         audio = {
             "voice_type": voice,
             "encoding": kwargs.get("audio_format", self.audio_format),
@@ -95,7 +104,7 @@ class VolcengineTTSEngine(TTSEngine):
             "pitch_ratio": self._clamp(
                 kwargs.get("pitch_ratio", self.pitch_ratio), 0.1, 3.0, 1.0
             ),
-            "language": kwargs.get("language", self.language),
+            "explicit_language": "zh-cn" if language == "cn" else language,
         }
         if selected_emotion:
             audio["emotion"] = selected_emotion
