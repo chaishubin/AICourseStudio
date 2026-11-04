@@ -15,6 +15,7 @@ MEDIUM_BREAK_RE = re.compile(r"(?<=[：:])")
 SOFT_BREAK_RE = re.compile(r"(?<=[，,、])")
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 CJK_OR_WORD_RE = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
+ASCII_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 ENDING_PUNCTUATION = "。！？；……"
 BREAK_PUNCTUATION = "，、；："
 CONNECTORS = (
@@ -135,7 +136,7 @@ def _display_subtitle_text(text: str) -> str:
 
 
 def _compact_subtitle_text(text: str, *, trim_breaks: bool = True) -> str:
-    normalized = re.sub(r"\s+", "", str(text or "")).strip()
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
     if not normalized:
         return ""
     normalized = _normalize_punctuation(normalized)
@@ -336,6 +337,11 @@ def _best_split_index(text: str, limit: int) -> int:
         split_at = max(candidates)
         if split_at >= MIN_CHARS_PER_CUE:
             return split_at
+    for word in ASCII_WORD_RE.finditer(text):
+        if word.start() >= limit:
+            break
+        if word.start() < limit < word.end():
+            return word.start() or word.end()
     return limit
 
 

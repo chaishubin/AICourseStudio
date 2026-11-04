@@ -2213,6 +2213,24 @@ def test_script_preview_uses_real_text_and_cache(monkeypatch, temp_dir):
     assert len(generated[0][2]) == 300
 
 
+def test_focus_cue_coverage_rejects_stale_english_word_splits():
+    from web.app import _focus_cues_cover_script
+
+    script = "英文名称为Programmable Logic Controller，简称PLC。"
+
+    assert _focus_cues_cover_script([
+        {"text": "英文名称为Programmable Logic"},
+        {"text": "Controller，简称PLC。"},
+    ], script)
+    assert not _focus_cues_cover_script([
+        {"text": "英文名称为Programmable Logic Control"},
+        {"text": "ler，简称PLC。"},
+    ], script)
+    assert not _focus_cues_cover_script([
+        {"text": "英文名称为ProgrammableLogicController，简称PLC。"},
+    ], script)
+
+
 def test_focus_edit_keeps_audio_and_reuses_it_for_export(monkeypatch, temp_dir):
     import web.app as web_app
     from vidppt.core.models import DocumentContent, PageContent, ProcessConfig

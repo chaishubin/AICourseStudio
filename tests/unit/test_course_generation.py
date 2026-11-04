@@ -19,6 +19,7 @@ from vidppt.renderers.subtitles import SubtitleRenderer
 from vidppt.utils.subtitle_rules import (
     normalize_subtitle_text,
     subtitle_chunks,
+    subtitle_source_chunks,
     wrap_subtitle,
 )
 
@@ -415,6 +416,23 @@ def test_subtitle_wrapping_preserves_trailing_text_after_soft_break():
 
     assert rendered == normalize_subtitle_text(script).replace(" ", "")
     assert all("\n" not in wrap_subtitle(chunk) for chunk in subtitle_chunks(script))
+
+
+def test_subtitle_and_speech_chunks_preserve_english_words():
+    script = "通用叫法 中文名称为可编程逻辑控制器； 英文名称为Programmable Logic Controller，简称PLC。"
+
+    assert subtitle_chunks(script) == [
+        "通用叫法 中文名称为可编程逻辑控制器",
+        "英文名称为Programmable Logic",
+        "Controller 简称PLC",
+    ]
+    assert subtitle_source_chunks(script) == [
+        "通用叫法 中文名称为可编程逻辑控制器；",
+        "英文名称为Programmable Logic",
+        "Controller，简称PLC。",
+    ]
+    assert subtitle_chunks("中" * 25 + "Controller") == ["中" * 25, "Controller"]
+    assert subtitle_chunks("A" * 29 + "控制器") == ["A" * 29, "控制器"]
 
 
 def test_course_pipeline_rejects_video_without_tts(temp_dir):

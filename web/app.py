@@ -60,7 +60,11 @@ from vidppt.core.cue_timeline import (
     write_cue_timeline,
 )
 from vidppt.review import CourseReviewError, CourseReviewer
-from vidppt.utils.subtitle_rules import normalize_subtitle_text, subtitle_source_chunks
+from vidppt.utils.subtitle_rules import (
+    ASCII_WORD_RE,
+    normalize_subtitle_text,
+    subtitle_source_chunks,
+)
 from vidppt.utils.focus_guidance import (
     FOCUS_CUES_VERSION,
     build_focus_cues,
@@ -3051,7 +3055,7 @@ def _preview_page(preview: dict, page_number: int) -> dict | None:
 
 
 def _focus_cues_cover_script(cues: list[dict], script: str) -> bool:
-    cue_text = ''.join(
+    cue_text = ' '.join(
         str(cue.get('text') or '') for cue in cues if isinstance(cue, dict)
     )
     compact = lambda value: re.sub(  # noqa: E731
@@ -3060,7 +3064,11 @@ def _focus_cues_cover_script(cues: list[dict], script: str) -> bool:
     left, right = compact(cue_text), compact(script)
     if not left or not right:
         return False
-    return left == right
+    # Character coverage alone also accepts "Control" and "ler" in separate cues.
+    return (
+        left == right
+        and ASCII_WORD_RE.findall(cue_text.lower()) == ASCII_WORD_RE.findall(script.lower())
+    )
 
 
 def _focus_audio_signature(script: str, config: ProcessConfig) -> str:
