@@ -11,7 +11,7 @@ from pptx import Presentation
 from .subtitle_rules import subtitle_chunks
 
 
-FOCUS_CUES_VERSION = 6
+FOCUS_CUES_VERSION = 7
 _QUOTED_ENGLISH = re.compile(r"""[‘“'"]([A-Za-z]+(?: +[A-Za-z]+)+)[’”'"]""")
 _MIN_VISIBLE_FOCUS_CONFIDENCE = 0.34
 _IGNORED_TEXT = {
@@ -115,6 +115,124 @@ def build_focus_cues(
     return cues
 
 
+def plan_page_focus(
+    script: str,
+    targets: list[dict],
+    annotated_cues: list[dict] | None = None,
+    *,
+    page_context: str = "",
+    previous_target_id: str = "",
+) -> tuple[list[dict], dict]:
+    """Plan focus for a whole page and attach auditable validation evidence.
+
+    Matching remains deterministic and bounded: an ambiguous cue gets one
+    context-aware rerank, then safely inherits the prior target or clears.
+    """
+    # Preserve timed subtitle units and manual annotations from the existing
+    # audio track when their text still covers the script.
+    cues = normalize_focus_cues(annotated_cues, script, targets)
+    valid_ids = {str(target.get("id")) for target in targets}
+    by_id = {str(target.get("id")): target for target in targets}
+    last_target = previous_target_id if previous_target_id in valid_ids else ""
+    reviewed = []
+    accepted = degraded = 0
+    issues = []
+    for index, cue in enumerate(cues):
+        target_id = str(cue.get("target_id") or "")
+        original_id = target_id
+        evidence = []
+        if target_id and target_id in by_id:
+            target = by_id[target_id]
+            score = _text_similarity(cue.get("text", ""), target.get("text", ""))
+            ranked = sorted(
+                ((_text_similarity(cue.get("text", ""), t.get("text", "")), str(t["id"]))
+                 for t in targets if t.get("id")), reverse=True
+            )
+            margin = score - (ranked[1][0] if ranked and ranked[0][1] == target_id and len(ranked) > 1 else (ranked[0][0] if ranked else 0))
+            visible = _target_is_visible(target)
+            evidence = ["target_exists", "visible" if visible else "not_visible", "semantic_match"]
+            # A single targeted recheck uses the full-page context to resolve
+            # close candidates without making another model/API call.
+            if not visible or (score < 0.42 and margin < 0.08):
+                context = f"{page_context} {cue.get('text', '')}"
+                context_ranked = sorted(
+                    ((_text_similarity(context, t.get("text", "")), str(t["id"]))
+                     for t in targets if t.get("id") and _target_is_visible(t)), reverse=True
+                )
+                if context_ranked and (len(context_ranked) == 1 or context_ranked[0][0] - context_ranked[1][0] >= 0.08):
+                    target_id = context_ranked[0][1]
+                    cue["recheck"] = "context_rerank"
+                    evidence.append("context_rerank_resolved")
+                else:
+                    target_id = ""
+                    cue["recheck"] = "unresolved"
+                    evidence.append("ambiguous_after_recheck")
+        if target_id and target_id not in valid_ids:
+            target_id = ""
+            evidence.append("invalid_target")
+        if not target_id:
+            # Inherit only across an explicit continuation or weak ambiguous
+            # cue. Clear/no-focus annotations remain no-focus.
+            if (cue.get("action") == "continue" or cue.get("recheck") == "unresolved") and last_target:
+                target_id = last_target
+                cue["fallback"] = "context_inherit"
+                evidence.append("inherited_previous_focus")
+            else:
+                evidence.append("no_focus")
+        else:
+            accepted += 1
+            last_target = target_id
+        if target_id != original_id or not target_id:
+            degraded += 1
+            if cue.get("recheck") == "unresolved" or (not target_id and cue.get("action") != "clear"):
+                issues.append({"cue_index": index, "text": cue.get("text", ""), "reason": "ambiguous_or_unlocated", "suggestion": "复核焦点；可接受父级区域或无焦点"})
+        cue["target_id"] = target_id
+        cue["target_ids"] = [target_id] if target_id else []
+        cue["decision"] = "accepted" if target_id else "no_focus"
+        cue["evidence"] = evidence
+        reviewed.append(cue)
+    total = len(reviewed)
+    report = {
+        "version": 1,
+        "cue_count": total,
+        "automatic_accept_count": accepted,
+        "automatic_accept_rate": round(accepted / total, 4) if total else None,
+        "degraded_count": degraded,
+        "degraded_rate": round(degraded / total, 4) if total else 0.0,
+        "anomalies": issues,
+        "manual_review_suggestions": issues,
+    }
+    return reviewed, report
+
+
+def validate_focus_events(events: list[dict], targets: list[dict], duration: float) -> list[dict]:
+    """Validate event timing, target references, and normalized geometry."""
+    valid_ids = {str(item.get("id")) for item in targets}
+    output = []
+    previous_end = 0.0
+    for event in events:
+        try:
+            start, end = float(event.get("start", 0)), float(event.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        ids = [str(item) for item in event.get("target_ids", [])]
+        if start < previous_end or end <= start or end > duration + 0.02 or not set(ids) <= valid_ids:
+            continue
+        safe_ids = [item for item in ids if _target_is_visible(next(t for t in targets if str(t.get("id")) == item))]
+        output.append({**event, "target_ids": safe_ids})
+        previous_end = end
+    return output
+
+
+def _target_is_visible(target: dict) -> bool:
+    try:
+        x, y = float(target.get("x", 0)), float(target.get("y", 0))
+        width, height = float(target.get("width", 0)), float(target.get("height", 0))
+        return width > 0 and height > 0 and x >= 0 and y >= 0 and x + width <= 1.001 and y + height <= 1.001
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
     """Turn LLM target text/id annotations into stable PPT shape ids."""
     if not isinstance(raw_cues, list):
@@ -134,20 +252,24 @@ def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
         ).strip()
         if action == "clear":
             previous_id = ""
-            resolved.append({
+            item = {
                 "text": text, "target_id": "", "anchor_id": "",
                 "weight": max(1, len(_compact_text(text))),
                 "source": "llm", "confidence": 1.0,
-            })
+            }
+            _copy_focus_intent(item, raw)
+            resolved.append(item)
             continue
         if action == "continue" and not target_id:
             target_id = previous_id
         if action == "continue" and not target_id:
-            resolved.append({
+            item = {
                 "text": text, "target_id": "", "anchor_id": "",
                 "weight": max(1, len(_compact_text(text))),
                 "source": "llm", "confidence": 1.0,
-            })
+            }
+            _copy_focus_intent(item, raw)
+            resolved.append(item)
             continue
         annotated_anchor_id = target_id
         target = targets_by_id.get(target_id)
@@ -183,15 +305,29 @@ def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
         if not annotated_anchor_id:
             continue
         previous_id = target_id
-        resolved.append({
+        item = {
             "text": text,
             "target_id": target_id,
             "anchor_id": annotated_anchor_id,
             "weight": max(1, len(_compact_text(text))),
             "source": "llm",
             "confidence": round(min(1.0, confidence), 3),
-        })
+        }
+        _copy_focus_intent(item, raw)
+        resolved.append(item)
     return resolved
+
+
+def _copy_focus_intent(destination: dict, raw: dict) -> None:
+    action = str(raw.get("action") or "").strip().lower()
+    stage = str(raw.get("teaching_stage") or raw.get("stage") or "").strip()
+    point_id = str(raw.get("knowledge_point_id") or "").strip()
+    if action:
+        destination["action"] = action
+    if stage:
+        destination["teaching_stage"] = stage
+    if point_id:
+        destination["knowledge_point_id"] = point_id
 
 
 def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dict]:

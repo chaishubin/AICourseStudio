@@ -64,6 +64,8 @@ from vidppt.utils.subtitle_rules import normalize_subtitle_text, subtitle_source
 from vidppt.utils.focus_guidance import (
     FOCUS_CUES_VERSION,
     build_focus_cues,
+    plan_page_focus,
+    validate_focus_events,
     extract_presentation_focus_targets,
     normalize_focus_targets,
     normalize_focus_cues,
@@ -2632,6 +2634,12 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             if not cancel_event.is_set():
                 progress.update('llm', total_pages, total_pages, '文本摘要完成')
 
+        focus_plan_by_page = _plan_focus_pages([
+            (page.text, focus_targets_by_page[page.page_number - 1]
+             if page.page_number <= len(focus_targets_by_page) else [],
+             page.metadata.get('focus_cues'), page.text)
+            for page in content.pages
+        ])
         preview_path = _write_preview(
             task_id,
             source_type='presentation',
@@ -2646,12 +2654,8 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                         focus_targets_by_page[page.page_number - 1]
                         if page.page_number <= len(focus_targets_by_page) else []
                     ),
-                    'focus_cues': build_focus_cues(
-                        page.text,
-                        focus_targets_by_page[page.page_number - 1]
-                        if page.page_number <= len(focus_targets_by_page) else [],
-                        page.metadata.get('focus_cues'),
-                    ),
+                    'focus_cues': focus_plan_by_page[page.page_number - 1]['cues'],
+                    'focus_quality': focus_plan_by_page[page.page_number - 1]['report'],
                 }
                 for page in content.pages
             ],
@@ -2767,6 +2771,13 @@ def run_course_generation(
         focus_targets_by_page = extract_presentation_focus_targets(
             result.presentation
         )
+        focus_plan_by_page = _plan_focus_pages([
+            (section.script or section.title,
+             focus_targets_by_page[page.page_number - 1]
+             if page.page_number <= len(focus_targets_by_page) else [],
+             section.metadata.get('focus_cues'), section.title)
+            for page, section in zip(preview_content.pages, result.course.sections)
+        ])
         preview_path = _write_preview(
             task_id,
             source_type='lesson_plan',
@@ -2781,12 +2792,8 @@ def run_course_generation(
                         focus_targets_by_page[page.page_number - 1]
                         if page.page_number <= len(focus_targets_by_page) else []
                     ),
-                    'focus_cues': build_focus_cues(
-                        section.script or section.title,
-                        focus_targets_by_page[page.page_number - 1]
-                        if page.page_number <= len(focus_targets_by_page) else [],
-                        section.metadata.get('focus_cues'),
-                    ),
+                    'focus_cues': focus_plan_by_page[page.page_number - 1]['cues'],
+                    'focus_quality': focus_plan_by_page[page.page_number - 1]['report'],
                 }
                 for page, section in zip(preview_content.pages, result.course.sections)
             ],
@@ -2810,6 +2817,42 @@ def _page_title(text: str, page_number: int) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         first_line = lines[1] if len(lines) > 1 else ''
     return first_line[:80] or f'第 {page_number} 页'
+
+
+def _plan_focus_pages(page_specs: list[tuple]) -> list[dict]:
+    """Batch-plan a page with whole-script context and carry focus forward."""
+    plans = []
+    previous_target = ""
+    for script, targets, annotations, page_context in page_specs:
+        cues, report = plan_page_focus(
+            script, targets, annotations, page_context=page_context,
+            previous_target_id=previous_target,
+        )
+        chosen = next((cue.get('target_id') for cue in reversed(cues) if cue.get('target_id')), '')
+        if chosen:
+            previous_target = chosen
+        plans.append({'cues': cues, 'report': report})
+    total = sum(item['report']['cue_count'] for item in plans)
+    accepted = sum(item['report']['automatic_accept_count'] for item in plans)
+    degraded = sum(item['report']['degraded_count'] for item in plans)
+    anomalies = [
+        {**issue, 'page_number': index + 1}
+        for index, item in enumerate(plans)
+        for issue in item['report']['anomalies']
+    ]
+    summary = {
+        'version': 1,
+        'cue_count': total,
+        'automatic_accept_count': accepted,
+        'automatic_accept_rate': round(accepted / total, 4) if total else None,
+        'degraded_count': degraded,
+        'degraded_rate': round(degraded / total, 4) if total else 0.0,
+        'anomalies': anomalies,
+        'manual_review_suggestions': anomalies,
+    }
+    for item in plans:
+        item['report']['course_summary'] = summary
+    return plans
 
 
 def _parse_page_focus_response(raw: str) -> tuple[str, list[dict]]:
@@ -3466,6 +3509,7 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         int(item['page_number']): item['focus_events']
         for item in updates if 'page_number' in item and 'focus_events' in item
     }
+    previous_focus_target = ''
     for page in preview.get('pages', []):
         page_number = int(page['page_number'])
         if page_number in by_page:
@@ -3478,6 +3522,15 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             focus_cues_by_page.get(page_number, page.get('focus_cues')),
             page.get('script', ''),
             page.get('focus_targets', []),
+        )
+        page['focus_cues'], page['focus_quality'] = plan_page_focus(
+            page.get('script', ''), page.get('focus_targets', []),
+            page.get('focus_cues'), page_context=page.get('title', ''),
+            previous_target_id=previous_focus_target,
+        )
+        previous_focus_target = next(
+            (cue.get('target_id') for cue in reversed(page['focus_cues']) if cue.get('target_id')),
+            previous_focus_target,
         )
         if page_number in changed_pages:
             manual_events = [
@@ -3675,6 +3728,35 @@ def run_media_generation(task_id: str):
             }
             for page in content.pages
         ])
+        timing_anomalies = []
+        for page in content.pages:
+            page_number = int(page.page_number)
+            duration = durations_by_page[page_number]
+            targets = next((item.get('focus_targets', []) for item in preview.get('pages', [])
+                            if int(item.get('page_number', 0)) == page_number), [])
+            events = [event for event in cue_timeline['focus_events']
+                      if int(event.get('page_number', 0)) == page_number]
+            local_events = [
+                {**event, 'start': event.get('page_start', event.get('start')),
+                 'end': event.get('page_end', event.get('end'))}
+                for event in events
+            ]
+            valid = validate_focus_events(local_events, targets, duration)
+            if len(valid) != len(events):
+                timing_anomalies.append({
+                    'page_number': page_number,
+                    'reason': 'event_invalid_target_or_interval',
+                    'suggestion': '已从渲染轨道排除无效事件；检查页面目标坐标或 TTS 时间戳',
+                })
+                valid_keys = {(float(event['start']), float(event['end']), tuple(event['target_ids']))
+                              for event in valid}
+                cue_timeline['focus_events'] = [
+                    event for event in cue_timeline['focus_events']
+                    if int(event.get('page_number', 0)) != page_number
+                    or (float(event.get('page_start', event.get('start', 0))),
+                        float(event.get('page_end', event.get('end', 0))),
+                        tuple(event.get('target_ids', []))) in valid_keys
+                ]
         original_focus_events = cue_timeline['focus_events']
         cue_timeline['focus_events'] = smooth_focus_events(
             original_focus_events, float(options.get('focus_smoothing_seconds', 0))
@@ -3699,6 +3781,22 @@ def run_media_generation(task_id: str):
             if page_number in durations_by_page:
                 page['duration'] = durations_by_page[page_number]
                 page['estimated_seconds'] = durations_by_page[page_number]
+                page_quality = page.setdefault('focus_quality', {})
+                page_events = [event for event in cue_timeline['focus_events']
+                               if int(event.get('page_number', 0)) == page_number]
+                page_quality['time_validation'] = {
+                    'duration_seconds': durations_by_page[page_number],
+                    'event_count': len(page_events),
+                    'intervals_valid': all(
+                        float(event.get('page_end', event.get('end', 0)))
+                        > float(event.get('page_start', event.get('start', 0)))
+                        and float(event.get('page_end', event.get('end', 0)))
+                        <= durations_by_page[page_number] + 0.02
+                        for event in page_events
+                    ),
+                    'timing_sources': sorted({str(cue.get('timing_source', 'estimated_weight'))
+                                              for cue in page_cues_from_timeline(cue_timeline, page_number)}),
+                }
             generated_page = next(
                 (
                     item for item in content.pages
@@ -3715,6 +3813,13 @@ def run_media_generation(task_id: str):
                 page['focus_cues'] = generated_page.metadata.get(
                     'focus_cues', page.get('focus_cues', [])
                 )
+        preview['focus_quality_report'] = {
+            **(preview.get('pages', [{}])[0].get('focus_quality', {}).get('course_summary', {})
+               if preview.get('pages') else {}),
+            'timing_anomalies': timing_anomalies,
+            'high_risk_pages': [int(page['page_number']) for page in preview.get('pages', [])
+                                if page.get('focus_quality', {}).get('anomalies')],
+        }
         preview['cue_timeline_path'] = str(cue_timeline_path)
         preview['cue_timeline_version'] = cue_timeline['version']
         duration_estimate = _duration_estimate_payload(preview)

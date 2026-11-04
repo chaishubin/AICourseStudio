@@ -28,7 +28,7 @@ COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适�
     "layout": "cover|section|title_and_content|two_column|comparison|process|timeline|framework|key_point|card_grid|summary",
     "bullets": ["页面可见要点，每项简短"],
     "script": "适合口语讲解的逐页讲稿，不要机械朗读要点",
-    "focus_cues": [{"text": "讲稿中的连续讲解片段", "anchor": "title|bullet-1|bullet-2"}],
+    "focus_cues": [{"text": "讲稿中的连续讲解片段", "anchor": "title|bullet-1|bullet-2", "action": "switch|continue|clear", "teaching_stage": "引入|解释|举例|比较|推导|总结|过渡", "knowledge_point_id": "本页要点ID或空"}],
     "notes": "给讲师的补充备注",
     "image_prompt": "适合本页、无文字插图的主体和场景描述；无需插图时留空"
   }]
@@ -41,6 +41,7 @@ COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适�
 4. 不要让所有正文页使用同一种版式，相邻页面应有合理的视觉节奏。
 5. focus_cues 必须覆盖整页讲稿，anchor 必须引用本页稳定内容锚点：title 或 bullet-N；
    即使讲稿是概括、过渡或举例，也要选择最相关锚点，不要自行复述可见文字或输出空目标。
+6. 每个 focus_cue 同时标注教学阶段、对应知识点序号（bullet-N）和焦点动作；同一对象延续时用 continue，转向对象用 switch，无可定位内容时用 clear。
 """
 
 SUBTITLE_SAFE_AREA_PROMPT = """视频会烧录字幕，PPT 设计必须预留字幕安全区：
@@ -286,11 +287,21 @@ def _normalize_llm_focus_cues(
                 item.get("target_text") or item.get("target") or ""
             ).strip()
         if text and target_text:
-            cues.append({
+            cue = {
                 "text": text,
                 "anchor": anchor or "legacy",
                 "target_text": target_text,
-            })
+            }
+            action = str(item.get("action") or "").strip().lower()
+            stage = str(item.get("teaching_stage") or item.get("stage") or "").strip()
+            point_id = str(item.get("knowledge_point_id") or "").strip()
+            if action:
+                cue["action"] = action
+            if stage:
+                cue["teaching_stage"] = stage
+            if point_id:
+                cue["knowledge_point_id"] = point_id
+            cues.append(cue)
     return cues
 
 

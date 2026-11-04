@@ -10,6 +10,8 @@ from vidppt.utils.focus_guidance import (
     focus_timeline,
     normalize_focus_targets,
     normalize_focus_cues,
+    plan_page_focus,
+    validate_focus_events,
 )
 from vidppt.utils.video_composer import VideoComposer
 
@@ -103,6 +105,37 @@ def test_llm_focus_annotation_is_preferred_over_similarity_matching():
         "source": "llm",
         "confidence": 1.0,
     }]
+
+
+def test_page_planner_records_evidence_and_safely_clears_ambiguous_match():
+    targets = [
+        {"id": "a", "text": "方法一", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.1},
+        {"id": "b", "text": "方法二", "x": 0.6, "y": 0.2, "width": 0.3, "height": 0.1},
+    ]
+    cues, report = plan_page_focus("这里我们继续分析这个问题。", targets, page_context="方法一 方法二")
+
+    assert cues[0]["target_id"] == ""
+    assert cues[0]["decision"] == "no_focus"
+    assert cues[0]["evidence"]
+    assert report["cue_count"] == 1
+    assert report["degraded_count"] == 1
+    assert report["manual_review_suggestions"]
+
+
+def test_event_validator_drops_invalid_geometry_target_and_time():
+    targets = [
+        {"id": "good", "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2},
+        {"id": "offscreen", "x": 0.9, "y": 0.1, "width": 0.3, "height": 0.2},
+    ]
+    events = [
+        {"start": 0, "end": 1, "target_ids": ["good"]},
+        {"start": 1, "end": 2, "target_ids": ["offscreen"]},
+        {"start": 2, "end": 5, "target_ids": ["missing"]},
+    ]
+
+    result = validate_focus_events(events, targets, 3)
+
+    assert [event["target_ids"] for event in result] == [["good"], []]
 
 
 def test_normalize_focus_targets_removes_layout_labels_and_sorts_visually():

@@ -22,6 +22,7 @@ from .generation import CourseBuilder
 from .ingestion import read_source_document
 from .renderers import PPTXRenderer, SubtitleRenderer
 from .utils.subtitle_rules import normalize_subtitle_text
+from .utils.focus_guidance import extract_presentation_focus_targets, plan_page_focus
 
 
 @dataclass
@@ -173,6 +174,27 @@ class CoursePipeline:
             course_page.audio = page.audio
             course_page.duration = duration
             timed_pages.append((course_page, duration))
+
+        try:
+            focus_targets = extract_presentation_focus_targets(presentation)
+        except Exception:
+            focus_targets = [[] for _ in course.sections]
+        previous_target = ""
+        for index, course_page in enumerate(course.sections):
+            targets = focus_targets[index] if index < len(focus_targets) else []
+            planned, quality = plan_page_focus(
+                course_page.script or course_page.title,
+                targets,
+                course_page.metadata.get("focus_cues"),
+                page_context=course_page.title,
+                previous_target_id=previous_target,
+            )
+            course_page.metadata["focus_cues"] = planned
+            course_page.metadata["focus_quality"] = quality
+            previous_target = next(
+                (cue.get("target_id") for cue in reversed(planned) if cue.get("target_id")),
+                previous_target,
+            )
 
         cue_timeline = build_cue_timeline([
             {
