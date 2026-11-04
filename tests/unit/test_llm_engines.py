@@ -222,7 +222,7 @@ class TestOpenAICallApi:
         mock_client.post.return_value = mock_response
 
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
-            with pytest.raises(ValueError, match="OpenAI 返回内容为空"):
+            with pytest.raises(ValueError, match="模型返回了空内容"):
                 engine._call_api([{"role": "user", "content": "原始文本"}])
 
     def test_call_api_missing_choices_raises(self):
@@ -236,7 +236,7 @@ class TestOpenAICallApi:
         mock_client.post.return_value = mock_response
 
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
-            with pytest.raises(ValueError, match="OpenAI 返回内容为空"):
+            with pytest.raises(ValueError, match="模型返回了空内容"):
                 engine._call_api([{"role": "user", "content": "原始文本"}])
 
     def test_call_api_builds_correct_payload(self):

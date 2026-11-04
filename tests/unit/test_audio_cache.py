@@ -444,3 +444,25 @@ class TestAudioCacheStats:
         assert stats["cache_count"] == 1
         assert stats["total_size_mb"] > 0
         assert stats["metadata_entries"] == 1
+
+
+def test_cache_keeps_timing_with_audio_and_removes_stale_sidecar(tmp_path):
+    import json
+
+    cache = AudioCacheManager(cache_dir=tmp_path / "cache")
+    audio = tmp_path / "source.mp3"
+    audio.write_bytes(b"first")
+    sidecar = audio.with_suffix(".timing.json")
+    sidecar.write_text(json.dumps({"audio_sha256": "first"}), encoding="utf-8")
+    args = dict(text="hello", tts_engine="edge-tts", voice="voice", rate="+0%")
+    cache.put(audio_path=audio, **args)
+    cached = cache.get(**args)
+    assert cached.read_bytes() == b"first"
+    assert cached.with_suffix(".timing.json").read_text() == sidecar.read_text()
+    sidecar.unlink()
+    audio.write_bytes(b"second")
+    cache.put(audio_path=audio, **args)
+    assert cached.read_bytes() == b"second"
+    assert not cached.with_suffix(".timing.json").exists()
+    assert cache.clear() == 1
+    assert not cached.with_suffix(".timing.json").exists()

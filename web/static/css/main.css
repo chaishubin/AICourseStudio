@@ -3722,6 +3722,10 @@ body {
     pointer-events: none;
 }
 
+.course-preview-subtitle-sample[hidden] {
+    display: none;
+}
+
 .subtitle-risk-badge {
     position: absolute;
     left: 10px;
@@ -3838,7 +3842,7 @@ body {
 
 .course-focus-cue-row {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(140px, .8fr);
+    grid-template-columns: auto minmax(0, 1.4fr) minmax(140px, .8fr);
     align-items: center;
     gap: 8px;
 }

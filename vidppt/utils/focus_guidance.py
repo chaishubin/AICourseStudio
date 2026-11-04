@@ -121,15 +121,34 @@ def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
         return []
     targets_by_id = {str(target.get("id")): target for target in targets}
     resolved = []
+    previous_id = ""
     for raw in raw_cues:
         if not isinstance(raw, dict):
             continue
         text = str(raw.get("text") or "").strip()
         if not text:
             continue
+        action = str(raw.get("action") or "").strip().lower()
         target_id = str(
             raw.get("anchor_id") or raw.get("target_id") or ""
         ).strip()
+        if action == "clear":
+            previous_id = ""
+            resolved.append({
+                "text": text, "target_id": "", "anchor_id": "",
+                "weight": max(1, len(_compact_text(text))),
+                "source": "llm", "confidence": 1.0,
+            })
+            continue
+        if action == "continue" and not target_id:
+            target_id = previous_id
+        if action == "continue" and not target_id:
+            resolved.append({
+                "text": text, "target_id": "", "anchor_id": "",
+                "weight": max(1, len(_compact_text(text))),
+                "source": "llm", "confidence": 1.0,
+            })
+            continue
         annotated_anchor_id = target_id
         target = targets_by_id.get(target_id)
         confidence = 0.98 if target is not None else 0.0
@@ -163,6 +182,7 @@ def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
                 target_id = ""
         if not annotated_anchor_id:
             continue
+        previous_id = target_id
         resolved.append({
             "text": text,
             "target_id": target_id,
@@ -177,13 +197,17 @@ def _resolve_annotated_cues(raw_cues, targets: list[dict]) -> list[dict]:
 def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dict]:
     """Keep user target choices while refreshing cue text after script edits."""
     automatic = build_focus_cues(script, targets)
-    if not isinstance(raw_cues, list) or not automatic:
+    if not isinstance(raw_cues, list) or not str(script or "").strip():
         return automatic
     valid_ids = {str(target.get("id")) for target in targets} | {""}
     persistent_cues = [
         cue for cue in raw_cues
         if isinstance(cue, dict)
-        and (cue.get("manual") is True or cue.get("source") == "llm")
+        and (
+            cue.get("manual") is True
+            or cue.get("source") == "llm"
+            or cue.get("subtitle_unit") is True
+        )
         and str(cue.get("target_id") or "") in valid_ids
     ]
     if (

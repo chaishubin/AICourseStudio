@@ -245,3 +245,34 @@ def test_video_focus_layers_support_spotlight_and_underline_styles():
     finally:
         for layer in generated:
             layer.close()
+
+
+def test_llm_can_continue_and_clear_focus_without_losing_narration():
+    from vidppt.utils.focus_guidance import build_focus_cues
+
+    targets = [{"id": "a", "text": "核心概念", "role": "content"}]
+    cues = build_focus_cues("核心概念说明过渡", targets, annotated_cues=[
+        {"text": "核心概念", "action": "switch", "anchor_id": "a"},
+        {"text": "说明", "action": "continue", "anchor_id": ""},
+        {"text": "过渡", "action": "clear", "anchor_id": ""},
+    ])
+    assert [cue["target_id"] for cue in cues] == ["a", "a", ""]
+    assert "".join(cue["text"] for cue in cues) == "核心概念说明过渡"
+
+
+def test_spotlight_multiple_targets_share_one_clear_region():
+    from vidppt.utils.video_composer import VideoComposer
+
+    targets = [
+        {"id": "a", "x": 0.1, "y": 0.2, "width": 0.1, "height": 0.2},
+        {"id": "b", "x": 0.7, "y": 0.2, "width": 0.1, "height": 0.2},
+    ]
+    layers = VideoComposer._focus_layers(
+        targets, [{"start": 0, "end": 1, "target_ids": ["a", "b"]}],
+        1, 1000, 500, 0, 0, "spotlight",
+    )
+    # One shared shade leaves both targets visible instead of each shade
+    # darkening the other target.
+    assert len(layers) == 5
+    for layer in layers:
+        layer.close()

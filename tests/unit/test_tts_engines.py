@@ -293,3 +293,23 @@ class TestTTSEngineAbstract:
         # 应该可以实例化
         engine = CustomTTSEngine()
         assert isinstance(engine, TTSEngine)
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_capture_word_boundaries_and_audio_hash(temp_dir):
+    import hashlib
+    import json
+
+    async def stream():
+        yield {"type": "audio", "data": b"audio"}
+        yield {"type": "WordBoundary", "text": "你好", "offset": 1_000_000, "duration": 5_000_000}
+
+    communicator = Mock()
+    communicator.stream = stream
+    output = temp_dir / "audio.mp3"
+    with patch("vidppt.engines.tts.edge_tts_engine.edge_tts.Communicate", return_value=communicator):
+        await EdgeTTSEngine().convert_async("你好", output, "voice", "+0%", capture_timestamps=True)
+    timing = json.loads(output.with_suffix(".timing.json").read_text())
+    assert output.read_bytes() == b"audio"
+    assert timing["audio_sha256"] == hashlib.sha256(b"audio").hexdigest()
+    assert timing["boundaries"] == [{"text": "你好", "start": 0.1, "end": 0.6}]

@@ -1117,3 +1117,80 @@ def test_pptx_renderer_converts_subtitle_area_to_content_bounds():
 
     assert renderer.subtitle_safe_area["y"] == pytest.approx(6.25)
     assert bottom == pytest.approx(6.07)
+
+
+def test_independent_focus_track_merges_only_contiguous_same_page_events():
+    from vidppt.core.cue_timeline import page_focus_from_timeline
+
+    timeline = build_cue_timeline([
+        {"page_number": 1, "duration": 4, "cues": [
+            {"text": "a", "start": 0, "end": 1, "target_id": "x"},
+            {"text": "b", "start": 1, "end": 2, "target_id": "x"},
+            {"text": "c", "start": 2, "end": 3, "target_id": ""},
+            {"text": "d", "start": 3, "end": 4, "target_id": "x", "manual": True},
+        ]},
+        {"page_number": 2, "duration": 1, "cues": [
+            {"text": "e", "start": 0, "end": 1, "target_id": "x"},
+        ]},
+    ])
+    assert [(event["start"], event["end"]) for event in timeline["focus_events"]] == [
+        (0, 2), (3, 4), (4, 5),
+    ]
+    assert timeline["focus_events"][1]["reviewed"]
+    assert page_focus_from_timeline({**timeline, "focus_events": []}, 1) == []
+    sliced = slice_cue_timeline(timeline, 2, 2)
+    assert sliced["focus_events"][0]["start"] == 0
+    shifted = shift_cue_timeline(timeline, intro_seconds=2)
+    assert shifted["focus_events"][0]["start"] == 2
+    assert shift_cue_timeline(timeline, intro_seconds=2) == shifted
+
+
+
+def test_explicit_focus_track_overrides_subtitle_bindings_and_keeps_empty():
+    pages = [{"page_number": 1, "duration": 3,
+              "cues": [{"text": "A", "start": 0, "end": 3, "target_id": "old"}],
+              "focus_events": [{"start": 0.5, "end": 2.5,
+                                "target_ids": ["x", "y"], "reviewed": True}]}]
+    timeline = build_cue_timeline(pages)
+    assert timeline["cues"][0]["target_ids"] == ["old"]
+    assert timeline["focus_events"][0]["target_ids"] == ["x", "y"]
+    assert timeline["focus_events"][0]["start"] == 0.5
+    pages[0]["focus_events"] = []
+    assert build_cue_timeline(pages)["focus_events"] == []
+
+
+def test_focus_smoothing_respects_manual_empty_and_page_boundaries():
+    from vidppt.core.cue_timeline import smooth_focus_events
+
+    def event(start, end, target, **fields):
+        return {"page_number": 1, "start": start, "end": end,
+                "page_start": start, "page_end": end, "target_ids": [target],
+                "confidence": 0.2, "mapping_source": "fallback", **fields}
+
+    events = [event(0, 1, "a"), event(1, 1.2, "b"), event(1.2, 2, "a")]
+    assert len(smooth_focus_events(events, 0)) == 3
+    assert [(e["start"], e["end"]) for e in smooth_focus_events(events, 0.3)] == [(0, 2)]
+    manual = [events[0], {**events[1], "reviewed": True}, events[2]]
+    assert len(smooth_focus_events(manual, 0.3)) == 3
+    clear_gap = [events[0], {**events[2], "start": 1.2}]
+    assert len(smooth_focus_events(clear_gap, 0.3)) == 2
+    cross_page = [events[0], events[1], {**events[2], "page_number": 2}]
+    assert len(smooth_focus_events(cross_page, 0.3)) == 3
+
+
+def test_burn_focus_uses_the_same_ass_time_boundary():
+    from vidppt.core.cue_timeline import page_burn_focus_from_timeline
+    from vidppt.course_pipeline import CoursePipeline
+
+    timeline = build_cue_timeline([{
+        "page_number": 1, "duration": 2,
+        "cues": [
+            {"text": "first", "start": 0, "end": 0.503, "target_id": "a"},
+            {"text": "next", "start": 0.503, "end": 2, "target_id": "b"},
+        ],
+    }])
+    events = page_burn_focus_from_timeline(timeline, 1)
+    assert events[0]["end"] == events[1]["start"] == 0.5
+    assert CoursePipeline._ass_time("00:00:00,503") == "0:00:00.50"
+    assert CoursePipeline._ass_time("00:00:00,999") == "0:00:01.00"
+    assert timeline["focus_events"][0]["end"] == 0.503

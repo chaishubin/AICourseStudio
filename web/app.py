@@ -19,7 +19,6 @@ import secrets
 import subprocess
 import tempfile
 import glob
-from difflib import SequenceMatcher
 from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
@@ -52,12 +51,16 @@ from vidppt.core.course import Course, CourseSection, KnowledgePoint
 from vidppt.core.cue_timeline import (
     build_cue_timeline,
     page_cues_from_timeline,
+    page_focus_from_timeline,
+    page_burn_focus_from_timeline,
+    focus_events_from_cues,
+    smooth_focus_events,
     shift_cue_timeline,
     slice_cue_timeline,
     write_cue_timeline,
 )
 from vidppt.review import CourseReviewError, CourseReviewer
-from vidppt.utils.subtitle_rules import normalize_subtitle_text
+from vidppt.utils.subtitle_rules import normalize_subtitle_text, subtitle_source_chunks
 from vidppt.utils.focus_guidance import (
     FOCUS_CUES_VERSION,
     build_focus_cues,
@@ -2590,8 +2593,11 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                         focus_instruction = (
                             "\n请只输出 JSON：{\"script\":\"可直接配音的完整讲稿\","
                             "\"focus_cues\":[{\"text\":\"连续讲解片段\","
-                            "\"anchor_id\":\"对应锚点ID\"}]}。focus_cues 要覆盖完整讲稿；"
-                            "概括、过渡和举例也必须选择最相关候选，不允许空目标。"
+                            "\"action\":\"continue|switch|clear\","
+                            "\"anchor_id\":\"对应锚点ID或空字符串\"}]}。"
+                            "focus_cues 按讲解顺序覆盖完整讲稿。结合相邻片段和上一焦点判断："
+                            "延续时用 continue，转到新元素用 switch，概括、过渡或无明确位置时用 clear。"
+                            "clear 的 anchor_id 为空；仅选择当前页候选 ID。"
                             f"\n当前页焦点候选：\n{target_lines}"
                         )
                     raw_summary = llm_provider.summarize(
@@ -2943,7 +2949,7 @@ def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dic
         'mode': mode,
         'provider': provider,
         'model': model,
-        'summary': f'AI 审查未完成: {error}',
+        'summary': 'AI 质检未完成，请稍后重试或检查模型配置。',
         'findings': [],
         'reviewed_pages': [],
         'estimated_cost_cny': 0,
@@ -3011,7 +3017,38 @@ def _focus_cues_cover_script(cues: list[dict], script: str) -> bool:
     left, right = compact(cue_text), compact(script)
     if not left or not right:
         return False
-    return SequenceMatcher(None, left, right).ratio() >= 0.86
+    return left == right
+
+
+def _focus_audio_signature(script: str, config: ProcessConfig) -> str:
+    settings = {
+        'script': script, 'engine': config.tts_engine, 'voice': config.tts_voice,
+        'rate': config.tts_rate, 'options': config.tts_options,
+        'sample_rate': config.audio_sample_rate, 'bitrate': config.audio_bitrate,
+    }
+    return hashlib.sha256(json.dumps(settings, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def _segment_speech_timing(audio_path: Path, text: str, duration: float) -> tuple[float, float] | None:
+    """Accept provider boundaries only when they describe the complete audio text."""
+    timing_path = audio_path.with_suffix('.timing.json')
+    try:
+        timing = json.loads(timing_path.read_text(encoding='utf-8'))
+        if timing.get('audio_sha256') != hashlib.sha256(audio_path.read_bytes()).hexdigest():
+            return None
+        boundaries = timing['boundaries']
+        compact = lambda value: re.sub(r'[^\w\u3400-\u9fff]+', '', value).lower()
+        if not boundaries or compact(''.join(str(item['text']) for item in boundaries)) != compact(text):
+            return None
+        previous = 0.0
+        for item in boundaries:
+            start, end = float(item['start']), float(item['end'])
+            if not math.isfinite(start) or not math.isfinite(end) or start < previous or end <= start or end > duration + 0.05:
+                return None
+            previous = end
+        return float(boundaries[0]['start']), min(duration, float(boundaries[-1]['end']))
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
 
 
 def _generate_audio_with_focus_segments(
@@ -3031,13 +3068,38 @@ def _generate_audio_with_focus_segments(
     regular_pages = []
     segment_pages = []
     for page in content.pages:
+        signature = _focus_audio_signature(page.text, config)
+        existing_audio = config.output_dir / str(page.page_number) / 'audio.mp3'
+        saved_cues = page.metadata.get('focus_cues', [])
+        if (config.skip_existing and existing_audio.is_file() and existing_audio.stat().st_size > 0
+                and page.metadata.get('audio_signature') == signature
+                and saved_cues and _focus_cues_cover_script(saved_cues, page.text)
+                and all(cue.get('timing_source') in {'segment_audio', 'tts_word_boundary'} and cue.get('subtitle_unit')
+                        for cue in saved_cues if isinstance(cue, dict))):
+            page.audio = existing_audio
+            continue
+        page.metadata['audio_signature'] = signature
         cues = [
             cue for cue in page.metadata.get('focus_cues', [])
             if isinstance(cue, dict) and str(cue.get('text') or '').strip()
         ]
-        if cues and _focus_cues_cover_script(cues, page.text):
+        if not _focus_cues_cover_script(cues, page.text):
+            cues = [{'text': page.text}] if page.text.strip() else []
+        subtitle_cues = []
+        for cue in cues:
+            chunks = subtitle_source_chunks(cue['text'])
+            if len(chunks) == 1:
+                cue['subtitle_unit'] = True
+                subtitle_cues.append(cue)
+            else:
+                subtitle_cues.extend(
+                    {**cue, 'text': chunk, 'subtitle_unit': True}
+                    for chunk in chunks
+                )
+        page.metadata['focus_cues'] = subtitle_cues
+        if subtitle_cues:
             page_segments = []
-            for cue in cues:
+            for cue in subtitle_cues:
                 segment_page = PageContent(
                     page_number=len(segment_pages) + 1,
                     text=str(cue['text']).strip(),
@@ -3054,6 +3116,7 @@ def _generate_audio_with_focus_segments(
             'output_dir': config.output_dir / '_focus_segments',
             'save_intermediate': True,
             'skip_existing': False,
+            'tts_capture_timestamps': config.tts_engine == 'edge-tts',
         })
         Pipeline(segment_config)._generate_audio(
             DocumentContent(pages=segment_pages),
@@ -3067,8 +3130,7 @@ def _generate_audio_with_focus_segments(
             not segment.audio or not segment.audio.exists()
             for _, segment in page_segments
         ):
-            regular_pages.append(page)
-            continue
+            raise RuntimeError(f"第 {page.page_number} 页字幕分段配音失败")
         clips = []
         cursor = 0.0
         try:
@@ -3085,11 +3147,13 @@ def _generate_audio_with_focus_segments(
                 ])
                 clips.append(clip)
                 cue_duration = float(clip.duration)
-                cue['start'] = round(cursor, 3)
+                timing = _segment_speech_timing(segment.audio, cue['text'], cue_duration)
+                start, end = timing if timing else (0.0, cue_duration)
+                cue['start'] = round(cursor + start, 3)
+                cue['end'] = round(cursor + end, 3)
+                cue['duration'] = round(end - start, 3)
+                cue['timing_source'] = 'tts_word_boundary' if timing else 'segment_audio'
                 cursor += cue_duration
-                cue['end'] = round(cursor, 3)
-                cue['duration'] = round(cue_duration, 3)
-                cue['timing_source'] = 'segment_audio'
             page_audio = config.output_dir / str(page.page_number) / 'audio.mp3'
             page_audio.parent.mkdir(parents=True, exist_ok=True)
             combined = concatenate_audioclips(clips)
@@ -3126,16 +3190,10 @@ def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
     page = _preview_page(preview, page_number)
     if not page:
         raise FileNotFoundError("页面不存在")
-    focus_cues = page.get('focus_cues') or []
-    has_real_timing = bool(focus_cues) and all(
-        cue.get('timing_source') == 'segment_audio'
-        for cue in focus_cues if isinstance(cue, dict)
-    )
-    if (
-        audio_path.exists()
-        and audio_path.stat().st_size > 0
-        and (not focus_cues or has_real_timing)
-    ):
+    # Older projects can contain page audio without a stored cue timeline.
+    # Preserve that preview path until new timed segments are generated.
+    if (audio_path.is_file() and audio_path.stat().st_size > 0
+            and not page.get('focus_cues') and not page.get('audio_signature')):
         return audio_path
 
     lock = _preview_audio_locks.setdefault(task_id, threading.Lock())
@@ -3169,12 +3227,13 @@ def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
                 page_number=page_number,
                 text=script,
                 slide_image=Path(page['image_path']),
-                metadata={'focus_cues': page.get('focus_cues', [])},
+                metadata={'focus_cues': page.get('focus_cues', []), 'audio_signature': page.get('audio_signature')},
             )
         ])
         _generate_audio_with_focus_segments(content, config)
         if not audio_path.exists() or audio_path.stat().st_size == 0:
             raise RuntimeError(f"第 {page_number} 页配音生成失败")
+        page['audio_signature'] = content.pages[0].metadata.get('audio_signature')
         page['focus_cues'] = content.pages[0].metadata.get(
             'focus_cues', page.get('focus_cues', [])
         )
@@ -3403,6 +3462,10 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         for item in updates
         if 'page_number' in item and 'focus_cues' in item
     }
+    events_by_page = {
+        int(item['page_number']): item['focus_events']
+        for item in updates if 'page_number' in item and 'focus_events' in item
+    }
     for page in preview.get('pages', []):
         page_number = int(page['page_number'])
         if page_number in by_page:
@@ -3416,6 +3479,44 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             page.get('script', ''),
             page.get('focus_targets', []),
         )
+        if page_number in changed_pages:
+            manual_events = [
+                {**event, 'needs_review': True}
+                for event in page.get('focus_events', [])
+                if event.get('manual') or event.get('reviewed')
+            ]
+            if manual_events:
+                page['focus_events'] = manual_events
+            else:
+                page.pop('focus_events', None)
+        elif page_number in events_by_page:
+            events = events_by_page[page_number]
+            if not isinstance(events, list):
+                raise ValueError('焦点轨道格式错误')
+            valid_ids = {str(target.get('id')) for target in page.get('focus_targets', [])}
+            validated = []
+            previous_end = 0.0
+            timed_cues = page.get('focus_cues') or []
+            page_end = max(
+                (float(cue.get('end') or 0) for cue in timed_cues if isinstance(cue, dict)),
+                default=0.0,
+            )
+            for event in events:
+                if not isinstance(event, dict) or not isinstance(event.get('target_ids'), list):
+                    raise ValueError('焦点事件格式错误')
+                try:
+                    start, end = float(event['start']), float(event['end'])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError('焦点时间格式错误') from exc
+                ids = [str(item) for item in event['target_ids']]
+                if (not math.isfinite(start) or not math.isfinite(end)
+                        or start < previous_end or end <= start
+                        or (page_end > 0 and end > page_end + 0.001)
+                        or not set(ids) <= valid_ids):
+                    raise ValueError('焦点时间或目标无效')
+                previous_end = end
+                validated.append({**event, 'start': start, 'end': end, 'target_ids': ids})
+            page['focus_events'] = validated
     if not any(page.get('script', '').strip() for page in preview.get('pages', [])):
         raise ValueError("至少需要保留一页非空讲稿")
     if changed_pages and preview.get('ai_review'):
@@ -3518,6 +3619,8 @@ def run_media_generation(task_id: str):
                     'lesson_segment': page.get('lesson_segment'),
                     'focus_targets': page.get('focus_targets', []),
                     'focus_cues': page.get('focus_cues', []),
+                    'audio_signature': page.get('audio_signature'),
+                    **({'focus_events': page['focus_events']} if 'focus_events' in page else {}),
                     'focus_highlight': options.get('focus_highlight', True),
                     'focus_highlight_style': options.get(
                         'focus_highlight_style', 'outline'
@@ -3558,7 +3661,7 @@ def run_media_generation(task_id: str):
             ))
 
         durations_by_page = {
-            int(page.page_number): round(float(duration), 2)
+            int(page.page_number): float(duration)
             for page, (_, duration) in zip(content.pages, timed_pages)
         }
         cue_timeline = build_cue_timeline([
@@ -3568,13 +3671,23 @@ def run_media_generation(task_id: str):
                 'script': page.text,
                 'duration': durations_by_page[int(page.page_number)],
                 'cues': page.metadata.get('focus_cues', []),
+                **({'focus_events': page.metadata['focus_events']} if 'focus_events' in page.metadata else {}),
             }
             for page in content.pages
         ])
+        original_focus_events = cue_timeline['focus_events']
+        cue_timeline['focus_events'] = smooth_focus_events(
+            original_focus_events, float(options.get('focus_smoothing_seconds', 0))
+        )
         cue_timeline_path = write_cue_timeline(
             cue_timeline, config.output_dir / 'cue_timeline.json'
         )
         for page in content.pages:
+            page.metadata['focus_events'] = (
+                page_burn_focus_from_timeline(cue_timeline, int(page.page_number))
+                if config.burn_subtitles
+                else page_focus_from_timeline(cue_timeline, int(page.page_number))
+            )
             page.metadata['focus_cues'] = page_cues_from_timeline(
                 cue_timeline, int(page.page_number)
             )
@@ -3594,6 +3707,11 @@ def run_media_generation(task_id: str):
                 None,
             )
             if generated_page is not None:
+                page['audio_signature'] = generated_page.metadata.get('audio_signature')
+                if not any(event.get('needs_review') for event in page.get('focus_events', [])):
+                    page['focus_events'] = page_focus_from_timeline(
+                        {**cue_timeline, 'focus_events': original_focus_events}, page_number
+                    )
                 page['focus_cues'] = generated_page.metadata.get(
                     'focus_cues', page.get('focus_cues', [])
                 )
@@ -4211,12 +4329,16 @@ def course_review(task_id):
     try:
         review = _run_course_review(task_id, mode)
     except (ValueError, CourseReviewError) as exc:
+        logger.warning(
+            f'课程 AI 审查未完成: task={task_id}, mode={mode}, '
+            f'error_type={type(exc).__name__}, error={exc}'
+        )
         review = _mark_course_review_failed(task_id, mode, exc)
-        return jsonify({'success': False, 'ai_review': review, 'error': str(exc)}), 400
+        return jsonify({'success': False, 'ai_review': review, 'error': review['summary']}), 400
     except Exception as exc:
         logger.exception(f'课程 AI 审查失败: task={task_id}, mode={mode}')
         review = _mark_course_review_failed(task_id, mode, exc)
-        return jsonify({'success': False, 'ai_review': review, 'error': str(exc)}), 502
+        return jsonify({'success': False, 'ai_review': review, 'error': review['summary']}), 502
 
     log_operation(
         'course_review_full' if mode == 'full' else 'course_review_sample',
@@ -4274,6 +4396,9 @@ def ensure_course_preview_audio(task_id):
         'focus_cues': (
             _preview_page(_read_preview(task_id), page_number) or {}
         ).get('focus_cues', []),
+        'focus_events': (
+            _preview_page(_read_preview(task_id), page_number) or {}
+        ).get('focus_events'),
     })
 
 
@@ -4524,6 +4649,9 @@ def continue_course(task_id):
         video_options = _video_options(data)
         packaging_options = _course_packaging_options(data)
         focus_highlight_style = _focus_highlight_style(data)
+        focus_smoothing_seconds = float(data.get('focus_smoothing_seconds', 0))
+        if not math.isfinite(focus_smoothing_seconds) or not 0 <= focus_smoothing_seconds <= 2:
+            raise ValueError('焦点平滑时长必须在 0 到 2 秒之间')
     except (TypeError, ValueError) as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -4563,6 +4691,7 @@ def continue_course(task_id):
                 'burn_subtitles': burn_subtitles,
                 'focus_highlight': bool(data.get('focus_highlight', True)),
                 'focus_highlight_style': focus_highlight_style,
+                'focus_smoothing_seconds': focus_smoothing_seconds,
                 **video_options,
                 **subtitle_options,
                 **packaging_options,
@@ -4573,6 +4702,7 @@ def continue_course(task_id):
                 'burn_subtitles': burn_subtitles,
                 'focus_highlight': bool(data.get('focus_highlight', True)),
                 'focus_highlight_style': focus_highlight_style,
+                'focus_smoothing_seconds': focus_smoothing_seconds,
                 **video_options,
                 **subtitle_options,
                 **packaging_options,

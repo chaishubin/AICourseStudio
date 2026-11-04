@@ -51,6 +51,7 @@ class ProcessConfig:
         "zh-CN-XiaoxiaoNeural"  # 仅用于 edge-tts；minimax 时此字段为 None，voice 通过 tts_options["voice_id"] 配置
     )
     tts_rate: str = "+0%"
+    tts_capture_timestamps: bool = False
     tts_options: dict = field(
         default_factory=dict
     )  # TTS 引擎特定选项（minimax: voice_id, api_key, model 等）

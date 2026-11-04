@@ -66,6 +66,33 @@ def subtitle_chunks(text: str) -> list[str]:
     return _rebalance_short_chunks(chunks)
 
 
+def subtitle_source_chunks(text: str) -> list[str]:
+    """Use subtitle breaks while keeping the original punctuation for TTS."""
+    chunks = subtitle_chunks(text)
+    if len(chunks) <= 1:
+        return [text.strip()] if text.strip() else []
+
+    def visible(char: str) -> bool:
+        return not char.isspace() and (
+            char in "《》" or not unicodedata.category(char).startswith("P")
+        )
+
+    positions = [index for index, char in enumerate(text) if visible(char)]
+    sizes = [sum(visible(char) for char in chunk) for chunk in chunks]
+    if sum(sizes) != len(positions) or not all(sizes):
+        return chunks
+
+    start = count = 0
+    result = []
+    for size in sizes[:-1]:
+        count += size
+        end = positions[count]
+        result.append(text[start:end].strip())
+        start = end
+    result.append(text[start:].strip())
+    return result
+
+
 def wrap_subtitle(text: str) -> str:
     """把单条字幕整理为单行，便于 SRT 与烧录样式稳定显示。"""
     return normalize_subtitle_text(text)

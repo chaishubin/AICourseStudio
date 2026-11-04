@@ -172,6 +172,7 @@ class AudioCacheManager:
             if self._is_cache_expired(metadata[cache_key]["timestamp"]):
                 logger.debug(f"缓存已过期: {cache_key}")
                 cache_file.unlink()
+                cache_file.with_suffix(".timing.json").unlink(missing_ok=True)
                 return None
 
             logger.debug(f"缓存命中: {cache_key}")
@@ -212,6 +213,11 @@ class AudioCacheManager:
             import shutil
 
             shutil.copy2(audio_path, cache_file)
+            timing_path = audio_path.with_suffix(".timing.json")
+            cache_timing = cache_file.with_suffix(".timing.json")
+            cache_timing.unlink(missing_ok=True)
+            if timing_path.is_file():
+                shutil.copy2(timing_path, cache_timing)
 
             # 更新元数据
             metadata = self._load_metadata()
@@ -256,6 +262,7 @@ class AudioCacheManager:
                 if cache_timestamp < cutoff_time:
                     if cache_file.exists():
                         cache_file.unlink()
+                        cache_file.with_suffix(".timing.json").unlink(missing_ok=True)
                         count += 1
                     del metadata[cache_key]
             except Exception as e:

@@ -93,7 +93,8 @@ class SubtitleRenderer:
             end = float(cue.get("end", start))
             if end <= start:
                 continue
-            chunks = _subtitle_chunks(str(cue.get("text") or ""))
+            text = str(cue.get("text") or "")
+            chunks = [text] if cue.get("subtitle_unit") and text else _subtitle_chunks(text)
             if not chunks:
                 continue
             weights = [max(1, len(chunk)) for chunk in chunks]

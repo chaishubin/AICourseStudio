@@ -1027,7 +1027,15 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             "segment_durations": segment_durations,
         })
 
-    monkeypatch.setattr(Pipeline, "_generate_audio", fake_audio)
+    def fake_segmented_audio(content, config, *, cancel_check=None):
+        fake_audio(None, content, None)
+        for page in content.pages:
+            page.metadata["focus_cues"] = [{
+                "text": page.text, "start": 0.0, "end": 2.0,
+                "subtitle_unit": True, "timing_source": "segment_audio",
+            }]
+
+    monkeypatch.setattr(web_app, "_generate_audio_with_focus_segments", fake_segmented_audio)
     monkeypatch.setattr(moviepy, "AudioFileClip", FakeAudioClip)
     monkeypatch.setattr(VideoComposer, "compose", fake_compose)
     monkeypatch.setattr(CoursePipeline, "_burn_subtitles", fake_burn)
@@ -2203,3 +2211,98 @@ def test_script_preview_uses_real_text_and_cache(monkeypatch, temp_dir):
     assert second.status_code == 200
     assert len(generated) == 1
     assert len(generated[0][2]) == 300
+
+
+def test_focus_edit_keeps_audio_and_reuses_it_for_export(monkeypatch, temp_dir):
+    import web.app as web_app
+    from vidppt.core.models import DocumentContent, PageContent, ProcessConfig
+    from vidppt.pipeline import Pipeline
+
+    output = temp_dir / "reuse"
+    (output / "1").mkdir(parents=True)
+    audio = output / "1" / "audio.mp3"
+    audio.write_bytes(b"existing audio")
+    config = ProcessConfig(input_path=temp_dir / "input.pptx", output_dir=output)
+    script = "讲解内容"
+    cue = {"text": script, "start": 0.0, "end": 2.0,
+           "timing_source": "segment_audio", "subtitle_unit": True}
+    signature = web_app._focus_audio_signature(script, config)
+    preview = {"pages": [{
+        "page_number": 1, "script": script, "focus_cues": [cue],
+        "focus_targets": [{"id": "box"}], "audio_signature": signature,
+    }]}
+    (output / "preview.json").write_text(json.dumps(preview), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {"task": {"output_dir": str(output)}})
+    event = {"start": 0.25, "end": 1.75, "target_ids": ["box"],
+             "manual": True, "reviewed": True, "mapping_source": "manual"}
+    result = web_app._update_preview_scripts("task", [{
+        "page_number": 1, "script": script, "focus_events": [event],
+    }])
+    assert result["pages"][0]["focus_events"] == [event]
+    assert audio.read_bytes() == b"existing audio"
+
+    def unexpected_tts(*args, **kwargs):
+        raise AssertionError("re-export must reuse the existing audio")
+
+    monkeypatch.setattr(Pipeline, "_generate_audio", unexpected_tts)
+    page = PageContent(page_number=1, text=script, metadata=result["pages"][0])
+    web_app._generate_audio_with_focus_segments(DocumentContent(pages=[page]), config)
+    assert page.audio == audio
+    assert page.metadata["focus_events"] == [event]
+
+
+def test_focus_edit_rejects_out_of_bounds_without_persisting(monkeypatch, temp_dir):
+    import pytest
+    import web.app as web_app
+
+    preview = {"pages": [{
+        "page_number": 1, "script": "讲稿",
+        "focus_cues": [{"text": "讲稿", "start": 0, "end": 2,
+                        "subtitle_unit": True}],
+        "focus_targets": [{"id": "box"}],
+    }]}
+    preview_path = temp_dir / "preview.json"
+    preview_path.write_text(json.dumps(preview), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {"task": {"output_dir": str(temp_dir)}})
+    with pytest.raises(ValueError, match="焦点时间或目标无效"):
+        web_app._update_preview_scripts("task", [{
+            "page_number": 1, "script": "讲稿",
+            "focus_events": [{"start": 1, "end": 3, "target_ids": ["box"]}],
+        }])
+    assert json.loads(preview_path.read_text(encoding="utf-8")) == preview
+
+
+def test_provider_timing_rejects_stale_or_incomplete_metadata(temp_dir):
+    import hashlib
+    import web.app as web_app
+
+    audio = temp_dir / "segment.mp3"
+    audio.write_bytes(b"audio")
+    sidecar = audio.with_suffix(".timing.json")
+    payload = {
+        "audio_sha256": hashlib.sha256(b"audio").hexdigest(),
+        "boundaries": [
+            {"text": "你好", "start": 0.12, "end": 0.5},
+            {"text": "世界", "start": 0.6, "end": 1.1},
+        ],
+    }
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+    assert web_app._segment_speech_timing(audio, "你好，世界", 1.5) == (0.12, 1.1)
+    assert web_app._segment_speech_timing(audio, "你好，世界呀", 1.5) is None
+    audio.write_bytes(b"different")
+    assert web_app._segment_speech_timing(audio, "你好，世界", 1.5) is None
+
+
+def test_script_change_preserves_manual_focus_for_review(monkeypatch, temp_dir):
+    import web.app as web_app
+
+    event = {"start": 0, "end": 2, "target_ids": ["box"],
+             "reviewed": True, "manual": True}
+    preview = {"pages": [{"page_number": 1, "script": "原讲稿",
+                          "focus_targets": [{"id": "box", "text": "内容"}],
+                          "focus_events": [event]}]}
+    (temp_dir / "preview.json").write_text(json.dumps(preview), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {"task": {"output_dir": str(temp_dir)}})
+    result = web_app._update_preview_scripts("task", [{"page_number": 1, "script": "新讲稿"}])
+    saved = result["pages"][0]["focus_events"]
+    assert saved == [{**event, "needs_review": True}]

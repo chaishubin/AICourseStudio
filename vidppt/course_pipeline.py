@@ -12,6 +12,8 @@ from .core.course import Course
 from .core.cue_timeline import (
     build_cue_timeline,
     page_cues_from_timeline,
+    page_focus_from_timeline,
+    page_burn_focus_from_timeline,
     write_cue_timeline,
 )
 from .core.interfaces import LLMEngine
@@ -191,6 +193,10 @@ class CoursePipeline:
             zip(content.pages, course.sections), 1
         ):
             local_cues = page_cues_from_timeline(cue_timeline, index)
+            page.metadata["focus_events"] = (
+                page_burn_focus_from_timeline(cue_timeline, index)
+                if media_config.burn_subtitles else page_focus_from_timeline(cue_timeline, index)
+            )
             page.metadata["focus_cues"] = local_cues
             course_page.metadata["cue_timeline"] = local_cues
 
@@ -422,8 +428,12 @@ class CoursePipeline:
         if not match:
             return "0:00:00.00"
         hours, minutes, seconds, milliseconds = match.groups()
-        centiseconds = min(99, round(int(milliseconds) / 10))
-        return f"{int(hours)}:{minutes}:{seconds}.{centiseconds:02d}"
+        total_ms = ((int(hours) * 60 + int(minutes)) * 60 + int(seconds)) * 1000 + int(milliseconds)
+        total_centiseconds = round(total_ms / 10)
+        total_seconds, centiseconds = divmod(total_centiseconds, 100)
+        total_minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(total_minutes, 60)
+        return f"{hours}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
 
     @staticmethod
     def _ass_escape_text(text: str) -> str:

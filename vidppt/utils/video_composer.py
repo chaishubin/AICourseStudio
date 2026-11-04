@@ -106,7 +106,7 @@ class VideoComposer:
             layers.extend(
                 VideoComposer._focus_layers(
                     metadata.get("focus_targets", []),
-                    metadata.get("focus_cues", []),
+                    metadata.get("focus_events", metadata.get("focus_cues", [])),
                     duration,
                     width,
                     height,
@@ -138,22 +138,24 @@ class VideoComposer:
         """Create time-bound outline, spotlight, or underline focus layers."""
         targets_by_id = {str(target.get("id")): target for target in targets}
         timeline = focus_timeline(cues, duration)
-        merged = []
-        for cue in timeline:
-            if (
-                merged
-                and merged[-1]["target_id"] == cue["target_id"]
-                and abs(merged[-1]["end"] - cue["start"]) < 0.01
-            ):
-                merged[-1]["end"] = cue["end"]
-            else:
-                merged.append(dict(cue))
+        from ..core.cue_timeline import focus_events_from_cues
 
+        merged = focus_events_from_cues(timeline)
         layers = []
+        expanded = []
         for cue in merged:
-            target = targets_by_id.get(str(cue.get("target_id")))
-            if not target:
-                continue
+            selected = [targets_by_id[target_id] for target_id in cue.get("target_ids", [])
+                        if target_id in targets_by_id]
+            if style == "spotlight" and len(selected) > 1:
+                left = min(float(target.get("x", 0)) for target in selected)
+                top = min(float(target.get("y", 0)) for target in selected)
+                right = max(float(target.get("x", 0)) + float(target.get("width", 0)) for target in selected)
+                bottom = max(float(target.get("y", 0)) + float(target.get("height", 0)) for target in selected)
+                expanded.append((cue, {"x": left, "y": top, "width": right - left, "height": bottom - top}))
+            else:
+                expanded.extend((cue, target) for target in selected)
+
+        for cue, target in expanded:
             padding = 10
             x = image_left + round(float(target.get("x", 0)) * image_width) - padding
             y = image_top + round(float(target.get("y", 0)) * image_height) - padding
@@ -164,7 +166,7 @@ class VideoComposer:
             width = max(2, min(image_left + image_width - x, width))
             height = max(2, min(image_top + image_height - y, height))
             start = max(0.0, float(cue["start"]))
-            cue_duration = max(0.04, float(cue["end"]) - start)
+            cue_duration = float(cue["end"]) - start
 
             def focus_clip(size, color, opacity, position):
                 return (

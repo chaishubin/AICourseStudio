@@ -293,6 +293,11 @@ class Pipeline:
                     import shutil
 
                     shutil.copy2(cached_audio, audio_path)
+                    timing_path = audio_path.with_suffix(".timing.json")
+                    cached_timing = cached_audio.with_suffix(".timing.json")
+                    timing_path.unlink(missing_ok=True)
+                    if self.config.tts_capture_timestamps and cached_timing.is_file():
+                        shutil.copy2(cached_timing, timing_path)
                     page.audio = audio_path
                     cached_pages.append((page.page_number, cached_audio))
                     logger.info(
@@ -326,6 +331,7 @@ class Pipeline:
                             voice=self.config.tts_voice,
                             rate=self.config.tts_rate,
                             progress_callback=tts_progress_callback,
+                            **({"capture_timestamps": True} if self.config.tts_capture_timestamps else {}),
                         )
                     )
                 elif self.config.tts_engine in {"minimax", "volcengine"}:

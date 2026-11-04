@@ -77,6 +77,7 @@ class AICourseStudioApp {
                 burnSubtitles: document.getElementById('burn-subtitles'),
                 focusHighlight: document.getElementById('focus-highlight'),
                 focusHighlightStyle: document.getElementById('focus-highlight-style'),
+                focusSmoothingSeconds: document.getElementById('focus-smoothing-seconds'),
                 subtitleStyleTemplate: document.getElementById('subtitle-style-template'),
                 subtitlePreset: document.getElementById('subtitle-preset'),
                 subtitleX: document.getElementById('subtitle-x'),
@@ -3552,6 +3553,7 @@ class AICourseStudioApp {
             `;
             card._focusTargets = Array.isArray(page.focus_targets) ? page.focus_targets : [];
             card._focusCues = Array.isArray(page.focus_cues) ? page.focus_cues : [];
+            card._focusEvents = Array.isArray(page.focus_events) ? page.focus_events : null;
             this.renderCourseFocusEditor(card);
             const textarea = card.querySelector('textarea');
             card.dataset.estimatedSeconds = String(
@@ -3578,6 +3580,11 @@ class AICourseStudioApp {
             });
             textarea.addEventListener('input', () => {
                 this.stopCoursePreviewPlayback();
+                const manualEvents = (card._focusEvents || [])
+                    .filter(event => event.manual || event.reviewed)
+                    .map(event => ({ ...event, needs_review: true }));
+                card._focusEvents = manualEvents.length ? manualEvents : null;
+                this.renderCourseFocusEditor(card);
                 this.markCourseReviewStale();
                 updateLength();
                 this.evaluateSubtitleRisk(card);
@@ -4097,6 +4104,7 @@ class AICourseStudioApp {
             if (!this.coursePreviewPlaying) return;
             if (card && Array.isArray(data.focus_cues)) {
                 card._focusCues = data.focus_cues;
+                if (Array.isArray(data.focus_events)) card._focusEvents = data.focus_events;
                 this.renderCourseFocusEditor(card);
             }
             await this.playCoursePreviewAudio(data.audio_url, pageNumber, title);
@@ -4113,16 +4121,17 @@ class AICourseStudioApp {
         const audio = new Audio(audioUrl);
         this.coursePreviewAudio = audio;
         const card = this.previewCardByPage(pageNumber);
-        const cues = this.makeSubtitleCues(
+        const cues = card?._focusCues || [];
+        const fallback = this.makeSubtitleCues(
             card?.querySelector('.course-preview-script')?.value || ''
         );
-        this.activateCoursePreviewSubtitles(card, cues);
+        this.activateCoursePreviewSubtitles(card);
         this.updateCoursePreviewPagePlayerState(pageNumber, '正在播放本页');
         audio.addEventListener('timeupdate', () => {
-            this.syncPlayingSubtitleCue(audio, card, cues);
+            this.syncPlayingSubtitleCue(audio, card, cues, fallback);
         });
         audio.addEventListener('loadedmetadata', () => {
-            this.syncPlayingSubtitleCue(audio, card, cues);
+            this.syncPlayingSubtitleCue(audio, card, cues, fallback);
         }, { once: true });
         audio.addEventListener('ended', () => {
             this.clearCoursePreviewSubtitlePlayback(card);
@@ -4163,25 +4172,30 @@ class AICourseStudioApp {
             });
     }
 
-    activateCoursePreviewSubtitles(card, cues) {
+    activateCoursePreviewSubtitles(card) {
         this.clearCoursePreviewSubtitlePlayback();
         if (!card) return;
         this.coursePreviewSubtitlePage = card;
         card.classList.add('playing-preview');
-        this.renderSubtitlePreviewImage(card, cues[0] || '本页暂无字幕文本');
-        this.syncCourseFocusCue(card, 0);
+        this.renderCourseFocusEditor(card);
+        this.syncCourseFocusCue(card, -1);
     }
 
     clearCoursePreviewSubtitlePlayback(card = null) {
         const target = card || this.coursePreviewSubtitlePage;
         if (target) {
             target.classList.remove('playing-preview');
+            target.querySelectorAll('.course-focus-cue-row button').forEach(button => {
+                button.disabled = true;
+            });
             target.querySelectorAll('.course-focus-target.active').forEach(node => node.classList.remove('active'));
             const now = target.querySelector('.course-focus-now');
             if (now) {
                 now.textContent = '当前讲解位置将在播放时显示';
                 now.classList.remove('low-confidence');
             }
+            const sample = target.querySelector('.course-preview-subtitle-sample');
+            if (sample) sample.hidden = false;
             this.updatePageSubtitleSample(target);
         }
         if (!card) {
@@ -4189,17 +4203,66 @@ class AICourseStudioApp {
         }
     }
 
-    syncPlayingSubtitleCue(audio, card, cues) {
-        if (!card || !cues.length) return;
-        const duration = Number.isFinite(audio.duration) && audio.duration > 0
-            ? audio.duration
-            : Math.max(1, cues.length);
-        const index = Math.min(
-            cues.length - 1,
-            Math.max(0, Math.floor(audio.currentTime / duration * cues.length))
+    syncPlayingSubtitleCue(audio, card, cues, fallback) {
+        if (!card || audio !== this.coursePreviewAudio) return;
+        const timed = cues.length > 0 && cues.every(cue =>
+            Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start
         );
-        this.renderSubtitlePreviewImage(card, cues[index] || cues[0] || '');
-        this.syncCourseFocusByTime(card, audio.currentTime, duration);
+        const index = timed ? cues.findIndex(cue =>
+            audio.currentTime >= cue.start && audio.currentTime < cue.end
+        ) : -1;
+        let text = cues[index]?.text || '';
+        if (!timed && audio.duration > 0 && fallback.length) {
+            const fallbackIndex = Math.min(fallback.length - 1,
+                Math.floor(audio.currentTime / audio.duration * fallback.length));
+            text = fallback[fallbackIndex] || '';
+        }
+        const sample = card.querySelector('.course-preview-subtitle-sample');
+        if (sample) sample.hidden = !text;
+        if (text) this.renderSubtitlePreviewImage(card, text);
+        const events = card._focusEvents ?? this.previewFocusEvents(card._focusCues || []);
+        const smoothed = this.smoothPreviewFocusEvents(events, Number(this.elements.focusSmoothingSeconds?.value || 0));
+        const focus = smoothed.find(event => audio.currentTime >= event.start && audio.currentTime < event.end);
+        card.querySelectorAll('.course-focus-target').forEach(node => {
+            node.classList.toggle('active', Boolean(focus) && (focus.target_ids || [focus.target_id]).includes(node.dataset.targetId));
+        });
+    }
+
+    previewFocusEvents(cues) {
+        const events = [];
+        cues.forEach(cue => {
+            if (!cue.target_id || !Number.isFinite(cue.start) || !Number.isFinite(cue.end)) return;
+            const previous = events[events.length - 1];
+            if (previous && previous.target_id === cue.target_id
+                && previous.manual === Boolean(cue.manual) && previous.end === cue.start) {
+                previous.end = cue.end;
+            } else {
+                events.push({ start: cue.start, end: cue.end, target_id: cue.target_id, manual: Boolean(cue.manual), mapping_source: cue.mapping_source || cue.source || 'fallback', confidence: cue.confidence });
+            }
+        });
+        return events;
+    }
+
+    smoothPreviewFocusEvents(events, maxSeconds) {
+        if (!(maxSeconds > 0)) return events;
+        const result = [];
+        const targets = event => JSON.stringify([...(event.target_ids || [event.target_id]).filter(Boolean)].sort());
+        for (let i = 0; i < events.length; i += 1) {
+            const left = events[i], middle = events[i + 1], right = events[i + 2];
+            if (middle && right && targets(left) === targets(right) && targets(left) !== targets(middle)
+                && ![left, middle, right].some(event => event.reviewed || event.manual)
+                && ['fallback', 'automatic'].includes(middle.mapping_source)
+                && middle.confidence != null && Number(middle.confidence) < 0.5
+                && middle.end - middle.start > 0 && middle.end - middle.start <= maxSeconds
+                && Math.abs(left.end - middle.start) < 0.000001
+                && Math.abs(middle.end - right.start) < 0.000001) {
+                result.push({ ...left, end: right.end });
+                i += 2;
+            } else {
+                result.push(left);
+            }
+        }
+        return result;
     }
 
     renderCourseFocusEditor(card) {
@@ -4222,7 +4285,7 @@ class AICourseStudioApp {
             box.style.height = `${Number(target.height || 0) * 100}%`;
             overlayRoot.appendChild(box);
         });
-        if (!targets.length || !cues.length) {
+        if (!targets.length) {
             editor.innerHTML = '<span class="course-focus-empty">本页未识别到可跟随的文字元素</span>';
             return;
         }
@@ -4231,7 +4294,7 @@ class AICourseStudioApp {
             const row = document.createElement('label');
             row.className = 'course-focus-cue-row';
             const cueMode = cue.target_id
-                ? (cue.timing_source === 'segment_audio' ? '锚点 · 真实音频时间' : '锚点 · 待生成时间')
+                ? (['segment_audio', 'tts_word_boundary'].includes(cue.timing_source) ? '锚点 · 真实音频时间' : '锚点 · 待生成时间')
                 : '仅同步讲稿 · 不强行框选';
             row.innerHTML = `
                 <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}<small>${cueMode}</small></span>
@@ -4240,16 +4303,21 @@ class AICourseStudioApp {
                     ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
                 </select>
             `;
+            row.querySelector('select').disabled = card._focusEvents !== null;
             row.querySelector('select').addEventListener('change', event => {
                 card._focusCues[index] = {
                     ...card._focusCues[index],
                     target_id: event.target.value,
                     anchor_id: event.target.value,
+                    target_ids: event.target.value ? [event.target.value] : [],
                     confidence: 1,
                     source: 'manual',
                     manual: true
                 };
-                this.syncCourseFocusCue(card, index);
+                if (card._focusEvents !== null) {
+                    card._focusEvents = null;
+                }
+                if (this.coursePreviewSubtitlePage !== card) this.syncCourseFocusCue(card, index);
                 this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
                 clearTimeout(this.previewAutoSaveTimer);
                 this.previewAutoSaveTimer = setTimeout(
@@ -4257,9 +4325,107 @@ class AICourseStudioApp {
                     400
                 );
             });
-            row.addEventListener('mouseenter', () => this.syncCourseFocusCue(card, index));
+            const seek = document.createElement('button');
+            seek.type = 'button';
+            seek.textContent = '试听';
+            seek.disabled = this.coursePreviewSubtitlePage !== card || !Number.isFinite(cue.start);
+            seek.addEventListener('click', () => {
+                if (this.coursePreviewSubtitlePage === card && this.coursePreviewAudio) {
+                    this.coursePreviewAudio.currentTime = cue.start;
+                }
+            });
+            row.prepend(seek);
+            row.addEventListener('mouseenter', () => {
+                if (this.coursePreviewSubtitlePage !== card) this.syncCourseFocusCue(card, index);
+            });
             editor.appendChild(row);
         });
+        const events = card._focusEvents ?? this.previewFocusEvents(cues).map(event => ({
+            start: event.start, end: event.end, target_ids: [event.target_id],
+            reviewed: event.manual, mapping_source: event.mapping_source, confidence: event.confidence
+        }));
+        {
+            const heading = document.createElement('strong');
+            heading.textContent = events.some(event => event.needs_review)
+                ? '独立焦点时间（讲稿已修改，请重新核对）' : '独立焦点时间';
+            editor.appendChild(heading);
+            events.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'course-focus-cue-row';
+                row.innerHTML = `
+                    <span>第 ${index + 1} 段
+                        <input type="number" class="focus-start" min="0" step="0.01" value="${Number(item.start)}" aria-label="焦点开始秒数">
+                        至 <input type="number" class="focus-end" min="0" step="0.01" value="${Number(item.end)}" aria-label="焦点结束秒数">
+                    </span>
+                    <select multiple aria-label="焦点对应位置">
+                        ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${(item.target_ids || []).includes(target.id) ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
+                    </select>
+                `;
+                row.addEventListener('change', () => {
+                    const start = Number(row.querySelector('.focus-start').value);
+                    const end = Number(row.querySelector('.focus-end').value);
+                    const previous = events[index - 1];
+                    const next = events[index + 1];
+                    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 ||
+                        end <= start || (previous && start < previous.end) || (next && end > next.start)) {
+                        this.showStatus('error', '焦点时间须按顺序排列且不能重叠');
+                        this.renderCourseFocusEditor(card);
+                        return;
+                    }
+                    events[index] = {
+                        ...item, start, end,
+                        target_ids: Array.from(row.querySelector('select').selectedOptions, option => option.value),
+                        reviewed: true, manual: true, needs_review: false, mapping_source: 'manual', confidence: 1
+                    };
+                    card._focusEvents = events;
+                    this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
+                    clearTimeout(this.previewAutoSaveTimer);
+                    this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+                });
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.textContent = '删除';
+                remove.addEventListener('click', () => {
+                    events.splice(index, 1);
+                    card._focusEvents = events;
+                    this.renderCourseFocusEditor(card);
+                    clearTimeout(this.previewAutoSaveTimer);
+                    this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+                });
+                row.appendChild(remove);
+                editor.appendChild(row);
+            });
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.textContent = '添加焦点区间';
+            add.addEventListener('click', () => {
+                const duration = Math.max(0, ...cues.map(cue => Number(cue.end) || 0));
+                let start = 0;
+                let end = 0;
+                for (const event of events) {
+                    if (event.start - start >= 0.01) {
+                        end = event.start;
+                        break;
+                    }
+                    start = Math.max(start, event.end);
+                }
+                if (!end) end = duration;
+                if (end - start < 0.01) {
+                    this.showStatus('error', '请先生成配音，并为新焦点留出时间区间');
+                    return;
+                }
+                events.push({
+                    start, end, target_ids: [], reviewed: true,
+                    manual: true, mapping_source: 'manual', confidence: 1
+                });
+                events.sort((a, b) => a.start - b.start);
+                card._focusEvents = events;
+                this.renderCourseFocusEditor(card);
+                clearTimeout(this.previewAutoSaveTimer);
+                this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+            });
+            editor.appendChild(add);
+        }
     }
 
     syncCourseFocusCue(card, cueIndex) {
@@ -4280,34 +4446,6 @@ class AICourseStudioApp {
                 now.classList.toggle('low-confidence', !precise);
             }
         }
-    }
-
-    syncCourseFocusByTime(card, currentTime, duration) {
-        const cues = card?._focusCues || [];
-        if (!cues.length || !duration) return;
-        const timedIndex = cues.findIndex(cue => (
-            Number.isFinite(Number(cue.start))
-            && Number.isFinite(Number(cue.end))
-            && currentTime >= Number(cue.start)
-            && currentTime < Number(cue.end)
-        ));
-        if (timedIndex >= 0) {
-            this.syncCourseFocusCue(card, timedIndex);
-            return;
-        }
-        const weights = cues.map(cue => Math.max(1, Number(cue.weight) || String(cue.text || '').length));
-        const position = Math.max(0, Math.min(1, currentTime / duration));
-        const threshold = position * weights.reduce((sum, weight) => sum + weight, 0);
-        let cumulative = 0;
-        let index = cues.length - 1;
-        for (let cueIndex = 0; cueIndex < weights.length; cueIndex += 1) {
-            cumulative += weights[cueIndex];
-            if (threshold <= cumulative) {
-                index = cueIndex;
-                break;
-            }
-        }
-        this.syncCourseFocusCue(card, index);
     }
 
     makeSubtitleCues(text) {
@@ -4444,7 +4582,8 @@ class AICourseStudioApp {
             page_number: Number(card.dataset.pageNumber),
             script: card.querySelector('.course-preview-script').value,
             reviewed: card.querySelector('.page-reviewed').checked,
-            focus_cues: card._focusCues || []
+            focus_cues: card._focusCues || [],
+            ...(card._focusEvents !== null ? { focus_events: card._focusEvents } : {})
         }));
     }
 
@@ -4768,6 +4907,7 @@ class AICourseStudioApp {
                     burn_subtitles: this.elements.burnSubtitles.checked,
                     focus_highlight: this.elements.focusHighlight?.checked !== false,
                     focus_highlight_style: this.elements.focusHighlightStyle?.value || 'outline',
+                    focus_smoothing_seconds: Number(this.elements.focusSmoothingSeconds?.value || 0),
                     ...this.collectCoursePackagingOptions(),
                     ...this.collectVideoOptions(),
                     ...this.collectSubtitleOptions()

@@ -81,9 +81,21 @@ class OpenAILLMEngine(LLMEngine):
                     if choices
                     else ""
                 )
-                if not content:
-                    raise ValueError(f"OpenAI 返回内容为空: {result}")
-                return content
+                if isinstance(content, str) and content.strip():
+                    return content
+                if content:
+                    # Some compatible APIs return structured content blocks.
+                    return str(content)
+                choice = choices[0] if choices else {}
+                message = choice.get("message") or {}
+                logger.warning(
+                    "LLM returned empty message content: model={}, finish_reason={}, "
+                    "has_reasoning_content={}",
+                    payload["model"],
+                    choice.get("finish_reason"),
+                    bool(message.get("reasoning_content")),
+                )
+                raise ValueError("模型返回了空内容，请重试或检查模型配置")
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc
                 if attempt == self.max_retries:
