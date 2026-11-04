@@ -1,5 +1,5 @@
- FROM docker.m.daocloud.io/library/ubuntu:24.04
- 
+FROM docker.m.daocloud.io/library/ubuntu:24.04
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=zh_CN.UTF-8
 ENV LC_ALL=zh_CN.UTF-8
@@ -12,10 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     fonts-noto-cjk fonts-dejavu-core fonts-droid-fallback fonts-wqy-zenhei fonts-wqy-microhei \
     libreoffice-impress libreoffice-common \
-    libreoffice-writer libreoffice-gtk3 \
     poppler-utils \
     ffmpeg \
-    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 生成中文 locale

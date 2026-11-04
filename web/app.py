@@ -1413,9 +1413,13 @@ def _packaging_asset_path(value, allowed_extensions: set[str]) -> str:
     if not value:
         return ''
     path = Path(str(value))
+    # Docker and native runs share the uploads directory through a bind mount.
+    if path.parent == Path('/app/web/uploads'):
+        path = UPLOAD_FOLDER / path.name
     if (
         not path.is_file()
         or path.parent.resolve() != UPLOAD_FOLDER.resolve()
+        or path.resolve().parent != UPLOAD_FOLDER.resolve()
         or path.suffix.lower().lstrip('.') not in allowed_extensions
     ):
         raise ValueError('片头片尾素材路径无效，请重新上传')

@@ -2,6 +2,12 @@ __pycache__
 *.pyc
 .venv
 .git
+.env
+.env.*
+.pytest_cache
+.coverage
+.DS_Store
+**/.DS_Store
 tests
 *.md
 datas

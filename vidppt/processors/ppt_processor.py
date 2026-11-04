@@ -223,6 +223,9 @@ class PPTProcessor(DocumentProcessor):
             need_render = True
 
         if need_render:
+            libreoffice = shutil.which("libreoffice") or shutil.which("soffice")
+            if not libreoffice:
+                raise FileNotFoundError("未找到 LibreOffice，请安装并将 libreoffice 或 soffice 加入 PATH")
             with tempfile.TemporaryDirectory() as tmp_dir:
                 # 先将输入文件复制到临时目录（安全文件名），避免 LO 无法加载
                 # 含特殊字符（引号等）的原始文件名或某些 PPTX 格式会导致 LO 加载失败
@@ -234,7 +237,8 @@ class PPTProcessor(DocumentProcessor):
                 if shutil.which("xvfb-run"):
                     cmd_pdf.append("xvfb-run")
                 cmd_pdf.extend([
-                    "libreoffice",
+                    libreoffice,
+                    f"-env:UserInstallation={(Path(tmp_dir) / 'profile').as_uri()}",
                     "--headless",
                     "--convert-to",
                     "pdf",
@@ -356,7 +360,11 @@ class PPTProcessor(DocumentProcessor):
 
         def extract_from_shape(shape):
             nonlocal img_index
-            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+            try:
+                shape_type = shape.shape_type
+            except NotImplementedError:
+                return
+            if shape_type == MSO_SHAPE_TYPE.PICTURE:
                 image = shape.image
                 ext = image.ext
                 img_path = out_dir / f"image_{img_index}.{ext}"
@@ -365,13 +373,11 @@ class PPTProcessor(DocumentProcessor):
                 img_path.write_bytes(image.blob)
                 saved.append(img_path)
                 img_index += 1
+            elif shape_type == MSO_SHAPE_TYPE.GROUP:
+                for child in shape.shapes:
+                    extract_from_shape(child)
 
         for shape in slide.shapes:
-            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                extract_from_shape(shape)
-            elif shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-                for child in shape.shapes:
-                    if child.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                        extract_from_shape(child)
+            extract_from_shape(shape)
 
         return saved

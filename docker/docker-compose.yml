@@ -30,4 +30,9 @@ services:
     volumes:
       - ../web/uploads:/app/web/uploads
       - ../web/outputs:/app/web/outputs
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped

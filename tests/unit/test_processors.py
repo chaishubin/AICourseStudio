@@ -348,11 +348,14 @@ class TestPPTProcessorRenderPages:
 
         # Mock _get_slide_count 返回 2 页
         with patch.object(processor, "_get_slide_count", return_value=2):
-            with patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run:
+            with (
+                patch("vidppt.processors.ppt_processor.shutil.which", side_effect={"soffice": "/mock/soffice"}.get),
+                patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run,
+            ):
                 def fake_run(cmd, **kwargs):
                     if "pdf" in cmd:
                         # Step 1: LO → PDF (output is always input.pdf now)
-                        outdir = cmd[5]
+                        outdir = cmd[cmd.index("--outdir") + 1]
                         (Path(outdir) / "input.pdf").write_bytes(b"fake_pdf")
                     else:
                         # Step 2: pdftoppm → PNG
@@ -417,11 +420,14 @@ class TestPPTProcessorRenderPages:
 
         processor = PPTProcessor()
 
-        with patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run:
+        with (
+            patch("vidppt.processors.ppt_processor.shutil.which", side_effect={"soffice": "/mock/soffice"}.get),
+            patch("vidppt.processors.ppt_processor.subprocess.run") as mock_run,
+        ):
             def fake_run(cmd, **kwargs):
                 if "pdf" in cmd:
                     # Step 1: LO → PDF (output is always input.pdf now)
-                    outdir = cmd[5]
+                    outdir = cmd[cmd.index("--outdir") + 1]
                     (Path(outdir) / "input.pdf").write_bytes(b"fake_pdf")
                 else:
                     # Step 2: pdftoppm → PNG
