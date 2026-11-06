@@ -1308,10 +1308,15 @@ class AICourseStudioApp {
     }
 
     stopVoicePreview() {
+        this.voicePreviewRequest = null;
         if (this.voicePreviewAudio) {
             this.voicePreviewAudio.pause();
             this.voicePreviewAudio.src = '';
             this.voicePreviewAudio = null;
+        }
+        if (this.voicePreviewAudioUrl) {
+            URL.revokeObjectURL(this.voicePreviewAudioUrl);
+            this.voicePreviewAudioUrl = null;
         }
         if (this.activeVoicePreviewButton) {
             this.activeVoicePreviewButton.textContent =
@@ -1328,6 +1333,7 @@ class AICourseStudioApp {
             return;
         }
         this.stopVoicePreview();
+        const request = this.voicePreviewRequest = {};
         this.activeVoicePreviewButton = button;
         button.textContent = '…';
         button.classList.add('loading');
@@ -1342,23 +1348,27 @@ class AICourseStudioApp {
                 const data = await response.json();
                 throw new Error(data.error || '试听音频生成失败');
             }
-            const audioUrl = URL.createObjectURL(await response.blob());
+            const blob = await response.blob();
+            if (this.voicePreviewRequest !== request) return;
+            const audioUrl = URL.createObjectURL(blob);
+            this.voicePreviewAudioUrl = audioUrl;
             const audio = new Audio(audioUrl);
             this.voicePreviewAudio = audio;
             button.disabled = false;
             button.classList.remove('loading');
             button.textContent = '■';
             audio.addEventListener('ended', () => {
-                URL.revokeObjectURL(audioUrl);
+                if (this.voicePreviewRequest !== request) return;
                 this.stopVoicePreview();
             }, { once: true });
             audio.addEventListener('error', () => {
-                URL.revokeObjectURL(audioUrl);
+                if (this.voicePreviewRequest !== request) return;
                 this.stopVoicePreview();
                 this.showStatus('error', '试听音频播放失败');
             }, { once: true });
             await audio.play();
         } catch (error) {
+            if (this.voicePreviewRequest !== request) return;
             this.stopVoicePreview();
             this.showStatus('error', error.message);
         }
@@ -3903,7 +3913,10 @@ class AICourseStudioApp {
     async startCoursePreviewPlayback(startPage = this.currentPreviewPage) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return;
+        this.stopCoursePreviewPlayback();
+        const session = this.coursePreviewSession = {};
         if (!await this.savePreviewScripts({ automatic: true })) return;
+        if (this.coursePreviewSession !== session) return;
         this.stopVoicePreview();
         this.coursePreviewPlaying = true;
         this.currentPreviewPage = Number(startPage) || this.currentPreviewPage;
@@ -3912,6 +3925,8 @@ class AICourseStudioApp {
     }
 
     stopCoursePreviewPlayback(message = '预览已停止') {
+        this.coursePreviewSession = null;
+        this.coursePreviewRequest = null;
         this.coursePreviewPlaying = false;
         if (this.coursePreviewAudio) {
             this.coursePreviewAudio.pause();
@@ -3925,6 +3940,7 @@ class AICourseStudioApp {
 
     async playCoursePreviewPage(pageNumber) {
         if (!this.coursePreviewPlaying) return;
+        const request = this.coursePreviewRequest = {};
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         const card = this.previewCardByPage(pageNumber);
         if (!taskId || !card) {
@@ -3947,7 +3963,7 @@ class AICourseStudioApp {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '预览音频生成失败');
-            if (!this.coursePreviewPlaying) return;
+            if (this.coursePreviewRequest !== request) return;
             if (card && Array.isArray(data.focus_cues)) {
                 card._focusCues = data.focus_cues;
                 card._focusEvents = Array.isArray(data.focus_events) ? data.focus_events : null;
@@ -3955,6 +3971,7 @@ class AICourseStudioApp {
             }
             await this.playCoursePreviewAudio(data.audio_url, pageNumber, title);
         } catch (error) {
+            if (this.coursePreviewRequest !== request) return;
             this.stopCoursePreviewPlayback('预览失败');
             this.showStatus('error', error.message);
         }
@@ -3974,12 +3991,15 @@ class AICourseStudioApp {
         this.activateCoursePreviewSubtitles(card);
         this.updateCoursePreviewPagePlayerState(pageNumber, '正在播放本页');
         audio.addEventListener('timeupdate', () => {
+            if (this.coursePreviewAudio !== audio) return;
             this.syncPlayingSubtitleCue(audio, card, cues, fallback);
         });
         audio.addEventListener('loadedmetadata', () => {
+            if (this.coursePreviewAudio !== audio) return;
             this.syncPlayingSubtitleCue(audio, card, cues, fallback);
         }, { once: true });
         audio.addEventListener('ended', () => {
+            if (this.coursePreviewAudio !== audio) return;
             this.clearCoursePreviewSubtitlePlayback(card);
             const nextPage = this.nextPreviewPageNumber(pageNumber);
             if (nextPage) {
@@ -3989,10 +4009,16 @@ class AICourseStudioApp {
             }
         }, { once: true });
         audio.addEventListener('error', () => {
+            if (this.coursePreviewAudio !== audio) return;
             this.stopCoursePreviewPlayback('预览音频播放失败');
             this.showStatus('error', '预览音频播放失败');
         }, { once: true });
-        await audio.play();
+        try {
+            await audio.play();
+        } catch (error) {
+            if (this.coursePreviewAudio !== audio) return;
+            throw error;
+        }
     }
 
     updateCoursePreviewPagePlayerState(activePageNumber = null, status = '') {
@@ -4031,7 +4057,7 @@ class AICourseStudioApp {
         const target = card || this.coursePreviewSubtitlePage;
         if (target) {
             target.classList.remove('playing-preview');
-            target.querySelectorAll('.course-focus-cue-row button').forEach(button => {
+            target.querySelectorAll('.course-focus-cue-seek').forEach(button => {
                 button.disabled = true;
             });
             target.querySelectorAll('.course-focus-target.active').forEach(node => node.classList.remove('active'));
@@ -4111,6 +4137,32 @@ class AICourseStudioApp {
         return result;
     }
 
+    updateCourseFocusCueTarget(card, index, targetId) {
+        const cue = card._focusCues[index];
+        const targetIds = targetId ? [targetId] : [];
+        card._focusCues[index] = {
+            ...cue, target_id: targetId, anchor_id: targetId, target_ids: targetIds,
+            confidence: 1, source: 'manual', mapping_source: 'manual', manual: true
+        };
+        if (!Array.isArray(card._focusEvents)
+            || !Number.isFinite(cue.start) || !Number.isFinite(cue.end)
+            || cue.end <= cue.start) return;
+        // Replace only this narration interval, preserving calibration on either side.
+        const events = card._focusEvents.flatMap(event => {
+            if (event.end <= cue.start || event.start >= cue.end) return [event];
+            const remaining = [];
+            if (event.start < cue.start) remaining.push({ ...event, end: cue.start });
+            if (event.end > cue.end) remaining.push({ ...event, start: cue.end });
+            return remaining;
+        });
+        events.push({
+            start: cue.start, end: cue.end, target_ids: targetIds,
+            reviewed: true, manual: true, needs_review: false,
+            mapping_source: 'manual', confidence: 1
+        });
+        card._focusEvents = events.sort((a, b) => a.start - b.start);
+    }
+
     renderCourseFocusEditor(card) {
         const overlayRoot = card.querySelector('.course-focus-overlays');
         const editor = card.querySelector('.course-focus-editor');
@@ -4149,20 +4201,9 @@ class AICourseStudioApp {
                     ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
                 </select>
             `;
-            row.querySelector('select').disabled = card._focusEvents !== null;
             row.querySelector('select').addEventListener('change', event => {
-                card._focusCues[index] = {
-                    ...card._focusCues[index],
-                    target_id: event.target.value,
-                    anchor_id: event.target.value,
-                    target_ids: event.target.value ? [event.target.value] : [],
-                    confidence: 1,
-                    source: 'manual',
-                    manual: true
-                };
-                if (card._focusEvents !== null) {
-                    card._focusEvents = null;
-                }
+                this.updateCourseFocusCueTarget(card, index, event.target.value);
+                this.renderCourseFocusEditor(card);
                 if (this.coursePreviewSubtitlePage !== card) this.syncCourseFocusCue(card, index);
                 this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
                 clearTimeout(this.previewAutoSaveTimer);
@@ -4173,6 +4214,7 @@ class AICourseStudioApp {
             });
             const seek = document.createElement('button');
             seek.type = 'button';
+            seek.className = 'course-focus-cue-seek';
             seek.textContent = '试听';
             seek.disabled = this.coursePreviewSubtitlePage !== card || !Number.isFinite(cue.start);
             seek.addEventListener('click', () => {
