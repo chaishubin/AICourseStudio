@@ -557,6 +557,14 @@
                             <span class="course-preview-save-state" id="course-preview-save-state"></span>
                         </div>
                     </div>
+                    <div class="course-duration-estimate" id="course-duration-estimate" role="region" aria-label="当前视频预计时长">
+                        <div class="course-duration-total">
+                            <span>当前视频预计时长</span>
+                            <strong id="course-duration-total" role="status" aria-live="polite">约 -- 分 -- 秒</strong>
+                        </div>
+                        <p class="course-duration-hint">根据当前讲稿与已生成配音估算，修改讲稿后自动更新；不含片头片尾，最终时长以生成视频为准。</p>
+                        <div class="course-duration-segments" id="course-duration-segments" hidden></div>
+                    </div>
                     <ol class="preview-workflow" aria-label="课程确认操作顺序">
                         <li>核对讲稿与配音</li><li>质检并应用修复</li><li>按需应用切课</li><li>确认包装与字幕</li><li>生成视频</li>
                     </ol>
@@ -823,13 +831,6 @@
                         <span id="preview-playback-status" role="status" aria-live="polite"></span>
                         <button type="button" class="btn-preview" id="preview-locate-btn">查看播放页</button>
                         <button type="button" class="btn-secondary" id="preview-stop-btn">停止预览（Esc）</button>
-                    </div>
-                    <div class="course-duration-estimate" id="course-duration-estimate">
-                        <div class="course-duration-total">
-                            <span>预计完整视频总时长</span>
-                            <strong id="course-duration-total">约 -- 分 -- 秒</strong>
-                        </div>
-                        <div class="course-duration-segments" id="course-duration-segments" hidden></div>
                     </div>
                     <div class="course-preview-actions" role="region" aria-label="草稿保存与生成操作">
                         <details class="preview-more-actions">

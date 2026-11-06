@@ -3,6 +3,10 @@
 """
 
 from pathlib import Path
+from contextlib import ExitStack
+import shutil
+import tempfile
+from time import perf_counter
 from typing import Callable, Optional
 
 from loguru import logger
@@ -128,6 +132,12 @@ class VideoComposer:
             size=(config.video_width, config.video_height),
             bg_color=(0, 0, 0),
         ).with_duration(duration)
+        if len(layers) == 1:
+            # The slide and its letterboxing never change. Rasterize once instead
+            # of blending a full-resolution canvas for every output frame.
+            static_clip = clip.to_ImageClip().with_duration(duration)
+            clip.close()
+            clip = static_clip
         if audio_clip is not None:
             clip = clip.with_audio(audio_clip)
         return clip
@@ -259,6 +269,7 @@ class VideoComposer:
         output_path: Path,
         progress_callback: Optional[Callable[[float], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        subtitles: Optional[Path] = None,
     ) -> None:
         """
         将页面内容合成为视频
@@ -267,7 +278,9 @@ class VideoComposer:
             content: 文档内容（包含每页的图片、音频路径）
             config: 处理配置
             output_path: 输出视频路径
+            subtitles: 可选 SRT 文件，启用字幕时在本次编码中直接烧录
         """
+        started = perf_counter()
         clips = []
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -319,27 +332,48 @@ class VideoComposer:
             return
 
         logger.info(f"合并 {len(clips)} 个片段，输出 -> {output_path}")
-        final = concatenate_videoclips(clips, method="compose")
+        # _image_clip already normalizes every page to the same canvas. Chain
+        # frames directly instead of wrapping all pages in another compositor.
+        final = concatenate_videoclips(clips, method="chain")
         moviepy_logger = _MoviePyProgressLogger.create(
             progress_callback, cancel_check
         )
         try:
-            final.write_videofile(
-                str(output_path),
-                fps=config.video_fps,
-                codec=config.video_codec,
-                audio_codec=config.audio_codec,
-                audio_fps=config.audio_sample_rate,
-                audio_bitrate=config.audio_bitrate,
-                preset=config.video_preset,
-                pixel_format=config.video_pixel_format,
-                ffmpeg_params=VideoComposer.ffmpeg_params(config),
-                logger=moviepy_logger,
-            )
+            with ExitStack() as resources:
+                params = VideoComposer.ffmpeg_params(config)
+                if subtitles is not None and config.burn_subtitles:
+                    from ..course_pipeline import CoursePipeline
+
+                    styled = CoursePipeline._styled_ass_subtitles(subtitles, config)
+                    # Use a controlled path: filter syntax treats quotes, colons and
+                    # backslashes in user-provided filenames as special characters.
+                    folder = resources.enter_context(
+                        tempfile.TemporaryDirectory(prefix="vidppt_subtitles_", dir="/tmp")
+                    )
+                    safe_subtitles = Path(folder) / "subtitles.ass"
+                    shutil.copyfile(styled, safe_subtitles)
+                    params.extend([
+                        "-vf", CoursePipeline._subtitle_filter(str(safe_subtitles), config)
+                    ])
+                final.write_videofile(
+                    str(output_path),
+                    fps=config.video_fps,
+                    codec=config.video_codec,
+                    audio_codec=config.audio_codec,
+                    audio_fps=config.audio_sample_rate,
+                    audio_bitrate=config.audio_bitrate,
+                    preset=config.video_preset,
+                    pixel_format=config.video_pixel_format,
+                    ffmpeg_params=params,
+                    logger=moviepy_logger,
+                )
         finally:
             final.close()
             for clip in clips:
                 clip.close()
 
         size_mb = output_path.stat().st_size / 1024 / 1024
-        logger.info(f"视频生成完成：{output_path}  ({size_mb:.1f} MB)")
+        logger.info(
+            f"视频生成完成：{output_path}  ({size_mb:.1f} MB，"
+            f"耗时 {perf_counter() - started:.1f}s)"
+        )

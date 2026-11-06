@@ -1035,12 +1035,13 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             pass
 
     def fake_compose(
-        content, config, output, progress_callback=None, cancel_check=None
+        content, config, output, progress_callback=None, cancel_check=None, subtitles=None
     ):
         if progress_callback:
             progress_callback(0.5)
             progress_callback(1.0)
-        output.write_bytes(b"base-video")
+        assert subtitles is not None and subtitles.exists()
+        output.write_bytes(b"final-video")
 
     def fake_burn(
         video, subtitles, output, config,
@@ -1049,7 +1050,7 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
         if progress_callback:
             progress_callback(0.5)
             progress_callback(1.0)
-        output.write_bytes(b"final-video")
+        raise AssertionError("Subtitles must be encoded in the composition pass")
 
     packaged = []
 
@@ -1423,7 +1424,7 @@ def test_index_contains_editable_course_preview():
     assert 'id="packaging-enable-music"' in html
     assert 'id="packaging-layout-reset"' not in html
     assert 'id="course-duration-estimate"' in html
-    assert '预计完整视频总时长' in html
+    assert '当前视频预计时长' in html
     assert '约 -- 分 -- 秒' in html
     assert '可跳过切课直接继续生成完整视频' in html
     assert 'id="subtitle-preset"' in html

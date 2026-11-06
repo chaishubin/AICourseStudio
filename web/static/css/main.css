@@ -4176,6 +4176,13 @@ body {
     white-space: nowrap;
 }
 
+.course-duration-hint {
+    margin: 0;
+    color: var(--color-text-2);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
 .course-duration-segments {
     display: grid;
     gap: 8px;

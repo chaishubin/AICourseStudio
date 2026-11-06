@@ -237,18 +237,12 @@ class CoursePipeline:
 
         progress.start_stage(ProcessStage.VIDEO)
         silent_video = output_dir / f"{presentation.stem}.base.mp4"
-        VideoComposer.compose(content, media_config, silent_video)
+        VideoComposer.compose(content, media_config, silent_video, subtitles=subtitles)
         if not silent_video.exists():
             raise RuntimeError("视频合成未产生输出文件")
 
         final_video = output_dir / f"{presentation.stem}.mp4"
-        if media_config.burn_subtitles:
-            self._burn_subtitles(
-                silent_video, subtitles, final_video, media_config
-            )
-            silent_video.unlink(missing_ok=True)
-        else:
-            silent_video.replace(final_video)
+        silent_video.replace(final_video)
         progress.complete_stage(ProcessStage.VIDEO)
         return subtitles, final_video
 

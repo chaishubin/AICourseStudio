@@ -4135,29 +4135,16 @@ def run_media_generation(task_id: str):
             config,
             base_video,
             progress_callback=lambda fraction: report_video(
-                round(fraction * 78),
-                f'正在编码视频 {round(fraction * 100)}%',
+                round(fraction * 98),
+                f'正在合成视频{"与字幕" if config.burn_subtitles else ""} {round(fraction * 100)}%',
             ),
             cancel_check=cancel_event.is_set,
+            subtitles=subtitles,
         )
         if not base_video.exists():
             raise RuntimeError("视频合成未产生输出文件")
         video_path = config.output_dir / f'{stem}.mp4'
-        if config.burn_subtitles:
-            CoursePipeline._burn_subtitles(
-                base_video,
-                subtitles,
-                video_path,
-                config,
-                progress_callback=lambda fraction: report_video(
-                    78 + round(fraction * 20),
-                    f'正在烧录字幕 {round(fraction * 100)}%',
-                ),
-                cancel_check=cancel_event.is_set,
-            )
-            base_video.unlink(missing_ok=True)
-        else:
-            base_video.replace(video_path)
+        base_video.replace(video_path)
         packaging_options = options.get('course_packaging') or {}
         lesson_segments = [
             segment for segment in preview.get('lesson_segments', [])
@@ -4324,19 +4311,9 @@ def run_media_generation(task_id: str):
                     segment_base,
                     progress_callback=report_segment,
                     cancel_check=cancel_event.is_set,
+                    subtitles=segment_subtitles,
                 )
-                if config.burn_subtitles:
-                    CoursePipeline._burn_subtitles(
-                        segment_base,
-                        segment_subtitles,
-                        segment_video,
-                        config,
-                        progress_callback=report_segment,
-                        cancel_check=cancel_event.is_set,
-                    )
-                    segment_base.unlink(missing_ok=True)
-                else:
-                    segment_base.replace(segment_video)
+                segment_base.replace(segment_video)
                 if packaging_options.get('apply_to_segments') and (
                     packaging_options.get('enable_intro')
                     or packaging_options.get('enable_outro')
