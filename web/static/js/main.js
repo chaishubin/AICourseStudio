@@ -757,7 +757,6 @@ class AICourseStudioApp {
             );
         });
         this.syncAllSubtitlePreviewImages();
-        this.refreshSubtitleRiskChecks();
     }
 
     fitCourseSubtitleOverlay(overlay, targetFontSize) {
@@ -3525,10 +3524,6 @@ class AICourseStudioApp {
                     <div class="course-preview-subtitle-overlay">
                         <img class="course-preview-subtitle-sample" alt="字幕预览">
                     </div>
-                    <div class="subtitle-risk-badge ok">
-                        <span class="subtitle-risk-message">字幕区待检测</span>
-                        <button type="button" class="subtitle-risk-apply" hidden>应用推荐</button>
-                    </div>
                 </div>
                 <div class="course-preview-page-player">
                     <button type="button" class="btn-preview course-preview-page-play">播放本页预览</button>
@@ -3571,14 +3566,6 @@ class AICourseStudioApp {
                 this.updateCourseDurationEstimate();
             };
             updateLength();
-            card.querySelector('.course-preview-image').addEventListener(
-                'load',
-                () => this.evaluateSubtitleRisk(card)
-            );
-            card.querySelector('.subtitle-risk-apply')?.addEventListener('click', event => {
-                const recommendation = event.currentTarget.dataset.recommendation;
-                this.applySubtitleRecommendation(recommendation);
-            });
             textarea.addEventListener('input', () => {
                 this.stopCoursePreviewPlayback();
                 const manualEvents = (card._focusEvents || [])
@@ -3588,7 +3575,6 @@ class AICourseStudioApp {
                 this.renderCourseFocusEditor(card);
                 this.markCourseReviewStale();
                 updateLength();
-                this.evaluateSubtitleRisk(card);
                 coursePreviewSaveState.textContent = '等待自动保存…';
                 coursePreviewSaveState.classList.remove('saved');
                 clearTimeout(this.previewAutoSaveTimer);
@@ -3632,7 +3618,6 @@ class AICourseStudioApp {
         coursePreviewSaveState.textContent = '修改将自动保存';
         coursePreviewModule.hidden = false;
         this.syncSubtitlePreviewFromInputs();
-        this.refreshSubtitleRiskChecks();
         coursePreviewModule.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
@@ -3871,157 +3856,6 @@ class AICourseStudioApp {
             .trim();
         if (!clean) return '';
         return clean.slice(0, 48);
-    }
-
-    refreshSubtitleRiskChecks() {
-        this.elements.coursePreviewPages
-            ?.querySelectorAll('.course-preview-page')
-            .forEach(card => this.evaluateSubtitleRisk(card));
-    }
-
-    evaluateSubtitleRisk(card) {
-        const canvas = card.querySelector('.course-preview-slide-canvas');
-        const img = card.querySelector('.course-preview-image');
-        const badge = card.querySelector('.subtitle-risk-badge');
-        const messageNode = card.querySelector('.subtitle-risk-message');
-        const applyButton = card.querySelector('.subtitle-risk-apply');
-        if (!canvas || !img || !badge || !messageNode || !img.complete || !img.naturalWidth) return;
-
-        const x = Number(this.elements.subtitleX.value) || 0;
-        const y = Number(this.elements.subtitleY.value) || 0;
-        const width = Number(this.elements.subtitleWidth.value) || 1920;
-        const height = Number(this.elements.subtitleHeight.value) || 110;
-        const fontSize = Number(this.elements.subtitleFontSize.value) || 46;
-        const text = card.querySelector('.course-preview-script')?.value || '';
-        const textLength = this.makeSubtitleSample(text).length;
-        const areaDensity = this.measureImageRegionDensity(img, x, y, width, height);
-        if (areaDensity === null) {
-            messageNode.textContent = '字幕区检测不可用';
-            badge.className = 'subtitle-risk-badge warn';
-            if (applyButton) applyButton.hidden = true;
-            canvas.classList.add('subtitle-risk-medium');
-            canvas.classList.remove('subtitle-risk-high');
-            return;
-        }
-
-        const lineHeight = fontSize * 1.25;
-        const needsHeight = lineHeight + 24;
-        let level = 'ok';
-        let message = '字幕区清晰';
-        if (areaDensity > 0.28) {
-            level = 'danger';
-            message = '底部内容密集，建议上移';
-        } else if (areaDensity > 0.16) {
-            level = 'warn';
-            message = '字幕区有内容，注意遮挡';
-        }
-        if (needsHeight > height) {
-            level = level === 'danger' ? 'danger' : 'warn';
-            message = '字幕框偏矮，可能挤压文字';
-        }
-        if (fontSize < 42) {
-            level = level === 'danger' ? 'danger' : 'warn';
-            message = '字号偏小，小窗观看不稳';
-        }
-        const recommendation = this.pickSubtitleRecommendation(img);
-        if (level !== 'ok' && recommendation) {
-            message = `${message} · 推荐${recommendation.label}`;
-        }
-        messageNode.textContent = message;
-        badge.className = `subtitle-risk-badge ${level === 'danger' ? 'danger' : level === 'warn' ? 'warn' : 'ok'}`;
-        if (applyButton) {
-            applyButton.hidden = level === 'ok' || !recommendation;
-            applyButton.dataset.recommendation = recommendation?.key || '';
-        }
-        canvas.classList.toggle('subtitle-risk-medium', level === 'warn');
-        canvas.classList.toggle('subtitle-risk-high', level === 'danger');
-    }
-
-    pickSubtitleRecommendation(img) {
-        if (!img?.complete || !img.naturalWidth) return null;
-        const candidates = [
-            { key: 'course', label: '标准底部单行', ...this.subtitlePresets.course },
-            { key: 'safe', label: '中下避让', ...this.subtitlePresets.safe },
-            { key: 'top', label: '顶部字幕', ...this.subtitlePresets.top },
-            { key: 'lowerMiddle', label: '中部偏下', ...this.subtitlePresets.lowerMiddle },
-            { key: 'compact', label: '底部小字号单行', ...this.subtitlePresets.compact }
-        ];
-        const current = {
-            x: Number(this.elements.subtitleX.value),
-            y: Number(this.elements.subtitleY.value),
-            width: Number(this.elements.subtitleWidth.value),
-            height: Number(this.elements.subtitleHeight.value),
-            fontSize: Number(this.elements.subtitleFontSize.value)
-        };
-        const scored = candidates
-            .filter(candidate => !(
-                candidate.x === current.x &&
-                candidate.y === current.y &&
-                candidate.width === current.width &&
-                candidate.height === current.height &&
-                candidate.fontSize === current.fontSize
-            ))
-            .map(candidate => ({
-                ...candidate,
-                density: this.measureImageRegionDensity(
-                    img,
-                    candidate.x,
-                    candidate.y,
-                    candidate.width,
-                    candidate.height
-                )
-            }))
-            .filter(candidate => Number.isFinite(candidate.density));
-        if (!scored.length) return null;
-        scored.sort((left, right) => left.density - right.density);
-        return scored[0];
-    }
-
-    applySubtitleRecommendation(key) {
-        if (!key || !this.subtitlePresets?.[key]) return;
-        this.applySubtitlePreset(key);
-        this.syncSubtitlePresetSelection();
-        this.saveCurrentStrategy();
-    }
-
-    measureImageRegionDensity(img, x, y, width, height) {
-        try {
-            const probe = document.createElement('canvas');
-            const probeWidth = 96;
-            const probeHeight = Math.max(12, Math.round(probeWidth * height / Math.max(1, width)));
-            probe.width = probeWidth;
-            probe.height = probeHeight;
-            const ctx = probe.getContext('2d', { willReadFrequently: true });
-            if (!ctx) return null;
-            ctx.drawImage(
-                img,
-                x / 1920 * img.naturalWidth,
-                y / 1080 * img.naturalHeight,
-                width / 1920 * img.naturalWidth,
-                height / 1080 * img.naturalHeight,
-                0,
-                0,
-                probeWidth,
-                probeHeight
-            );
-            const { data } = ctx.getImageData(0, 0, probeWidth, probeHeight);
-            let active = 0;
-            const total = data.length / 4;
-            for (let i = 0; i < data.length; i += 4) {
-                const red = data[i];
-                const green = data[i + 1];
-                const blue = data[i + 2];
-                const max = Math.max(red, green, blue);
-                const min = Math.min(red, green, blue);
-                const contrast = max - min;
-                const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-                if (contrast > 24 || (luminance > 35 && luminance < 235)) active += 1;
-            }
-            return active / Math.max(1, total);
-        } catch (error) {
-            console.debug('字幕区域检测失败:', error);
-            return null;
-        }
     }
 
     bindCourseSubtitleOverlayDrag(overlay) {
