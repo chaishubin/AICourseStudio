@@ -114,3 +114,26 @@ test('focus appearance is included in reusable production strategies', () => {
     assert.equal(saved.focus_highlight_color, '#1267ab');
     assert.equal(saved.focus_highlight_width, 1);
 });
+
+test('underline progress follows audio time including backward seeking', () => {
+    const app = new Preview();
+    const events = [{ start: 1, end: 3, target_ids: ['a'] }];
+    assert.equal(app.underlineDrawProgress(events, 0, 'a', 1), 0);
+    assert.ok(Math.abs(app.underlineDrawProgress(events, 0, 'a', 1.2) - .5) < 1e-6);
+    assert.equal(app.underlineDrawProgress(events, 0, 'a', 2), 1);
+    assert.equal(app.underlineDrawProgress(events, 0, 'a', 1), 0);
+    assert.equal(app.underlineDrawProgress(events, -1, 'a', .5), 0);
+});
+
+test('continuous targets keep their stroke when another target joins', () => {
+    const app = new Preview();
+    const events = [
+        { start: 0, end: 1, target_ids: ['a'] },
+        { start: 1, end: 2, target_ids: ['a', 'b'] },
+        { start: 2.2, end: 2.4, target_ids: ['a'] }
+    ];
+    assert.equal(app.underlineDrawProgress(events, 1, 'a', 1), 1);
+    assert.equal(app.underlineDrawProgress(events, 1, 'b', 1), 0);
+    assert.ok(Math.abs(app.underlineDrawProgress(events, 2, 'a', 2.25) - .5) < 1e-6);
+    assert.equal(app.underlineDrawProgress(events, 2, 'a', 2.35), 1);
+});

@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 from pptx import Presentation
@@ -333,3 +334,43 @@ def test_exported_video_applies_page_visibility_without_mutating_saved_events(tm
             assert len(events) == 2
         finally:
             clip.close()
+
+
+def test_underline_draws_left_to_right_then_holds():
+    import numpy as np
+    layers = VideoComposer._focus_layers(
+        [{'id': 'a', 'x': .1, 'y': .2, 'width': .4, 'height': .1}],
+        [{'start': 1, 'end': 3, 'target_ids': ['a']}],
+        3, 1000, 500, 0, 0, 'underline', '#1248AB', 2,
+    )
+    try:
+        line, = layers
+        assert line.start == 1
+        assert np.count_nonzero(line.mask.get_frame(0)) == 0
+        half = line.mask.get_frame(.2)
+        assert np.all(half[:, :200] == 1)
+        assert np.all(half[:, 200:] == 0)
+        assert np.all(line.mask.get_frame(.4) == 1)
+        assert np.all(line.mask.get_frame(1.8) == 1)
+    finally:
+        for layer in layers:
+            layer.close()
+
+
+def test_continuous_target_does_not_redraw_when_second_target_joins():
+    import numpy as np
+    targets = [{'id': key, 'x': x, 'y': .2, 'width': .2, 'height': .1}
+               for key, x in [('a', .1), ('b', .6)]]
+    layers = VideoComposer._focus_layers(targets, [
+        {'start': 0, 'end': 1, 'target_ids': ['a']},
+        {'start': 1, 'end': 2, 'target_ids': ['a', 'b']},
+        {'start': 2.2, 'end': 2.4, 'target_ids': ['a']},
+    ], 3, 1000, 500, 0, 0, 'underline')
+    try:
+        assert [(line.start, line.duration) for line in layers] == [(0, 2), (1, 1), (2.2, pytest.approx(.2))]
+        assert np.all(layers[0].mask.get_frame(1) == 1)
+        assert np.all(layers[1].mask.get_frame(0) == 0)
+        assert np.all(layers[2].mask.get_frame(.1) == 1)
+    finally:
+        for layer in layers:
+            layer.close()

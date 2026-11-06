@@ -4419,6 +4419,23 @@ class AICourseStudioApp {
         );
         this.activateCoursePreviewSubtitles(card);
         this.updateCoursePreviewPagePlayerState(pageNumber, '正在播放本页');
+        let focusFrame = null;
+        const stopFocusFrames = () => {
+            if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+            focusFrame = null;
+        };
+        const updateFocusFrame = () => {
+            focusFrame = null;
+            if (this.coursePreviewAudio !== audio || audio.paused || audio.ended) return;
+            this.syncPlayingFocus(audio, card);
+            focusFrame = requestAnimationFrame(updateFocusFrame);
+        };
+        audio.addEventListener('play', () => {
+            stopFocusFrames();
+            updateFocusFrame();
+        });
+        ['pause', 'ended', 'error'].forEach(event => audio.addEventListener(event, stopFocusFrames));
+        ['seeking', 'seeked'].forEach(event => audio.addEventListener(event, () => this.syncPlayingFocus(audio, card)));
         audio.addEventListener('timeupdate', () => {
             if (this.coursePreviewAudio !== audio) return;
             this.syncPlayingSubtitleCue(audio, card, cues, fallback);
@@ -4528,13 +4545,7 @@ class AICourseStudioApp {
         const sample = card.querySelector('.course-preview-subtitle-sample');
         if (sample) sample.hidden = !text;
         if (text) this.renderSubtitlePreviewImage(card, text);
-        const events = card._focusEvents ?? this.previewFocusEvents(card._focusCues || []);
-        const visibleEvents = this.visibleCourseFocusEvents(card, events);
-        const smoothed = this.smoothPreviewFocusEvents(visibleEvents, Number(this.elements.focusSmoothingSeconds?.value || 0));
-        const focus = smoothed.find(event => audio.currentTime >= event.start && audio.currentTime < event.end);
-        card.querySelectorAll('.course-focus-target').forEach(node => {
-            node.classList.toggle('active', Boolean(focus) && (focus.target_ids || [focus.target_id]).includes(node.dataset.targetId));
-        });
+        this.syncPlayingFocus(audio, card);
     }
 
     previewFocusEvents(cues) {
@@ -4580,6 +4591,32 @@ class AICourseStudioApp {
         if (card._focusMode === 'off') return [];
         if (card._focusMode === 'manual') return events.filter(event => event.manual || event.reviewed);
         return events;
+    }
+
+    underlineDrawProgress(events, index, targetId, time) {
+        const contains = event => (event?.target_ids || [event?.target_id]).includes(targetId);
+        if (index < 0 || !contains(events[index])) return 0;
+        let first = index, last = index;
+        while (first > 0 && contains(events[first - 1])
+            && Math.abs(events[first - 1].end - events[first].start) < .000001) first--;
+        while (last + 1 < events.length && contains(events[last + 1])
+            && Math.abs(events[last].end - events[last + 1].start) < .000001) last++;
+        const seconds = Math.min(.4, (events[last].end - events[first].start) / 2);
+        return seconds > 0 ? Math.max(0, Math.min(1, (time - events[first].start) / seconds)) : 1;
+    }
+
+    syncPlayingFocus(audio, card) {
+        if (!card || audio !== this.coursePreviewAudio) return;
+        const events = card._focusEvents ?? this.previewFocusEvents(card._focusCues || []);
+        const visible = this.visibleCourseFocusEvents(card, events);
+        const smoothed = this.smoothPreviewFocusEvents(visible, Number(this.elements.focusSmoothingSeconds?.value || 0));
+        const index = smoothed.findIndex(event => audio.currentTime >= event.start && audio.currentTime < event.end);
+        card.querySelectorAll('.course-focus-target').forEach(node => {
+            const progress = this.underlineDrawProgress(smoothed, index, node.dataset.targetId, audio.currentTime);
+            node.style.setProperty('--focus-draw-progress', progress);
+            const focus = smoothed[index];
+            node.classList.toggle('active', Boolean(focus) && (focus.target_ids || [focus.target_id]).includes(node.dataset.targetId));
+        });
     }
 
     scheduleCourseFocusSave() {

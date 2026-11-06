@@ -3772,6 +3772,18 @@ body {
     height: max(1px, calc(var(--focus-line-width, 2) * var(--focus-line-unit, 1%)));
     background: var(--focus-color, #FFAE1F);
     pointer-events: none;
+    transform-origin: left center;
+    animation: focus-underline-draw .4s linear both;
+}
+
+@keyframes focus-underline-draw {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+}
+
+.playing-preview .course-focus-overlays[data-focus-style="underline"] .course-focus-target.active::after {
+    animation: none;
+    transform: scaleX(var(--focus-draw-progress, 0));
 }
 
 .subtitle-safe-area {

@@ -11,6 +11,7 @@ from moviepy import (
     ColorClip,
     CompositeVideoClip,
     ImageClip,
+    VideoClip,
     concatenate_videoclips,
 )
 
@@ -168,6 +169,20 @@ class VideoComposer:
             else:
                 expanded.extend((cue, target) for target in selected)
 
+        if style == "underline":
+            # One stroke per uninterrupted target, even when other targets join.
+            runs = {}
+            strokes = []
+            for cue, target in expanded:
+                previous = runs.get(target["id"])
+                if previous and abs(float(previous[0]["end"]) - float(cue["start"])) < 0.000001:
+                    previous[0]["end"] = cue["end"]
+                else:
+                    run = (dict(cue), target)
+                    runs[target["id"]] = run
+                    strokes.append(run)
+            expanded = strokes
+
         for cue, target in expanded:
             padding = 0 if style == "underline" else 10
             x = image_left + round(float(target.get("x", 0)) * image_width) - padding
@@ -216,10 +231,19 @@ class VideoComposer:
                 ))
             elif style == "underline":
                 thickness = min(height, border)
+                import numpy as np
+                draw_seconds = min(0.4, cue_duration / 2)
+                # A fixed-size alpha mask reveals the stroke without moving its left edge.
+                def stroke_mask(t, w=width, h=thickness, seconds=draw_seconds):
+                    progress = min(1.0, max(0.0, t / seconds))
+                    row = np.clip(w * progress - np.arange(w), 0.0, 1.0)
+                    return np.broadcast_to(row, (h, w))
+
+                mask = VideoClip(frame_function=stroke_mask, is_mask=True, duration=cue_duration)
                 layers.append(focus_clip(
                     (width, thickness), rgb, 1.0,
                     (x, y + height - thickness),
-                ))
+                ).with_mask(mask))
             else:
                 layers.append(focus_clip((width, height), (255, 190, 30), 0.13, (x, y)))
                 layers.append(focus_clip((width, border), rgb, 0.92, (x, y)))
