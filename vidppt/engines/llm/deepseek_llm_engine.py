@@ -26,3 +26,10 @@ class DeepSeekLLMEngine(OpenAILLMEngine):
             model=model or os.getenv("DEEPSEEK_REVIEW_MODEL") or self.DEFAULT_MODEL,
             **kwargs,
         )
+
+    def _build_request_payload(self, messages: list[dict], **kwargs) -> dict:
+        payload = super()._build_request_payload(messages, **kwargs)
+        # V4 thinking is controlled explicitly so JSON reviews do not spend
+        # their output budget on reasoning before returning the review object.
+        payload["thinking"] = {"type": "disabled"}
+        return payload

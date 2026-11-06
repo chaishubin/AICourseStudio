@@ -50,6 +50,8 @@ PPTX、逐页讲稿、配音、SRT 字幕和 MP4 课程视频；也可以直接�
 ```bash
 # 千问用于课程结构、逐页要点和讲稿生成；也可设置 OPENAI_API_KEY 后选择 ChatGPT
 export DASHSCOPE_API_KEY='你的百炼 API Key'
+export QWEN_MODEL='qwen3.7-plus'
+export DASHSCOPE_IMAGE_MODEL='wan2.7-image'
 export OPENAI_API_KEY='你的 OpenAI API Key'
 export VOLCENGINE_TTS_APPID='你的火山 AppID'
 export VOLCENGINE_TTS_ACCESS_TOKEN='你的火山 Access Token'
@@ -63,7 +65,7 @@ export DEEPSEEK_REVIEW_MODEL='deepseek-v4-pro'
 ai-course-studio lesson.docx --llm \
   --llm-engine qwen \
   --tts-engine volcengine \
-  --voice zh_female_cancan_mars_bigtts \
+  --voice zh_female_vv_uranus_bigtts \
   -o outputs/course
 
 # 只生成离线草稿 Course JSON 和 PPTX，不调用 LLM/TTS
@@ -73,7 +75,25 @@ ai-course-studio lesson.docx --no-tts --no-video -o outputs/draft
 `COURSE_REVIEW_PROVIDER` 支持 `openai`（默认）和 `deepseek`。该配置只影响
 确认课程草稿阶段的 AI 抽检/全课二审，不改变课程生成所选的 LLM。使用私有
 兼容网关时还可设置 `DEEPSEEK_API_URL`，默认值为 `https://api.deepseek.com`。
-默认质检模型为 `deepseek-v4-pro`；优先控制成本时可改为 `deepseek-v4-flash`。
+默认质检模型为 `deepseek-v4-pro`；优先控制成本时可改为当前 Flash 名称 `deepseek-flash`。
+
+千问默认使用 `qwen3.7-plus`，可通过 `QWEN_MODEL` 和 `QWEN_API_URL` 覆盖；
+配置文件中的 `llm_options.model` / `api_url` 优先于环境变量。默认显式关闭思考模式。
+课程插图默认使用 `wan2.7-image` 的同步多模态接口，每次只生成一张横图；
+`DASHSCOPE_IMAGE_MODEL` 可切换型号，`DASHSCOPE_IMAGE_BASE_URL` 可指定地域或
+业务空间域名（例如 `https://你的业务空间ID.cn-beijing.maas.aliyuncs.com`）。
+旧 `wanx2.1-t2i-turbo` 仍使用原异步接口，便于回退。
+
+火山语音根据音色自动选择协议：Vivi 2.0（`zh_female_vv_uranus_bigtts`）使用
+V3 和 `seed-tts-2.0`，已有旧音色保留 V1。可用
+`VOLCENGINE_TTS_API_VERSION=auto|v1|v3`、`VOLCENGINE_TTS_RESOURCE_ID` 和
+`VOLCENGINE_TTS_API_URL` 显式指定。V3 支持新版控制台的
+`VOLCENGINE_TTS_API_KEY`，也支持原有 AppID / Access Token；凭证须已授权对应语音资源。
+
+质检保留 API 返回的 token 用量。DeepSeek 分时价格及未知型号不再套用陈旧单价，
+页面会显示“费用未核算”；如需估算，可按所用服务的价格同时配置
+`COURSE_REVIEW_INPUT_USD_PER_MILLION` 和 `COURSE_REVIEW_OUTPUT_USD_PER_MILLION`
+（每百万 token 的美元单价）。该数值仍是估算，不代表厂商账单。
 
 路线 A 的主要产物：
 

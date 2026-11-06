@@ -3650,7 +3650,10 @@ class AICourseStudioApp {
             failed: '未通过',
             pending: '待审查'
         };
-        const status = review?.status || (qualityMode === 'economy' ? 'passed' : 'pending');
+        const completed = review?.review_completed === true && review?.status !== 'pending';
+        const status = review && !completed && review.status !== 'pending'
+            ? 'failed'
+            : (review?.status || (qualityMode === 'economy' ? 'passed' : 'pending'));
         this.elements.aiReviewPanel.dataset.status = status;
         this.elements.aiReviewFixAllBtn.hidden = true;
         if (!review) {
@@ -3663,7 +3666,7 @@ class AICourseStudioApp {
             return;
         }
         const reviewMode = modeLabels[review.mode] || review.mode || '审查';
-        const pages = Array.isArray(review.reviewed_pages)
+        const pages = completed && review.reviewed_pages?.length
             ? `已审查 ${review.reviewed_pages.join('、')} 页`
             : '';
         const cost = Number(review.estimated_cost_cny || 0);
@@ -3674,20 +3677,23 @@ class AICourseStudioApp {
             review.summary || statusLabels[status] || '审查完成';
         this.elements.aiReviewMeta.textContent = [
             reviewMode,
-            statusLabels[status] || status,
+            !completed && status === 'failed' ? '质检未完成' : (statusLabels[status] || status),
             providerLabel,
             review.model ? `模型 ${review.model}` : '',
-            cost ? `约 ${cost.toFixed(4)} 元` : '',
+            review.estimated_cost_cny == null ? '费用未核算' : `约 ${cost.toFixed(4)} 元`,
             pages
         ].filter(Boolean).join(' · ');
-        const findings = Array.isArray(review.findings) ? review.findings : [];
+        const findings = completed && Array.isArray(review.findings) ? review.findings : [];
         const fixableFindings = findings.filter(item =>
             Number(item.page_number) > 0 && String(item.replacement_script || '').trim()
         );
         this.elements.aiReviewFixAllBtn.hidden = fixableFindings.length === 0;
         if (!findings.length) {
+            const emptyMessage = !completed
+                ? (status === 'pending' ? '请重新运行 AI 质检' : '质检未完成，无法判断课程质量，请重新运行 AI 质检')
+                : (status === 'passed' ? '未发现具体问题' : '未返回具体问题，请重新运行 AI 质检');
             this.elements.aiReviewFindings.innerHTML =
-                '<div class="ai-review-empty">暂无具体问题</div>';
+                `<div class="ai-review-empty">${emptyMessage}</div>`;
             return;
         }
         this.elements.aiReviewFindings.innerHTML = findings.map((item, index) => `
@@ -3770,6 +3776,7 @@ class AICourseStudioApp {
         button.textContent = mode === 'full' ? '二审中…' : '抽检中…';
         this.elements.aiReviewSummary.textContent =
             mode === 'full' ? 'AI 正在进行全课二审…' : 'AI 正在抽检课程讲稿…';
+        let failedReview = null;
         try {
             const response = await fetch(`/api/course-review/${taskId}`, {
                 method: 'POST',
@@ -3777,7 +3784,10 @@ class AICourseStudioApp {
                 body: JSON.stringify({ mode })
             });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'AI 审查失败');
+            if (!response.ok || !data.success) {
+                failedReview = data.ai_review || null;
+                throw new Error(data.error || 'AI 审查失败');
+            }
             this.renderCourseReview(
                 data.ai_review,
                 this.elements.coursePreviewModule.dataset.qualityMode || 'balanced'
@@ -3786,7 +3796,8 @@ class AICourseStudioApp {
         } catch (error) {
             this.showStatus('error', error.message);
             this.renderCourseReview(
-                {
+                failedReview || {
+                    review_completed: false,
                     status: 'failed',
                     mode,
                     summary: error.message,

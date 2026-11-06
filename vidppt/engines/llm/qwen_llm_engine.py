@@ -13,7 +13,7 @@ class QwenLLMEngine(LLMEngine):
     DEFAULT_API_URL = (
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     )
-    DEFAULT_MODEL = "qwen-plus"
+    DEFAULT_MODEL = "qwen3.7-plus"
     DEFAULT_SYSTEM_PROMPT = (
         "你是一位专业的教学内容编辑。请将输入内容改写为准确、自然、"
         "适合课程讲解的中文口语稿，保留关键知识，不添加无依据的信息。"
@@ -22,8 +22,8 @@ class QwenLLMEngine(LLMEngine):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        api_url: str = DEFAULT_API_URL,
-        model: str = DEFAULT_MODEL,
+        api_url: Optional[str] = None,
+        model: Optional[str] = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         temperature: float = 0.3,
         max_tokens: int = 8192,
@@ -37,10 +37,10 @@ class QwenLLMEngine(LLMEngine):
             raise ValueError(
                 "千问 API Key 未设置，请设置环境变量 DASHSCOPE_API_KEY"
             )
-        self.api_url = api_url.rstrip("/")
+        self.api_url = (api_url or os.getenv("QWEN_API_URL") or self.DEFAULT_API_URL).rstrip("/")
         if not self.api_url.endswith("/chat/completions"):
             self.api_url += "/chat/completions"
-        self.model = model
+        self.model = model or os.getenv("QWEN_MODEL") or self.DEFAULT_MODEL
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -61,9 +61,10 @@ class QwenLLMEngine(LLMEngine):
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": False,
+            "enable_thinking": kwargs.get("enable_thinking", self.enable_thinking),
         }
-        if kwargs.get("enable_thinking", self.enable_thinking):
-            payload["enable_thinking"] = True
+        if kwargs.get("response_format"):
+            payload["response_format"] = kwargs["response_format"]
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -79,6 +80,8 @@ class QwenLLMEngine(LLMEngine):
                     response.raise_for_status()
                     result = response.json()
                 choices = result.get("choices") or []
+                if choices and choices[0].get("finish_reason") == "length":
+                    raise ValueError("千问输出被截断，请增加 max_tokens 或缩短输入")
                 content = (
                     choices[0].get("message", {}).get("content", "")
                     if choices

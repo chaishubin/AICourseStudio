@@ -46,13 +46,9 @@ class OpenAILLMEngine(LLMEngine):
         self.timeout = timeout
         self.max_retries = max_retries
         self.options = kwargs
+        self.last_usage = None
 
-    def _call_api(self, messages: list[dict], **kwargs) -> str:
-        try:
-            import httpx
-        except ImportError as exc:
-            raise ImportError("OpenAI 调用需要 httpx，请安装 api 依赖") from exc
-
+    def _build_request_payload(self, messages: list[dict], **kwargs) -> dict:
         payload = {
             "model": kwargs.get("model", self.model),
             "messages": messages,
@@ -62,6 +58,16 @@ class OpenAILLMEngine(LLMEngine):
         }
         if kwargs.get("response_format"):
             payload["response_format"] = kwargs["response_format"]
+        return payload
+
+    def _call_api(self, messages: list[dict], **kwargs) -> str:
+        try:
+            import httpx
+        except ImportError as exc:
+            raise ImportError("OpenAI 调用需要 httpx，请安装 api 依赖") from exc
+
+        self.last_usage = None
+        payload = self._build_request_payload(messages, **kwargs)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -75,7 +81,10 @@ class OpenAILLMEngine(LLMEngine):
                     )
                     response.raise_for_status()
                     result = response.json()
+                self.last_usage = result.get("usage")
                 choices = result.get("choices") or []
+                if choices and choices[0].get("finish_reason") == "length":
+                    raise ValueError("模型输出被截断，请增加 max_tokens 或缩短输入")
                 content = (
                     choices[0].get("message", {}).get("content", "")
                     if choices

@@ -10,6 +10,7 @@ from ..core.course import Course
 
 
 class DashScopeIllustrationGenerator:
+    DEFAULT_MODEL = "wan2.7-image"
     CREATE_URL = (
         "https://dashscope.aliyuncs.com/api/v1/services/"
         "aigc/text2image/image-synthesis"
@@ -19,12 +20,17 @@ class DashScopeIllustrationGenerator:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "wanx2.1-t2i-turbo",
+        model: str | None = None,
         timeout: float = 120.0,
         poll_interval: float = 2.0,
+        base_url: str | None = None,
     ):
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        self.model = model
+        self.model = model or os.getenv("DASHSCOPE_IMAGE_MODEL") or self.DEFAULT_MODEL
+        base = (base_url or os.getenv("DASHSCOPE_IMAGE_BASE_URL") or "https://dashscope.aliyuncs.com").rstrip("/")
+        self.CREATE_URL = f"{base}/api/v1/services/aigc/text2image/image-synthesis"
+        self.TASK_URL = f"{base}/api/v1/tasks/{{task_id}}"
+        self.generation_url = f"{base}/api/v1/services/aigc/multimodal-generation/generation"
         self.timeout = timeout
         self.poll_interval = poll_interval
 
@@ -86,6 +92,43 @@ class DashScopeIllustrationGenerator:
         )
 
     def _generate(self, prompt: str, output_path: Path) -> None:
+        if self.model.startswith(("wan2.7-image", "wan2.6-t2i")):
+            self._generate_multimodal(prompt, output_path)
+        else:
+            self._generate_legacy(prompt, output_path)
+
+    def _generate_multimodal(self, prompt: str, output_path: Path) -> None:
+        """Wan 2.6/2.7 use messages and return image content, not legacy task results."""
+        import httpx
+
+        payload = {
+            "model": self.model,
+            "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
+            "parameters": {"size": "1728*972", "n": 1, "watermark": False},
+        }
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.post(
+                self.generation_url,
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            response.raise_for_status()
+            result = response.json()
+            image_url = next((
+                item["image"]
+                for choice in result.get("output", {}).get("choices", [])
+                for item in choice.get("message", {}).get("content", [])
+                if item.get("image")
+            ), None)
+            if not image_url:
+                raise RuntimeError(f"万相未返回图片: {result.get('code', '')} {result.get('message', '')}")
+            image_response = client.get(image_url)
+            image_response.raise_for_status()
+            if not image_response.content:
+                raise RuntimeError("万相返回了空图片")
+            output_path.write_bytes(image_response.content)
+
+    def _generate_legacy(self, prompt: str, output_path: Path) -> None:
         import httpx
 
         headers = {

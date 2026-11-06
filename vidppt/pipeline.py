@@ -233,7 +233,8 @@ class Pipeline:
                 if k not in {"api_key", "access_token"}
             }
             if self.config.tts_engine == "volcengine":
-                api_cache_options["_speech_revision"] = "explicit-language-v2"
+                api_cache_options["_speech_revision"] = "volcengine-v3"
+                api_cache_options.update(self.tts_engine.cache_identity(self._api_voice(), self.config.tts_options))
 
             for page in content.pages:
                 # 跳过没有文本的页面

@@ -531,6 +531,47 @@ def test_course_review_get_returns_existing_result(monkeypatch, temp_dir):
     assert response.get_json()["ai_review"] == review
 
 
+def test_course_review_incomplete_response_persists_failure(monkeypatch, temp_dir):
+    import web.app as web_app
+    from vidppt.review.course_reviewer import CourseReviewer
+
+    class IncompleteEngine:
+        def summarize(self, prompt, **kwargs):
+            assert json.loads(prompt)["pages"][0]["script"] == "实际课程讲稿"
+            return json.dumps({
+                "status": "warning", "summary": "未提供课程页面内容，无法进行实际质检。",
+                "findings": [],
+            }, ensure_ascii=False)
+
+    task_id = "incomplete-review"
+    output_dir = temp_dir / task_id
+    output_dir.mkdir()
+    preview_path = output_dir / "preview.json"
+    preview_path.write_text(json.dumps({
+        "pages": [{"page_number": 1, "script": "实际课程讲稿"}],
+        "ai_review": {"status": "passed", "reviewed_pages": [1]},
+    }), encoding="utf-8")
+    monkeypatch.setattr(web_app, "tasks", {task_id: {
+        "status": "awaiting_confirmation", "output_dir": str(output_dir),
+    }})
+    monkeypatch.setattr(web_app, "CourseReviewer", lambda: CourseReviewer(engine=IncompleteEngine()))
+
+    response = web_app.app.test_client().post(
+        f"/api/course-review/{task_id}", json={"mode": "full"},
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert "未确认完成" in payload["error"]
+    review = payload["ai_review"]
+    assert review["review_completed"] is False
+    assert review["status"] == "failed"
+    assert review["reviewed_pages"] == []
+    assert json.loads(preview_path.read_text(encoding="utf-8"))["ai_review"] == review
+    assert web_app.tasks[task_id]["ai_review"] == review
+
+
 def test_artifact_downloads_use_original_upload_name(monkeypatch, temp_dir):
     import web.app as web_app
 
@@ -1657,7 +1698,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=46' in html
+    assert '/static/js/main.js?v=48' in html
 
 
 def test_course_packaging_has_a_separate_design_page():

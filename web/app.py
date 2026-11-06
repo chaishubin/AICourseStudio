@@ -795,6 +795,7 @@ def _debug_env_status() -> list[dict]:
         'DASHSCOPE_API_KEY',
         'VOLCENGINE_TTS_APPID',
         'VOLCENGINE_TTS_ACCESS_TOKEN',
+        'VOLCENGINE_TTS_API_KEY',
         'MINIMAX_API_KEY',
         'VIDPPT_USERS',
         'VIDPPT_DASHBOARD',
@@ -2992,14 +2993,18 @@ def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dic
         else os.getenv('OPENAI_REVIEW_MODEL') or os.getenv('OPENAI_LLM_MODEL') or 'openai'
     )
     review = {
+        'review_completed': False,
         'status': 'failed',
         'mode': mode,
         'provider': provider,
         'model': model,
-        'summary': 'AI 质检未完成，请稍后重试或检查模型配置。',
+        'summary': (
+            str(error) if isinstance(error, CourseReviewError)
+            else 'AI 质检未完成，请稍后重试或检查模型配置。'
+        ),
         'findings': [],
         'reviewed_pages': [],
-        'estimated_cost_cny': 0,
+        'estimated_cost_cny': None,
         'created_at': time.time(),
     }
     try:
@@ -3077,7 +3082,16 @@ def _focus_audio_signature(script: str, config: ProcessConfig) -> str:
         'rate': config.tts_rate, 'options': config.tts_options,
         'sample_rate': config.audio_sample_rate, 'bitrate': config.audio_bitrate,
     }
+    if config.tts_engine == 'volcengine':
+        settings['provider'] = _volcengine_cache_identity(
+            config.tts_options.get('voice_type', 'zh_female_cancan_mars_bigtts'), config.tts_options
+        )
     return hashlib.sha256(json.dumps(settings, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def _volcengine_cache_identity(voice: str, options: dict | None = None) -> dict:
+    from vidppt.engines.tts.volcengine_tts_engine import VolcengineTTSEngine
+    return VolcengineTTSEngine.cache_identity(voice, options)
 
 
 def _segment_speech_timing(audio_path: Path, text: str, duration: float) -> tuple[float, float] | None:
@@ -6271,11 +6285,11 @@ def list_voices():
             for voice_id, name in minimax_zh
         ],
         'volcengine': [
+            {'id': 'zh_female_vv_uranus_bigtts', 'name': 'Vivi 2.0（推荐）', 'gender': 'female'},
             {'id': 'zh_male_yangguangqingnian_emo_v2_mars_bigtts', 'name': '阳光青年（多情感·推荐）', 'gender': 'male'},
             {'id': 'zh_female_roumeinvyou_emo_v2_mars_bigtts', 'name': '柔美女友（多情感·推荐）', 'gender': 'female'},
             {'id': 'zh_female_cancan_mars_bigtts', 'name': '灿灿', 'gender': 'female'},
             {'id': 'zh_female_vv_mars_bigtts', 'name': 'Vivi', 'gender': 'female'},
-            {'id': 'zh_female_vv_uranus_bigtts', 'name': 'Vivi 2.0', 'gender': 'female'},
             {'id': 'zh_female_wanwanxiaohe_moon_bigtts', 'name': '湾湾小何', 'gender': 'female'},
             {'id': 'zh_male_shaonianzixin_moon_bigtts', 'name': '少年梓辛', 'gender': 'male'},
             {'id': 'zh_male_M392_conversation_wvae_bigtts', 'name': '通用男声', 'gender': 'male'},
@@ -6325,7 +6339,8 @@ def preview_voice():
     if not voice or len(voice) > 200:
         return jsonify({'error': '无效的音色 ID'}), 400
 
-    cache_key = hashlib.sha256(f'{engine}:{voice}'.encode()).hexdigest()
+    provider = _volcengine_cache_identity(voice) if engine == 'volcengine' else {}
+    cache_key = hashlib.sha256(f'{engine}:{voice}:{json.dumps(provider, sort_keys=True)}'.encode()).hexdigest()
     preview_path = VOICE_PREVIEW_FOLDER / f'{cache_key}.mp3'
     try:
         if not preview_path.exists() or preview_path.stat().st_size == 0:
@@ -6363,6 +6378,7 @@ def preview_script():
         (
             f'script:{engine}:{voice}:{sample}:{rate}:'
             f'{json.dumps(tts_options, sort_keys=True)}'
+            f'{json.dumps(_volcengine_cache_identity(voice, tts_options), sort_keys=True) if engine == "volcengine" else ""}'
         ).encode()
     ).hexdigest()
     preview_path = VOICE_PREVIEW_FOLDER / f'{cache_key}.mp3'

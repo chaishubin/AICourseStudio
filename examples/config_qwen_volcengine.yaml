@@ -5,7 +5,8 @@ output: "outputs/course"
 llm_enabled: true
 llm_engine: "qwen"
 llm_options:
-  model: "qwen-plus"
+  model: "qwen3.7-plus"
+  enable_thinking: false
   temperature: 0.3
   max_tokens: 8192
   # api_key 默认读取 DASHSCOPE_API_KEY
@@ -15,8 +16,9 @@ enable_tts: true
 tts_engine: "volcengine"
 tts_rate: "-8%"
 tts_options:
-  voice_type: "zh_male_yangguangqingnian_emo_v2_mars_bigtts"
-  cluster: "volcano_tts"
+  voice_type: "zh_female_vv_uranus_bigtts"
+  api_version: "v3"
+  resource_id: "seed-tts-2.0"
   sample_rate: 24000
   audio_format: "mp3"
   emotion: "happy"
@@ -26,6 +28,7 @@ tts_options:
   silence_duration: 260
   # appid 默认读取 VOLCENGINE_TTS_APPID
   # access_token 默认读取 VOLCENGINE_TTS_ACCESS_TOKEN
+  # 也可只设置新版控制台 VOLCENGINE_TTS_API_KEY
 
 enable_video: true
 render_engine: "libreoffice"
