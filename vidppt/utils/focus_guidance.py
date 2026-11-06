@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import re
+import math
 from difflib import SequenceMatcher
 from pathlib import Path
 
 from pptx import Presentation
 
 from .subtitle_rules import subtitle_chunks
+from .focus_alignment import align_cues
 
 
-FOCUS_CUES_VERSION = 7
+FOCUS_CUES_VERSION = 8
 _QUOTED_ENGLISH = re.compile(r"""[‘“'"]([A-Za-z]+(?: +[A-Za-z]+)+)[’”'"]""")
 _MIN_VISIBLE_FOCUS_CONFIDENCE = 0.34
 _IGNORED_TEXT = {
@@ -88,31 +90,10 @@ def build_focus_cues(
     if not units or not targets:
         return []
     annotated = _resolve_annotated_cues(annotated_cues, targets)
-    if annotated:
+    if annotated and _compact_text("".join(cue["text"] for cue in annotated)) == _compact_text(script):
         return annotated
-    content_targets = [target for target in targets if target.get("role") != "title"]
-    candidates = content_targets or targets
-    cues = []
-    previous_index = 0
-    for unit in units:
-        scored = []
-        for target_index, target in enumerate(candidates):
-            if target_index < previous_index:
-                continue
-            score = _text_similarity(unit, str(target.get("text", "")))
-            scored.append((score, target_index, target))
-        score, target_index, target = max(scored, key=lambda item: item[0])
-        target_id = target["id"] if score >= _MIN_VISIBLE_FOCUS_CONFIDENCE else ""
-        if target_id:
-            previous_index = target_index
-        cues.append({
-            "text": unit,
-            "target_id": target_id,
-            "weight": max(1, len(_compact_text(unit))),
-            "confidence": round(min(1.0, score), 3),
-            "source": "fallback",
-        })
-    return cues
+    cues = [{"text": unit, "source": "fallback"} for unit in units]
+    return align_cues(script, cues, targets)[0]
 
 
 def plan_page_focus(
@@ -123,86 +104,25 @@ def plan_page_focus(
     page_context: str = "",
     previous_target_id: str = "",
 ) -> tuple[list[dict], dict]:
-    """Plan focus for a whole page and attach auditable validation evidence.
+    """Plan a page using local concepts and a shared subtitle/audio timeline.
 
-    Matching remains deterministic and bounded: an ambiguous cue gets one
-    context-aware rerank, then safely inherits the prior target or clears.
+    Compatibility context arguments are intentionally not lexical evidence:
+    a page title may contain the beginning of its script, and target IDs from
+    other pages must never leak into this page's decisions.
     """
-    # Preserve timed subtitle units and manual annotations from the existing
-    # audio track when their text still covers the script.
+    # Fresh structured LLM output has anchor_id/target_text and no source
+    # marker yet. Resolve it before normalizing saved subtitle/audio cues.
+    if isinstance(annotated_cues, list) and any(
+        isinstance(cue, dict)
+        and any(key in cue for key in ("anchor_id", "target_text", "target", "action"))
+        and not any(cue.get(key) for key in ("source", "mapping_source", "subtitle_unit", "manual"))
+        for cue in annotated_cues
+    ):
+        annotated_cues = build_focus_cues(script, targets, annotated_cues)
     cues = normalize_focus_cues(annotated_cues, script, targets)
-    valid_ids = {str(target.get("id")) for target in targets}
-    by_id = {str(target.get("id")): target for target in targets}
-    last_target = previous_target_id if previous_target_id in valid_ids else ""
-    reviewed = []
-    accepted = degraded = 0
-    issues = []
-    for index, cue in enumerate(cues):
-        target_id = str(cue.get("target_id") or "")
-        original_id = target_id
-        evidence = []
-        if target_id and target_id in by_id:
-            target = by_id[target_id]
-            score = _text_similarity(cue.get("text", ""), target.get("text", ""))
-            ranked = sorted(
-                ((_text_similarity(cue.get("text", ""), t.get("text", "")), str(t["id"]))
-                 for t in targets if t.get("id")), reverse=True
-            )
-            margin = score - (ranked[1][0] if ranked and ranked[0][1] == target_id and len(ranked) > 1 else (ranked[0][0] if ranked else 0))
-            visible = _target_is_visible(target)
-            evidence = ["target_exists", "visible" if visible else "not_visible", "semantic_match"]
-            # A single targeted recheck uses the full-page context to resolve
-            # close candidates without making another model/API call.
-            if not visible or (score < 0.42 and margin < 0.08):
-                context = f"{page_context} {cue.get('text', '')}"
-                context_ranked = sorted(
-                    ((_text_similarity(context, t.get("text", "")), str(t["id"]))
-                     for t in targets if t.get("id") and _target_is_visible(t)), reverse=True
-                )
-                if context_ranked and (len(context_ranked) == 1 or context_ranked[0][0] - context_ranked[1][0] >= 0.08):
-                    target_id = context_ranked[0][1]
-                    cue["recheck"] = "context_rerank"
-                    evidence.append("context_rerank_resolved")
-                else:
-                    target_id = ""
-                    cue["recheck"] = "unresolved"
-                    evidence.append("ambiguous_after_recheck")
-        if target_id and target_id not in valid_ids:
-            target_id = ""
-            evidence.append("invalid_target")
-        if not target_id:
-            # Inherit only across an explicit continuation or weak ambiguous
-            # cue. Clear/no-focus annotations remain no-focus.
-            if (cue.get("action") == "continue" or cue.get("recheck") == "unresolved") and last_target:
-                target_id = last_target
-                cue["fallback"] = "context_inherit"
-                evidence.append("inherited_previous_focus")
-            else:
-                evidence.append("no_focus")
-        else:
-            accepted += 1
-            last_target = target_id
-        if target_id != original_id or not target_id:
-            degraded += 1
-            if cue.get("recheck") == "unresolved" or (not target_id and cue.get("action") != "clear"):
-                issues.append({"cue_index": index, "text": cue.get("text", ""), "reason": "ambiguous_or_unlocated", "suggestion": "复核焦点；可接受父级区域或无焦点"})
-        cue["target_id"] = target_id
-        cue["target_ids"] = [target_id] if target_id else []
-        cue["decision"] = "accepted" if target_id else "no_focus"
-        cue["evidence"] = evidence
-        reviewed.append(cue)
-    total = len(reviewed)
-    report = {
-        "version": 1,
-        "cue_count": total,
-        "automatic_accept_count": accepted,
-        "automatic_accept_rate": round(accepted / total, 4) if total else None,
-        "degraded_count": degraded,
-        "degraded_rate": round(degraded / total, 4) if total else 0.0,
-        "anomalies": issues,
-        "manual_review_suggestions": issues,
-    }
-    return reviewed, report
+    if not cues and str(script or "").strip():
+        cues = [{"text": unit, "source": "fallback"} for unit in _narration_units(script)]
+    return align_cues(script, cues, targets)
 
 
 def validate_focus_events(events: list[dict], targets: list[dict], duration: float) -> list[dict]:
@@ -216,7 +136,7 @@ def validate_focus_events(events: list[dict], targets: list[dict], duration: flo
         except (TypeError, ValueError):
             continue
         ids = [str(item) for item in event.get("target_ids", [])]
-        if start < previous_end or end <= start or end > duration + 0.02 or not set(ids) <= valid_ids:
+        if not math.isfinite(start) or not math.isfinite(end) or start < previous_end or end <= start or end > duration + 0.02 or not set(ids) <= valid_ids:
             continue
         safe_ids = [item for item in ids if _target_is_visible(next(t for t in targets if str(t.get("id")) == item))]
         output.append({**event, "target_ids": safe_ids})
@@ -332,9 +252,8 @@ def _copy_focus_intent(destination: dict, raw: dict) -> None:
 
 def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dict]:
     """Keep user target choices while refreshing cue text after script edits."""
-    automatic = build_focus_cues(script, targets)
     if not isinstance(raw_cues, list) or not str(script or "").strip():
-        return automatic
+        return build_focus_cues(script, targets)
     valid_ids = {str(target.get("id")) for target in targets} | {""}
     persistent_cues = [
         cue for cue in raw_cues
@@ -344,7 +263,6 @@ def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dic
             or cue.get("source") == "llm"
             or cue.get("subtitle_unit") is True
         )
-        and str(cue.get("target_id") or "") in valid_ids
     ]
     if (
         persistent_cues
@@ -356,7 +274,7 @@ def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dic
         return [
             {
                 **cue,
-                "target_id": str(cue.get("target_id") or ""),
+                "target_id": str(cue.get("target_id") or "") if str(cue.get("target_id") or "") in valid_ids else "",
                 "weight": max(
                     1,
                     int(
@@ -367,10 +285,11 @@ def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dic
             }
             for cue in persistent_cues
         ]
+    automatic = build_focus_cues(script, targets)
     for cue in automatic:
         matches = [
             (_text_similarity(cue["text"], str(raw.get("text", ""))), raw)
-            for raw in persistent_cues
+            for raw in persistent_cues if raw.get("manual") is True
         ]
         if not matches:
             continue
@@ -475,3 +394,41 @@ def _narration_units(text: str) -> list[str]:
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
     return max(minimum, min(maximum, float(value)))
+
+
+def rebuild_focus_events(cues: list[dict], existing: list[dict] | None = None) -> list[dict] | None:
+    """Rebuild automatic events from real cue times, overlaying manual intervals.
+
+    Never invent new timestamps when migrating an old page. An explicit empty
+    manual interval is meaningful and must mask the generated highlight.
+    """
+    from vidppt.core.cue_timeline import focus_events_from_cues
+
+    manual = [dict(event) for event in existing or []
+              if event.get('manual') or event.get('reviewed')]
+    timed = []
+    previous = 0.0
+    for cue in cues:
+        try:
+            start, end = float(cue['start']), float(cue['end'])
+        except (KeyError, TypeError, ValueError):
+            return manual or None
+        if not math.isfinite(start) or not math.isfinite(end) or start < previous or end <= start:
+            return manual or None
+        timed.append({**cue, 'start': start, 'end': end})
+        previous = end
+    automatic = focus_events_from_cues(timed)
+    if not manual:
+        return automatic if timed else None
+    # Subtract manually controlled spans from the automatic track. Preserve
+    # manual metadata exactly; edited/stale intervals are handled by the caller.
+    result = list(manual)
+    for event in automatic:
+        spans = [(event['start'], event['end'])]
+        for override in manual:
+            a, b = float(override['start']), float(override['end'])
+            spans = [(left, right) for start, end in spans
+                     for left, right in ((start, min(end, a)), (max(start, b), end))
+                     if right > left]
+        result.extend({**event, 'start': start, 'end': end} for start, end in spans)
+    return sorted(result, key=lambda event: (float(event['start']), float(event['end'])))

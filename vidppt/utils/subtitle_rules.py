@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from .speech_text import safe_speech_boundary
+
 MAX_SUBTITLE_LINES = 1
 MAX_CHARS_PER_LINE = 28
 MAX_SUBTITLE_CHARS = MAX_SUBTITLE_LINES * MAX_CHARS_PER_LINE
@@ -73,21 +75,37 @@ def subtitle_source_chunks(text: str) -> list[str]:
     if len(chunks) <= 1:
         return [text.strip()] if text.strip() else []
 
+    return restore_subtitle_source(text, chunks) or [text.strip()]
+
+
+def restore_subtitle_source(text: str, chunks: list[str]) -> list[str]:
+    """Restore original punctuation to aligned display cues before speech synthesis.
+
+    Return no chunks when their visible text differs from the source, so callers
+    can discard stale cue boundaries rather than synthesize altered text.
+    """
+
     def visible(char: str) -> bool:
         return not char.isspace() and (
             char in "《》" or not unicodedata.category(char).startswith("P")
         )
 
     positions = [index for index, char in enumerate(text) if visible(char)]
+    source_chars = ''.join(text[index] for index in positions)
+    cue_chars = ''.join(char for chunk in chunks for char in chunk if visible(char))
+    if source_chars != cue_chars:
+        return []
     sizes = [sum(visible(char) for char in chunk) for chunk in chunks]
     if sum(sizes) != len(positions) or not all(sizes):
-        return chunks
+        return []
 
     start = count = 0
     result = []
     for size in sizes[:-1]:
         count += size
-        end = positions[count]
+        end = safe_speech_boundary(text, positions[count], start)
+        if end <= start or end >= len(text):
+            return []
         result.append(text[start:end].strip())
         start = end
     result.append(text[start:].strip())

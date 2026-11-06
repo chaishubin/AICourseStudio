@@ -362,6 +362,25 @@ def test_subtitle_punctuation_preserves_decimals_and_adds_terminal_stop():
     assert text == "模型版本是3 14 相比2 0更稳定"
 
 
+@pytest.mark.parametrize("token", [
+    "3.14", "-12.5%", "1,000", "3.2.1", "2026-11-06", "12:30",
+    "1/2", "PLC's", "start-up", "C++", "C#", "$?", "-3.2℃",
+])
+def test_speech_subtitle_chunks_keep_technical_tokens_intact(token):
+    for prefix_length in range(19, 29):
+        script = "中" * prefix_length + token + "的完整读法需要保留，后面还有一段说明文字。"
+        chunks = subtitle_source_chunks(script)
+        assert any(token in chunk for chunk in chunks), (script, chunks)
+        assert ''.join(chunks) == script
+
+
+def test_speech_subtitle_alignment_failure_uses_original_text():
+    script = "原文中有3.14，不能丢掉小数点。"
+    with patch('vidppt.utils.subtitle_rules.subtitle_chunks',
+               return_value=['原文已经被改写', '小数点也丢了']):
+        assert subtitle_source_chunks(script) == [script]
+
+
 def test_subtitle_punctuation_normalizes_single_quotes_as_outer_double_quotes():
     text = normalize_subtitle_text(
         "'学习闭环'不是口号,而是\"输入'练习'反馈\"的过程"

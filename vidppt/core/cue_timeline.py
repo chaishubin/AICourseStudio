@@ -49,6 +49,10 @@ def build_cue_timeline(pages: list[dict], *, focus_smoothing_seconds: float = 0.
                 ),
                 "confidence": round(float(cue.get("confidence") or 0), 3),
                 "reviewed": bool(cue.get("reviewed") or cue.get("manual")),
+                **{key: cue[key] for key in (
+                    "action", "teaching_stage", "knowledge_point_id", "model_target_id",
+                    "original_target_id", "confidence_kind", "evidence",
+                ) if key in cue},
             })
         if "focus_events" in page:
             for event in page["focus_events"]:
@@ -97,6 +101,8 @@ def focus_events_from_cues(cues: list[dict]) -> list[dict]:
                 and events[-1].get("reviewed", False) == event.get("reviewed", False)
                 and abs(float(events[-1]["end"]) - float(event["start"])) < 0.000001):
             events[-1]["end"] = event["end"]
+            if "confidence" in event and "confidence" in events[-1]:
+                events[-1]["confidence"] = min(float(events[-1]["confidence"]), float(event["confidence"]))
             if "page_end" in event:
                 events[-1]["page_end"] = event["page_end"]
         else:

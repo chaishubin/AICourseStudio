@@ -1698,7 +1698,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=49' in html
+    assert '/static/js/main.js?v=51' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -2270,6 +2270,33 @@ def test_focus_cue_coverage_rejects_stale_english_word_splits():
     assert not _focus_cues_cover_script([
         {"text": "英文名称为ProgrammableLogicController，简称PLC。"},
     ], script)
+
+
+def test_segmented_audio_restores_decimal_from_script(monkeypatch, temp_dir):
+    import pytest
+    import web.app as web_app
+    from vidppt.core.models import DocumentContent, PageContent, ProcessConfig
+
+    script = "本节将聚焦3.2位逻辑指令——包括触点、线圈。"
+    page = PageContent(page_number=1, text=script, metadata={
+        "focus_cues": [{"text": "本节将聚焦3 2位逻辑指令 包括触点 线圈",
+                        "target_id": "p1-a5", "subtitle_unit": True}],
+        "audio_signature": "old-signature",
+    })
+    (temp_dir / "1").mkdir()
+    (temp_dir / "1" / "audio.mp3").write_bytes(b"old wrong audio")
+
+    def capture_audio(self, content, progress):
+        assert ''.join(segment.text for segment in content.pages) == script
+        assert content.pages[0].text.startswith("本节将聚焦3.2位")
+        assert page.metadata['focus_cues'][0]['target_id'] == 'p1-a5'
+        raise RuntimeError("captured corrected TTS input")
+
+    monkeypatch.setattr(web_app.Pipeline, '_generate_audio', capture_audio)
+    config = ProcessConfig(input_path=temp_dir / 'lesson.pptx', output_dir=temp_dir,
+                           skip_existing=True)
+    with pytest.raises(RuntimeError, match="captured corrected TTS input"):
+        web_app._generate_audio_with_focus_segments(DocumentContent(pages=[page]), config)
 
 
 def test_focus_edit_keeps_audio_and_reuses_it_for_export(monkeypatch, temp_dir):

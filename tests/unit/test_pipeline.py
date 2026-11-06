@@ -15,6 +15,44 @@ from vidppt.pipeline import Pipeline
 from vidppt.core.models import ProcessConfig, DocumentContent, PageContent
 
 
+@pytest.mark.parametrize('change', ['unchanged', 'text', 'voice', 'rate', 'audio'])
+def test_existing_audio_is_reused_only_for_matching_source(temp_dir, change):
+    from vidppt.utils.progress import ProgressTracker
+
+    config = ProcessConfig(
+        input_path=temp_dir / 'test.pptx', output_dir=temp_dir / 'output',
+        save_intermediate=True, skip_existing=True, enable_audio_cache=False,
+    )
+    pipeline = Pipeline(config)
+    audio_path = config.output_dir / '1' / 'audio.mp3'
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b'old unverified audio')
+
+    async def synthesize(texts, **kwargs):
+        for _, text, path in texts:
+            path.write_bytes(text.encode('utf-8'))
+        return []
+
+    pipeline.tts_engine.batch_convert = AsyncMock(side_effect=synthesize)
+    page = PageContent(page_number=1, text='当前讲稿3.2位逻辑指令')
+    pipeline._generate_audio(DocumentContent(pages=[page]), ProgressTracker(total_pages=1))
+    assert pipeline.tts_engine.batch_convert.call_count == 1
+    assert audio_path.read_bytes() == page.text.encode('utf-8')
+
+    if change == 'text':
+        page.text = '更新讲稿3.14'
+    elif change == 'voice':
+        config.tts_voice = 'zh-CN-YunyangNeural'
+    elif change == 'rate':
+        config.tts_rate = '+20%'
+    elif change == 'audio':
+        audio_path.write_bytes(b'replaced audio')
+
+    pipeline._generate_audio(DocumentContent(pages=[page]), ProgressTracker(total_pages=1))
+    assert pipeline.tts_engine.batch_convert.call_count == (1 if change == 'unchanged' else 2)
+    assert audio_path.read_bytes() == page.text.encode('utf-8')
+
+
 class TestPipelineInit:
     """测试 Pipeline 初始化"""
 

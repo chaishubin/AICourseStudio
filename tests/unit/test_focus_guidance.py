@@ -119,7 +119,8 @@ def test_page_planner_records_evidence_and_safely_clears_ambiguous_match():
     assert cues[0]["evidence"]
     assert report["cue_count"] == 1
     assert report["degraded_count"] == 1
-    assert report["manual_review_suggestions"]
+    assert report["manual_review_suggestions"] == []
+    assert report["anomalies"][0]["resolution"] == "automatic_clear"
 
 
 def test_event_validator_drops_invalid_geometry_target_and_time():

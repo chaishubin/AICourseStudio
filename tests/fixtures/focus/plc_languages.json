@@ -1,0 +1,364 @@
+{
+  "page_number": 2,
+  "title": "首先，PLC最常用、也最贴近继电器控制思维的编程语言是梯形图——它由触点、线圈或指令框组成，直观易读，特别适合电气工程师快速上手。其次是指令表，它类似计算机汇编",
+  "script": "首先，PLC最常用、也最贴近继电器控制思维的编程语言是梯形图——它由触点、线圈或指令框组成，直观易读，特别适合电气工程师快速上手。其次是指令表，它类似计算机汇编语言中的助记符表达式，由操作码和操作数两部分构成，简洁紧凑，适合底层调试与资源受限场景。第三种是逻辑功能块图，它采用‘与’、‘或’、‘非’等数字逻辑门电路的图形符号来组织逻辑，既清晰又便于模块化设计。这三种语言覆盖了从图形化到文本化的主流编程范式，为不同层次的应用需求提供了灵活选择。接下来，我们继续看另外两种重要语言：顺序功能图和结构文本。",
+  "focus_targets": [
+    {
+      "id": "p2-a1",
+      "anchor_id": "p2-a1",
+      "shape_id": "shape-1",
+      "text": "第一节 PLC的编程语言与程序结构",
+      "x": 0.1,
+      "y": 0.11111,
+      "width": 0.59167,
+      "height": 0.08889,
+      "role": "title"
+    },
+    {
+      "id": "p2-a2",
+      "anchor_id": "p2-a2",
+      "shape_id": "shape-2",
+      "text": "一、PLC的编程语言",
+      "x": 0.05111,
+      "y": 0.21338,
+      "width": 0.425,
+      "height": 0.06667,
+      "role": "title"
+    },
+    {
+      "id": "p2-a3",
+      "anchor_id": "p2-a3",
+      "shape_id": "shape-3",
+      "text": "梯形图：（Ladder Diagram，LD）",
+      "x": 0.09705,
+      "y": 0.28356,
+      "width": 0.47795,
+      "height": 0.07222,
+      "role": "content"
+    },
+    {
+      "id": "p2-a4",
+      "anchor_id": "p2-a4",
+      "shape_id": "shape-4",
+      "text": "梯形图由触点、线圈或指令框组成。",
+      "x": 0.09045,
+      "y": 0.34861,
+      "width": 0.58281,
+      "height": 0.07384,
+      "role": "content"
+    },
+    {
+      "id": "p2-a6",
+      "anchor_id": "p2-a6",
+      "shape_id": "shape-6",
+      "text": "指令表：（Instruction List，IL）",
+      "x": 0.10069,
+      "y": 0.4206,
+      "width": 0.47795,
+      "height": 0.07222,
+      "role": "content"
+    },
+    {
+      "id": "p2-a8",
+      "anchor_id": "p2-a8",
+      "shape_id": "shape-8",
+      "text": "类似计算机汇编语言中指令的助记符表达式，由操作码和操作数两部分组成。",
+      "x": 0.07483,
+      "y": 0.49097,
+      "width": 0.56684,
+      "height": 0.13495,
+      "role": "content"
+    },
+    {
+      "id": "p2-a9",
+      "anchor_id": "p2-a9",
+      "shape_id": "shape-9",
+      "text": "逻辑功能块图 (Function Block Diagram，FBD)",
+      "x": 0.1,
+      "y": 0.62431,
+      "width": 0.52604,
+      "height": 0.13079,
+      "role": "content"
+    },
+    {
+      "id": "p2-a10",
+      "anchor_id": "p2-a10",
+      "shape_id": "shape-10",
+      "text": "类似于数字逻辑门电路中“与”、“或”、“非”等图形符号的编程语言",
+      "x": 0.04323,
+      "y": 0.75903,
+      "width": 0.55122,
+      "height": 0.13495,
+      "role": "content"
+    }
+  ],
+  "focus_cues": [
+    {
+      "anchor_id": "p2-a3",
+      "confidence": 0.98,
+      "decision": "accepted",
+      "duration": 2.64,
+      "end": 2.64,
+      "evidence": [
+        "target_exists",
+        "visible",
+        "semantic_match",
+        "context_rerank_resolved"
+      ],
+      "recheck": "context_rerank",
+      "source": "llm",
+      "start": 0.0,
+      "subtitle_unit": true,
+      "target_id": "p2-a4",
+      "target_ids": [
+        "p2-a4"
+      ],
+      "text": "首先，PLC最常用、",
+      "timing_source": "segment_audio",
+      "weight": 57
+    },
+    {
+      "anchor_id": "p2-a3",
+      "confidence": 0.98,
+      "decision": "accepted",
+      "duration": 6.36,
+      "end": 9.0,
+      "evidence": [
+        "target_exists",
+        "visible",
+        "semantic_match",
+        "ambiguous_after_recheck",
+        "inherited_previous_focus"
+      ],
+      "fallback": "context_inherit",
+      "recheck": "unresolved",
+      "source": "llm",
+      "start": 2.64,
+      "subtitle_unit": true,
+      "target_id": "p2-a4",
+      "target_ids": [
+        "p2-a4"
+      ],
+      "text": "也最贴近继电器控制思维的编程语言是梯形图——它由触点、",
+      "timing_source": "segment_audio",
+      "weight": 57
+    },
+    {
+      "anchor_id": "p2-a3",
+      "confidence": 0.98,
+      "decision": "accepted",
+      "duration": 5.93,
+      "end": 14.93,
+      "evidence": [
+        "target_exists",
+        "visible",
+        "semantic_match"
+      ],
+      "fallback": "context_inherit",
+      "recheck": "unresolved",
+      "source": "llm",
+      "start": 9.0,
+      "subtitle_unit": true,
+      "target_id": "p2-a4",
+      "target_ids": [
+        "p2-a4"
+      ],
+      "text": "线圈或指令框组成，直观易读，特别适合电气工程师快速上手。",
+      "timing_source": "segment_audio",
+      "weight": 57
+    },
+    {
+      "anchor_id": "p2-a6",
+      "confidence": 0.25,
+      "decision": "no_focus",
+      "duration": 7.3,
+      "end": 22.23,
+      "evidence": [
+        "no_focus"
+      ],
+      "source": "llm",
+      "start": 14.93,
+      "subtitle_unit": true,
+      "target_id": "",
+      "target_ids": [],
+      "text": "其次是指令表，它类似计算机汇编语言中的助记符表达式，",
+      "timing_source": "segment_audio",
+      "weight": 54
+    },
+    {
+      "anchor_id": "p2-a6",
+      "confidence": 0.25,
+      "decision": "no_focus",
+      "duration": 4.03,
+      "end": 26.26,
+      "evidence": [
+        "no_focus"
+      ],
+      "source": "llm",
+      "start": 22.23,
+      "subtitle_unit": true,
+      "target_id": "",
+      "target_ids": [],
+      "text": "由操作码和操作数两部分构成，简洁紧凑，",
+      "timing_source": "segment_audio",
+      "weight": 54
+    },
+    {
+      "anchor_id": "p2-a6",
+      "confidence": 0.25,
+      "decision": "no_focus",
+      "duration": 2.38,
+      "end": 28.64,
+      "evidence": [
+        "no_focus"
+      ],
+      "source": "llm",
+      "start": 26.26,
+      "subtitle_unit": true,
+      "target_id": "",
+      "target_ids": [],
+      "text": "适合底层调试与资源受限场景。",
+      "timing_source": "segment_audio",
+      "weight": 54
+    },
+    {
+      "anchor_id": "p2-a10",
+      "confidence": 0.98,
+      "decision": "accepted",
+      "duration": 4.7,
+      "end": 33.34,
+      "evidence": [
+        "target_exists",
+        "visible",
+        "semantic_match",
+        "context_rerank_resolved"
+      ],
+      "recheck": "context_rerank",
+      "source": "llm",
+      "start": 28.64,
+      "subtitle_unit": true,
+      "target_id": "p2-a4",
+      "target_ids": [
+        "p2-a4"
+      ],
+      "text": "第三种是逻辑功能块图，它采用‘与’、‘或’、‘",
+      "timing_source": "segment_audio",
+      "weight": 45
+    },
+    {
+      "anchor_id": "p2-a10",
+      "confidence": 0.98,
+      "decision": "accepted",
+      "duration": 4.25,
+      "end": 37.59,
+      "evidence": [
+        "target_exists",
+        "visible",
+        "semantic_match"
+      ],
+      "source": "llm",
+      "start": 33.34,
+      "subtitle_unit": true,
+      "target_id": "p2-a10",
+      "target_ids": [
+        "p2-a10"
+      ],
+      "text": "非’等数字逻辑门电路的图形符号来组织逻辑，",
+      "timing_source": "segment_audio",
+      "weight": 45
+    },
+    {
+      "anchor_id": "p2-a10",
+      "confidence": 0.98,
+      "decision": "accepted",
+      "duration": 3.1,
+      "end": 40.69,
+      "evidence": [
+        "target_exists",
+        "visible",
+        "semantic_match",
+        "context_rerank_resolved"
+      ],
+      "recheck": "context_rerank",
+      "source": "llm",
+      "start": 37.59,
+      "subtitle_unit": true,
+      "target_id": "p2-a4",
+      "target_ids": [
+        "p2-a4"
+      ],
+      "text": "既清晰又便于模块化设计。",
+      "timing_source": "segment_audio",
+      "weight": 45
+    },
+    {
+      "anchor_id": "",
+      "confidence": 1,
+      "decision": "no_focus",
+      "duration": 4.97,
+      "end": 45.66,
+      "evidence": [
+        "no_focus"
+      ],
+      "source": "llm",
+      "start": 40.69,
+      "subtitle_unit": true,
+      "target_id": "",
+      "target_ids": [],
+      "text": "这三种语言覆盖了从图形化到文本化的主流编程范式，",
+      "timing_source": "segment_audio",
+      "weight": 66
+    },
+    {
+      "anchor_id": "",
+      "confidence": 1,
+      "decision": "no_focus",
+      "duration": 4.7,
+      "end": 50.36,
+      "evidence": [
+        "no_focus"
+      ],
+      "source": "llm",
+      "start": 45.66,
+      "subtitle_unit": true,
+      "target_id": "",
+      "target_ids": [],
+      "text": "为不同层次的应用需求提供了灵活选择。",
+      "timing_source": "segment_audio",
+      "weight": 66
+    },
+    {
+      "anchor_id": "",
+      "confidence": 1,
+      "decision": "no_focus",
+      "duration": 5.9,
+      "end": 56.26,
+      "evidence": [
+        "no_focus"
+      ],
+      "source": "llm",
+      "start": 50.36,
+      "subtitle_unit": true,
+      "target_id": "",
+      "target_ids": [],
+      "text": "接下来，我们继续看另外两种重要语言：顺序功能图和结构文本。",
+      "timing_source": "segment_audio",
+      "weight": 66
+    }
+  ],
+  "focus_cues_version": 7,
+  "expected_target_ids": [
+    "p2-a3",
+    "p2-a3",
+    "p2-a4",
+    "p2-a6",
+    "p2-a8",
+    "p2-a8",
+    "p2-a9",
+    "p2-a10",
+    "p2-a10",
+    "",
+    "",
+    ""
+  ]
+}

@@ -13,6 +13,7 @@ from typing import Optional
 from loguru import logger
 
 from ...core.interfaces import TTSEngine
+from ...utils.speech_text import safe_speech_boundary
 
 
 class VolcengineTTSEngine(TTSEngine):
@@ -231,6 +232,7 @@ class VolcengineTTSEngine(TTSEngine):
         if version not in {"v1", "v3"}:
             raise ValueError("VOLCENGINE_TTS_API_VERSION 只能是 auto、v1 或 v3")
         return {
+            "text_split_revision": 2,
             "api_version": version,
             "api_url": url or (cls.V3_API_URL if version == "v3" else cls.DEFAULT_API_URL),
             "resource_id": (resource or ("seed-tts-2.0" if "_uranus_" in voice else "seed-tts-1.0")) if version == "v3" else "",
@@ -309,15 +311,22 @@ class VolcengineTTSEngine(TTSEngine):
     @staticmethod
     def _split_text(text: str, max_bytes: int = 900) -> list[str]:
         """按 UTF-8 字节切段，为官方 HTTP 接口保留请求开销余量。"""
+        if max_bytes < 4:
+            raise ValueError("TTS 分段字节上限不能小于 4")
         source = text.strip() or "此页无文字内容。"
-        chunks, current = [], ""
-        for char in source:
-            candidate = current + char
-            if current and len(candidate.encode("utf-8")) > max_bytes:
-                chunks.append(current)
-                current = char
-            else:
-                current = candidate
-        if current:
-            chunks.append(current)
+        chunks = []
+        start = 0
+        while start < len(source):
+            end, size = start, 0
+            while end < len(source):
+                char_size = len(source[end].encode("utf-8"))
+                if size + char_size > max_bytes:
+                    break
+                size += char_size
+                end += 1
+            end = safe_speech_boundary(source, end, start)
+            if len(source[start:end].encode("utf-8")) > max_bytes:
+                raise ValueError("单个英文或数字词组超过 TTS 分段字节上限，请缩短后重试")
+            chunks.append(source[start:end])
+            start = end
         return chunks

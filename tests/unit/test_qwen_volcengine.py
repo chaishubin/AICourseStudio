@@ -102,6 +102,25 @@ def test_volcengine_payload_and_rate():
     assert len(engine._split_text("中" * 400)) == 2
 
 
+@pytest.mark.parametrize("token", ["3.14", "-12.5%", "PLC's", "Controller", "12:30", "1/2", "C++"])
+def test_volcengine_byte_split_keeps_speech_tokens(token):
+    from vidppt.engines.tts.volcengine_tts_engine import VolcengineTTSEngine
+
+    for prefix_length in range(295, 301):
+        text = "中" * prefix_length + token + "后面还有补充说明。"
+        chunks = VolcengineTTSEngine._split_text(text)
+        assert ''.join(chunks) == text
+        assert all(len(chunk.encode('utf-8')) <= 900 for chunk in chunks)
+        assert any(token in chunk for chunk in chunks)
+
+
+def test_volcengine_rejects_oversized_token_without_silently_cutting_it():
+    from vidppt.engines.tts.volcengine_tts_engine import VolcengineTTSEngine
+
+    with pytest.raises(ValueError, match="超过 TTS 分段字节上限"):
+        VolcengineTTSEngine._split_text("A" * 901)
+
+
 @pytest.mark.asyncio
 async def test_volcengine_writes_base64_audio(temp_dir):
     audio = b"fake-mp3"

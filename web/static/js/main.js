@@ -3950,7 +3950,7 @@ class AICourseStudioApp {
             if (!this.coursePreviewPlaying) return;
             if (card && Array.isArray(data.focus_cues)) {
                 card._focusCues = data.focus_cues;
-                if (Array.isArray(data.focus_events)) card._focusEvents = data.focus_events;
+                card._focusEvents = Array.isArray(data.focus_events) ? data.focus_events : null;
                 this.renderCourseFocusEditor(card);
             }
             await this.playCoursePreviewAudio(data.audio_url, pageNumber, title);

@@ -3,6 +3,8 @@
 """
 
 import asyncio
+import hashlib
+import json
 from pathlib import Path
 
 from loguru import logger
@@ -227,6 +229,7 @@ class Pipeline:
             page_texts = []
             cached_pages = []
             skipped_pages = []
+            audio_signatures = {}
             api_cache_options = {
                 k: v
                 for k, v in self.config.tts_options.items()
@@ -254,10 +257,31 @@ class Pipeline:
 
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
 
+                signature = self.cache_manager._generate_cache_key(
+                    text=page.text, tts_engine=self.config.tts_engine,
+                    voice=self.config.tts_voice if self.config.tts_engine == "edge-tts" else self._api_voice(),
+                    rate=self.config.tts_rate, input_path=str(self.config.input_path),
+                    capture_timestamps=self.config.tts_capture_timestamps,
+                    **(api_cache_options if self.config.tts_engine != "edge-tts" else {}),
+                )
+                audio_signatures[page.page_number] = signature
+                source_path = audio_path.with_suffix('.source.json')
+                try:
+                    saved_source = json.loads(source_path.read_text(encoding='utf-8'))
+                    source_matches = (
+                        isinstance(saved_source, dict)
+                        and saved_source.get('signature') == signature
+                        and audio_path.is_file()
+                        and saved_source.get('audio_sha256') == hashlib.sha256(audio_path.read_bytes()).hexdigest()
+                    )
+                except (OSError, ValueError):
+                    source_matches = False
+
                 # 检查音频文件是否已存在（跳过已有文件）
                 if (
                     self.config.save_intermediate
                     and self.config.skip_existing
+                    and source_matches
                     and audio_path.exists()
                     and audio_path.stat().st_size > 0
                 ):
@@ -404,6 +428,15 @@ class Pipeline:
                             **api_cache_options,
                         )
                     logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
+
+            for page in content.pages:
+                if (page.page_number not in skipped_pages and page.audio
+                        and page.audio.is_file() and page.audio.stat().st_size > 0
+                        and page.page_number in audio_signatures):
+                    page.audio.with_suffix('.source.json').write_text(json.dumps({
+                        'signature': audio_signatures[page.page_number],
+                        'audio_sha256': hashlib.sha256(page.audio.read_bytes()).hexdigest(),
+                    }), encoding='utf-8')
 
             if page_texts or cached_pages or skipped_pages:
                 success_count = len(page_texts) - len(failed_pages) if 'failed_pages' in dir() else len(page_texts)
