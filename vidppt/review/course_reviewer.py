@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any
 
+from ..generation.teaching_context import teaching_prompt
 from ..engines.llm.deepseek_llm_engine import DeepSeekLLMEngine
 from ..engines.llm.openai_llm_engine import OpenAILLMEngine
 
@@ -59,7 +60,7 @@ class CourseReviewer:
         prompt = self._build_prompt(pages, mode)
         raw = self.engine.summarize(
             prompt,
-            system_prompt=self._system_prompt(mode),
+            system_prompt=self._system_prompt(mode) + teaching_prompt(preview.get("teaching_context"), review=True),
             response_format={"type": "json_object"},
         )
         parsed = self._parse_json(raw)

@@ -27,7 +27,7 @@ function view() {
     return app;
 }
 
-test('applied findings and remaining manual work remain visible after saving', async () => {
+test('saved fixes collapse into history while manual issues remain outside it', async () => {
     const app = view();
     let finish;
     app.savePreviewScripts = () => new Promise(resolve => { finish = resolve; });
@@ -42,6 +42,12 @@ test('applied findings and remaining manual work remain visible after saving', a
     assert.match(app.elements.aiReviewFindings.innerHTML, /已应用并保存/);
     assert.match(app.elements.aiReviewFindings.innerHTML, /需手动处理/);
     assert.match(app.elements.aiReviewFindings.innerHTML, /课程包装/);
+    const html = app.elements.aiReviewFindings.innerHTML;
+    const historyStart = html.indexOf('<details class="ai-review-applied-group"');
+    assert.ok(historyStart > html.indexOf('data-page-number="2"'));
+    assert.ok(historyStart < html.indexOf('data-page-number="1"'));
+    assert.match(html, /已应用并保存 1 页讲稿/);
+    assert.doesNotMatch(html, /<details[^>]*\bopen(?:\s|=|>)/);
     assert.equal(app.elements.aiReviewFixAllBtn.hidden, true);
     assert.equal(app.messages.at(-1).type, 'success');
     app.markCourseReviewStale(1);
@@ -57,6 +63,8 @@ test('failed save can retry unchanged replacement and never reports success earl
     assert.equal(app.textarea.value, '修复讲稿');
     assert.equal(app.messages.at(-1).type, 'error');
     assert.equal(app.elements.aiReviewFixAllBtn.disabled, false);
+    assert.doesNotMatch(app.elements.aiReviewFindings.innerHTML, /class="ai-review-applied-group"/);
+    assert.match(app.elements.aiReviewFindings.innerHTML, /应用讲稿修复/);
     await app.applyCourseReviewFixes();
     assert.equal(attempts, 2);
     assert.equal(app.messages.some(item => item.type === 'success'), false);

@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=31">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=34">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
-<body data-username="{{ current_username }}">
+<body class="studio-workspace" data-username="{{ current_username }}">
     <div class="admin-shell">
         <aside class="admin-sidebar">
             <div class="brand">
@@ -409,6 +409,48 @@
                                 <option value="20">约 20 分钟</option>
                                 <option value="30">约 30 分钟</option>
                             </select>
+                            <label for="teaching-scenario">授课场景</label>
+                            <select id="teaching-scenario" class="select-input">
+                                <option value="university">大学课堂</option>
+                                <option value="school">中小学课堂</option>
+                                <option value="beginner">零基础入门</option>
+                                <option value="practical">职业技能实训</option>
+                                <option value="corporate">企业内训</option>
+                                <option value="exam">考试辅导</option>
+                                <option value="popular">大众科普</option>
+                                <option value="advanced">学术进阶</option>
+                            </select>
+                            <label for="teaching-audience">授课对象</label>
+                            <input id="teaching-audience" class="select-input" type="text" maxlength="200" placeholder="例如：大一学生、刚入职的销售人员">
+                            <label for="teaching-prior-knowledge">已有基础</label>
+                            <select id="teaching-prior-knowledge" class="select-input">
+                                <option value="auto">根据原始内容判断基础</option>
+                                <option value="none">零基础</option>
+                                <option value="basic">了解基础</option>
+                                <option value="experienced">有实践经验</option>
+                            </select>
+                            <label for="teaching-teaching-goal">教学目标</label>
+                            <select id="teaching-teaching-goal" class="select-input">
+                                <option value="auto">根据内容确定教学目标</option>
+                                <option value="concept">理解概念</option>
+                                <option value="operation">学会操作</option>
+                                <option value="problem">解决问题</option>
+                                <option value="exam">备考</option>
+                            </select>
+                            <label for="teaching-expression-style">表达风格</label>
+                            <select id="teaching-expression-style" class="select-input">
+                                <option value="auto">匹配授课场景</option>
+                                <option value="formal">严谨正式</option>
+                                <option value="friendly">自然亲切</option>
+                                <option value="lively">生动有趣</option>
+                            </select>
+                            <label for="teaching-delivery-mode">授课方式</label>
+                            <select id="teaching-delivery-mode" class="select-input">
+                                <option value="recorded">录播</option>
+                                <option value="live">直播</option>
+                                <option value="classroom">线下课堂</option>
+                            </select>
+                            <small class="option-hint">场景用于课程生成、单页重写和 AI 质检。录播不依赖现场互动。关闭 AI 生成时，仅影响后续 AI 重写和质检。</small>
                             <label for="quality-mode">质量模式</label>
                             <select id="quality-mode" class="select-input">
                                 <option value="economy">经济：国内模型生成，不调用 AI 质检</option>
@@ -809,26 +851,17 @@
 
             </div>
 
-            <aside class="content-aside" id="dashboard-column">
-                <section class="card guide-card">
-                    <span class="section-kicker">生产流程</span>
-                    <h3>标准任务路径</h3>
-                    <ol class="process-list">
-                        <li class="active"><span>1</span><div><strong>上传课程素材</strong><small>Word、PDF 或 PPT</small></div></li>
-                        <li><span>2</span><div><strong>AI 课程设计</strong><small>提炼结构并生成讲稿</small></div></li>
-                        <li><span>3</span><div><strong>人工审核</strong><small>逐页确认与修订</small></div></li>
-                        <li><span>4</span><div><strong>多媒体合成</strong><small>配音、字幕与视频</small></div></li>
-                    </ol>
-                </section>
-            </aside>
+
             </div>
             </main>
             <footer class="footer"><p>AI Course Studio · 课程生产管理平台 &copy; 2026</p></footer>
         </div>
     </div>
 
+    <div class="workspace-monitor" id="dashboard-column" aria-label="系统监控面板"></div>
+
     <script src="{{ url_for('static', filename='js/vidppt-ui.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=52"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=54"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script>
       window.dashboard = new SystemDashboard({

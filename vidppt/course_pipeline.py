@@ -46,9 +46,10 @@ class CoursePipeline:
         footer_text: str = "AI COURSE STUDIO",
         logo_path: Optional[Path] = None,
         visual_theme: str = "auto",
+        teaching_context: dict | None = None,
     ):
         self.builder = CourseBuilder(
-            llm_engine, refinement_level, narration_style, target_duration_minutes
+            llm_engine, refinement_level, narration_style, target_duration_minutes, teaching_context
         )
         self.pptx_renderer = PPTXRenderer()
         self.subtitle_renderer = SubtitleRenderer()
@@ -78,6 +79,7 @@ class CoursePipeline:
             document,
             reserve_subtitle_area=reserve_subtitle_area,
         )
+        course.metadata["teaching_context"] = self.builder.teaching_context
         course.metadata["footer_text"] = self.footer_text
         if reserve_subtitle_area:
             course.metadata["subtitle_safe_area"] = {

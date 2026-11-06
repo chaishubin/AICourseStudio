@@ -7,6 +7,7 @@ from typing import Optional
 from ..core.course import Course, CourseSection, KnowledgePoint
 from ..core.interfaces import LLMEngine
 from ..ingestion.models import SourceDocument
+from .teaching_context import normalize_teaching_context, teaching_prompt
 
 
 COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适合授课的幻灯片课程。
@@ -77,7 +78,9 @@ class CourseBuilder:
         refinement_level: str = "standard",
         narration_style: str = "lecture",
         target_duration_minutes: int = 0,
+        teaching_context: dict | None = None,
     ):
+        self.teaching_context = normalize_teaching_context(teaching_context)
         self.llm_engine = llm_engine
         if refinement_level not in REFINEMENT_INSTRUCTIONS:
             raise ValueError(f"不支持的精炼程度: {refinement_level}")
@@ -98,6 +101,7 @@ class CourseBuilder:
         if self.llm_engine:
             prompt_parts = [
                 COURSE_PROMPT,
+                teaching_prompt(self.teaching_context),
                 REFINEMENT_INSTRUCTIONS[self.refinement_level],
                 NARRATION_STYLE_INSTRUCTIONS[self.narration_style],
                 (

@@ -60,6 +60,8 @@ from vidppt.core.cue_timeline import (
     write_cue_timeline,
 )
 from vidppt.review import CourseReviewError, CourseReviewer
+from vidppt.generation.teaching_context import normalize_teaching_context, teaching_prompt
+from vidppt.generation.page_revision import PageRevisionError, PageScriptReviser
 from vidppt.utils.subtitle_rules import (
     ASCII_WORD_RE,
     normalize_subtitle_text,
@@ -2656,6 +2658,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                             "让开头承接上一页、结尾自然引向下一页；避免重复上一页已经讲过的内容，"
                             "也不要提前展开下一页。只输出当前页可直接配音的讲稿，不要标题、说明或标记。"
                             + refinement_prompt + focus_instruction
+                            + teaching_prompt(tasks.get(task_id, {}).get('strategy', {}).get('teaching_context'))
                         ),
                     )
                     if cancel_event.is_set():
@@ -2667,7 +2670,10 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
             elif llm_mode == "whole-document" and not cancel_event.is_set():
                 pages_text = [page.text for page in content.pages]
-                summary = llm_provider.summarize_document(pages_text)
+                summary = llm_provider.summarize_document(
+                    pages_text, system_prompt='你是课程讲稿编辑，根据原文生成完整讲稿。'
+                    + teaching_prompt(tasks.get(task_id, {}).get('strategy', {}).get('teaching_context'))
+                )
                 content.pages[0].text = summary
                 for page in content.pages[1:]:
                     page.text = ""
@@ -2692,6 +2698,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     'image_path': str(page.slide_image),
                     'script': page.text,
                     'original_script': page.text,
+                    'source_text': page.metadata.get('original_text', page.text),
                     'focus_targets': (
                         focus_targets_by_page[page.page_number - 1]
                         if page.page_number <= len(focus_targets_by_page) else []
@@ -2794,6 +2801,7 @@ def run_course_generation(
             footer_text=ppt_footer_text,
             logo_path=Path(school_logo_path) if school_logo_path else None,
             visual_theme=visual_theme,
+            teaching_context=tasks.get(task_id, {}).get('strategy', {}).get('teaching_context'),
         ).run(
             Path(file_path), output_dir, media_config=config
         )
@@ -2832,6 +2840,7 @@ def run_course_generation(
                     'image_path': str(page.slide_image),
                     'script': section.script or section.title,
                     'original_script': section.script or section.title,
+                    'source_text': '\n'.join([section.title, *section.bullets, section.notes]),
                     'focus_targets': (
                         focus_targets_by_page[page.page_number - 1]
                         if page.page_number <= len(focus_targets_by_page) else []
@@ -3024,6 +3033,7 @@ def _run_course_review(task_id: str, mode: str) -> dict:
         raise ValueError('不支持的 AI 审查模式')
     preview = _read_preview(task_id)
     reviewed_scripts = [(page.get('page_number'), page.get('script')) for page in preview.get('pages', [])]
+    preview['teaching_context'] = tasks.get(task_id, {}).get('strategy', {}).get('teaching_context')
     review = CourseReviewer().review(preview, mode)
     with _preview_audio_locks.setdefault(task_id, threading.Lock()):
         latest = _read_preview(task_id)
@@ -4559,6 +4569,10 @@ def convert_ppt():
         target_duration_minutes = int(data.get('target_duration_minutes', 0))
     except (TypeError, ValueError):
         return jsonify({'error': '目标口播时长必须为整数分钟'}), 400
+    try:
+        teaching_context = normalize_teaching_context(data.get('teaching_context'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     quality_mode = str(data.get('quality_mode', 'balanced')).strip().lower()
     illustrations_enabled = bool(data.get('illustrations_enabled', False))
     max_illustrations = int(data.get('max_illustrations', 3))
@@ -4631,6 +4645,7 @@ def convert_ppt():
         'narration_style': narration_style,
         'target_duration_minutes': target_duration_minutes,
         'quality_mode': quality_mode,
+        'teaching_context': teaching_context,
         'illustrations_enabled': illustrations_enabled,
         'max_illustrations': max_illustrations,
         'ppt_footer_text': ppt_footer_text,
@@ -4735,6 +4750,85 @@ def get_course_preview(task_id):
     preview['strategy'] = _preview_strategy(task)
     log_operation('preview_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify(preview)
+
+
+def _page_revision_source(task: dict, preview: dict, page: dict) -> str:
+    """Use source content, including for drafts created before source_text existed."""
+    if page.get('source_text'):
+        return page['source_text']
+    course_path = preview.get('course_json_path')
+    if course_path:
+        course = Course.from_dict(json.loads(Path(course_path).read_text(encoding='utf-8')))
+        section = course.sections[int(page['page_number']) - 1]
+        return '\n'.join([section.title, *section.bullets, section.notes])
+    source_path = preview.get('presentation_path') or task.get('file_path')
+    if source_path and Path(source_path).is_file():
+        from vidppt.core.registry import ProcessorRegistry
+        processor = ProcessorRegistry.get_processor(Path(source_path))
+        if processor:
+            content = processor().extract_content(ProcessConfig(
+                input_path=Path(source_path), output_dir=Path(task['output_dir']),
+            ))
+            source = next((item for item in content.pages
+                           if item.page_number == int(page['page_number'])), None)
+            if source and source.text.strip():
+                return source.text
+    return '\n'.join(str(target.get('text') or '')
+                     for target in page.get('focus_targets', []))
+
+
+@app.route('/api/course-preview/<task_id>/revise-page', methods=['POST'])
+def revise_course_preview_page(task_id):
+    """Generate a replacement for review; applying it uses the existing save flow."""
+    task, error = require_task_access(task_id, manage=True)
+    if error:
+        return error
+    if task.get('status') != 'awaiting_confirmation':
+        return jsonify({'error': '当前任务不能重新生成讲稿'}), 409
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': '请提交页面和改进意见'}), 400
+    feedback, script = data.get('feedback'), data.get('script')
+    page_number = data.get('page_number')
+    if type(page_number) is not int or page_number < 1:
+        return jsonify({'error': '页码必须是正整数'}), 400
+    if not isinstance(feedback, str) or not 1 <= len(feedback.strip()) <= 2000:
+        return jsonify({'error': '请输入 1–2000 字的改进意见'}), 400
+    if not isinstance(script, str):
+        return jsonify({'error': '请提交当前讲稿'}), 400
+    try:
+        preview = _read_preview(task_id)
+        page = _preview_page(preview, page_number)
+        if page is None:
+            return jsonify({'error': '页面不存在'}), 404
+        if page.get('script', '').strip() != script.strip():
+            return jsonify({'error': '本页讲稿已变化，请刷新预览后重试'}), 409
+        source = _page_revision_source(task, preview, page)
+        if not source.strip():
+            return jsonify({'error': '缺少本页原始内容，请重新上传课程素材后重试'}), 400
+        replacement = PageScriptReviser(
+            provider=task.get('strategy', {}).get('llm_engine', 'qwen'),
+            teaching_context=task.get('strategy', {}).get('teaching_context'),
+        ).revise(
+            page, feedback.strip(), source,
+            _preview_page(preview, page_number - 1),
+            _preview_page(preview, page_number + 1),
+        )
+        latest = _preview_page(_read_preview(task_id), page_number)
+        if (task.get('status') != 'awaiting_confirmation' or latest is None
+                or latest.get('script') != page.get('script')):
+            return jsonify({'error': '生成期间本页已变化，请重新生成'}), 409
+        log_operation('revise_page_script', task_id=task_id,
+                      target_name=task.get('original_name'), message=f'第 {page_number} 页')
+        return jsonify({'success': True, 'page_number': page_number,
+                        'script': replacement, 'base_script': page.get('script', '')})
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return jsonify({'error': str(exc)}), 404
+    except (ValueError, PageRevisionError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception:
+        logger.exception(f'重新生成讲稿失败: task={task_id}, page={page_number}')
+        return jsonify({'error': 'AI 重新生成失败，请稍后重试；当前讲稿已保留'}), 502
 
 
 @app.route('/api/course-review/<task_id>', methods=['GET', 'POST'])
@@ -5017,6 +5111,7 @@ def course_presentation(task_id):
                 'image_path': str(page.slide_image),
                 'script': script,
                 'original_script': previous.get('original_script', page.text),
+                'source_text': page.text,
                 'reviewed': False,
                 'focus_targets': focus_targets,
                 'focus_cues': build_focus_cues(script, focus_targets),

@@ -122,6 +122,12 @@ class AICourseStudioApp {
                 refinementLevel: document.getElementById('refinement-level'),
                 narrationStyle: document.getElementById('narration-style'),
                 targetDurationMinutes: document.getElementById('target-duration-minutes'),
+                teachingScenario: document.getElementById('teaching-scenario'),
+                teachingAudience: document.getElementById('teaching-audience'),
+                teachingPriorKnowledge: document.getElementById('teaching-prior-knowledge'),
+                teachingTeachingGoal: document.getElementById('teaching-teaching-goal'),
+                teachingExpressionStyle: document.getElementById('teaching-expression-style'),
+                teachingDeliveryMode: document.getElementById('teaching-delivery-mode'),
                 qualityMode: document.getElementById('quality-mode'),
                 visualTheme: document.getElementById('visual-theme'),
                 illustrationsEnabled: document.getElementById('illustrations-enabled'),
@@ -378,6 +384,12 @@ class AICourseStudioApp {
             this.elements.llmEngine,
             this.elements.llmMode,
             this.elements.refinementLevel,
+            this.elements.teachingScenario,
+            this.elements.teachingAudience,
+            this.elements.teachingPriorKnowledge,
+            this.elements.teachingTeachingGoal,
+            this.elements.teachingExpressionStyle,
+            this.elements.teachingDeliveryMode,
             this.elements.qualityMode,
             this.elements.visualTheme,
             this.elements.illustrationsEnabled,
@@ -849,6 +861,14 @@ class AICourseStudioApp {
     }
 
     applyStrategyToControls(strategy) {
+        const teaching = strategy.teaching_context || {};
+        if (this.elements.teachingScenario) this.elements.teachingScenario.value = teaching.scenario ?? 'university';
+        if (this.elements.teachingAudience) this.elements.teachingAudience.value = teaching.audience ?? '';
+        if (this.elements.teachingPriorKnowledge) this.elements.teachingPriorKnowledge.value = teaching.prior_knowledge ?? 'auto';
+        if (this.elements.teachingTeachingGoal) this.elements.teachingTeachingGoal.value = teaching.teaching_goal ?? 'auto';
+        if (this.elements.teachingExpressionStyle) this.elements.teachingExpressionStyle.value = teaching.expression_style ?? 'auto';
+        if (this.elements.teachingDeliveryMode) this.elements.teachingDeliveryMode.value = teaching.delivery_mode ?? 'recorded';
+
         if (strategy.tts_engine) this.elements.ttsEngine.value = strategy.tts_engine;
 
         const values = {
@@ -1792,6 +1812,14 @@ class AICourseStudioApp {
             refinement_level: this.elements.refinementLevel.value,
             narration_style: this.elements.narrationStyle.value,
             target_duration_minutes: Number(this.elements.targetDurationMinutes.value),
+            teaching_context: {
+                scenario: this.elements.teachingScenario.value,
+                audience: this.elements.teachingAudience.value,
+                prior_knowledge: this.elements.teachingPriorKnowledge.value,
+                teaching_goal: this.elements.teachingTeachingGoal.value,
+                expression_style: this.elements.teachingExpressionStyle.value,
+                delivery_mode: this.elements.teachingDeliveryMode.value,
+            },
             quality_mode: this.elements.qualityMode.value,
             visual_theme: this.elements.visualTheme.value,
             illustrations_enabled: this.elements.illustrationsEnabled.checked,
@@ -3725,6 +3753,19 @@ class AICourseStudioApp {
                 <div class="course-preview-editor">
                     <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}${segmentLabel}</div>
                     <textarea class="course-preview-script" aria-label="第 ${page.page_number} 页讲稿">${this._esc(page.script || '')}</textarea>
+                    <details class="page-revision-panel">
+                        <summary>AI 修改本页</summary>
+                        <p class="course-preview-hint">指出理解有误的地方或提出改进要求，AI 将结合本页原文和前后页重新生成讲稿。</p>
+                        <label for="page-feedback-${page.page_number}">本页改进意见</label>
+                        <textarea id="page-feedback-${page.page_number}" class="page-revision-feedback" maxlength="2000" rows="3" placeholder="例如：这里的 PLC 指可编程逻辑控制器，请纠正概念，并用初学者能理解的例子解释。"></textarea>
+                        <button type="button" class="btn-secondary page-revision-generate">根据意见重新生成讲稿</button>
+                        <p class="page-revision-status" role="status" aria-live="polite"></p>
+                        <div class="page-revision-result" hidden>
+                            <label for="page-replacement-${page.page_number}">新讲稿预览</label>
+                            <textarea id="page-replacement-${page.page_number}" class="page-revision-candidate" rows="6" readonly></textarea>
+                            <button type="button" class="btn-primary page-revision-apply">应用并保存本页讲稿</button>
+                        </div>
+                    </details>
                     <div class="course-focus-editor"></div>
                     <div class="course-preview-page-meta">
                         <span class="course-preview-length"></span>
@@ -3745,6 +3786,12 @@ class AICourseStudioApp {
             card._focusEvents = Array.isArray(page.focus_events) ? page.focus_events : null;
             this.renderCourseFocusEditor(card);
             const textarea = card.querySelector('textarea');
+            card.querySelector('.page-revision-generate').addEventListener(
+                'click', () => this.generatePageRevision(card)
+            );
+            card.querySelector('.page-revision-apply').addEventListener(
+                'click', () => this.applyPageRevision(card)
+            );
             card.dataset.estimatedSeconds = String(
                 Number(page.estimated_seconds)
                 || this.estimatePreviewScriptSeconds(textarea.value)
@@ -3827,6 +3874,87 @@ class AICourseStudioApp {
         coursePreviewModule.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
+    async generatePageRevision(card) {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        const feedback = card.querySelector('.page-revision-feedback').value.trim();
+        const status = card.querySelector('.page-revision-status');
+        if (!feedback) {
+            status.textContent = '请先输入本页的改进意见。';
+            card.querySelector('.page-revision-feedback').focus();
+            return;
+        }
+        if (!taskId || card._revisionBusy) return;
+        card._revisionBusy = true;
+        const button = card.querySelector('.page-revision-generate');
+        button.disabled = true;
+        card.querySelector('.page-revision-result').hidden = true;
+        card._revision = null;
+        status.textContent = '正在保存当前讲稿…';
+        const isCurrent = () => taskId === this.elements.coursePreviewModule.dataset.taskId
+            && this.previewCardByPage(card.dataset.pageNumber) === card;
+        try {
+            clearTimeout(this.previewAutoSaveTimer);
+            if (!await this.savePreviewScripts({ automatic: true })) {
+                throw new Error('当前讲稿保存失败，请保存成功后再重新生成。');
+            }
+            if (!isCurrent()) return;
+            const script = card.querySelector('.course-preview-script').value;
+            status.textContent = 'AI 正在根据意见重新理解本页并生成讲稿…';
+            const response = await fetch(`/api/course-preview/${taskId}/revise-page`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ page_number: Number(card.dataset.pageNumber), feedback, script })
+            });
+            const data = await response.json();
+            if (!isCurrent()) return;
+            if (!response.ok) throw new Error(data.error || '重新生成失败，请重试。');
+            if (card.querySelector('.course-preview-script').value !== script) {
+                throw new Error('生成期间你修改了本页讲稿，请根据最新讲稿重新生成。');
+            }
+            card._revision = { script: data.script, baseScript: script };
+            card.querySelector('.page-revision-candidate').value = data.script;
+            card.querySelector('.page-revision-result').hidden = false;
+            status.textContent = '新讲稿已生成，确认后点击“应用并保存本页讲稿”。';
+        } catch (error) {
+            if (isCurrent()) status.textContent = error.message;
+        } finally {
+            card._revisionBusy = false;
+            button.disabled = false;
+        }
+    }
+
+    async applyPageRevision(card) {
+        const revision = card._revision;
+        const textarea = card.querySelector('.course-preview-script');
+        const status = card.querySelector('.page-revision-status');
+        if (!revision || card._revisionBusy) return;
+        if (textarea.value !== revision.baseScript) {
+            status.textContent = '本页讲稿已修改，请根据最新讲稿重新生成。';
+            return;
+        }
+        card._revisionBusy = true;
+        const button = card.querySelector('.page-revision-apply');
+        const generate = card.querySelector('.page-revision-generate');
+        button.disabled = generate.disabled = true;
+        try {
+            this.stopCoursePreviewPlayback();
+            card.querySelector('.page-reviewed').checked = false;
+            textarea.value = revision.script;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            clearTimeout(this.previewAutoSaveTimer);
+            card.querySelector('.page-revision-result').hidden = true;
+            card._revision = null;
+            status.textContent = '正在保存新讲稿…';
+            const saved = await this.savePreviewScripts({ automatic: true });
+            status.textContent = saved
+                ? '新讲稿已保存，请播放本页预览，确认配音与字幕后重新审核。'
+                : '新讲稿已填入编辑框，保存失败；请点击“保存草稿与生成设置”重试。';
+        } finally {
+            card._revisionBusy = false;
+            button.disabled = generate.disabled = false;
+        }
+    }
+
     renderCourseReview(review, qualityMode = 'balanced') {
         this.currentAIReview = review || null;
         const modeLabels = {
@@ -3890,27 +4018,46 @@ class AICourseStudioApp {
             return;
         }
         const appliedPages = review.applied_pages || [];
-        const appliedNotice = appliedPages.length ? `
-            <div class="ai-review-applied-notice" role="status">
-                已应用并保存：第 ${appliedPages.map(Number).join('、')} 页讲稿。
-                智能切课时长和自动推荐范围已同步，手动范围保留；继续生成时将使用新讲稿生成配音、字幕，并按当前课程包装设置合成视频。
-                请重新质检确认修复效果。
-            </div>` : '';
-        this.elements.aiReviewFindings.innerHTML = appliedNotice + findings.map((item, index) => `
-            <div class="ai-review-finding ${item.applied ? 'applied' : this._escAttr(item.level || 'info')}"
-                 data-page-number="${Number(item.page_number) || 0}">
-                <button type="button" class="ai-review-finding-detail">
+        const renderFinding = (item, index) => `
+            <details class="ai-review-finding ${item.applied ? 'applied' : this._escAttr(item.level || 'info')}"
+                     data-page-number="${Number(item.page_number) || 0}">
+                <summary class="ai-review-finding-summary">
                     <span>第 ${Number(item.page_number) || '-'} 页 · ${this._esc(item.category || '内容质量')}</span>
-                    <strong>${this._esc(item.message || '')}</strong>
-                    ${item.suggestion ? `<small>${this._esc(item.suggestion)}</small>` : ''}
-                </button>
-                ${item.replacement_script ? `
-                    <button type="button" class="ai-review-apply-fix" data-finding-index="${index}" ${item.applied || this.courseReviewFixing ? 'disabled' : ''}>
-                        ${item.applied ? '已应用并保存' : '应用讲稿修复'}
+                    <span class="ai-review-finding-preview">${this._esc(item.message || '')}</span>
+                    <span class="ai-review-finding-state">${item.applied ? '已应用并保存' : '待处理'}</span>
+                </summary>
+                <div class="ai-review-finding-body">
+                    <button type="button" class="ai-review-finding-detail" title="定位到本页讲稿">
+                        <strong>${this._esc(item.message || '')}</strong>
+                        ${item.suggestion ? `<small>${this._esc(item.suggestion)}</small>` : ''}
+                        <span>查看本页讲稿 →</span>
                     </button>
-                ` : '<span class="ai-review-manual-fix">需手动处理</span>'}
-            </div>
-        `).join('');
+                    ${item.replacement_script ? `
+                        <button type="button" class="ai-review-apply-fix" data-finding-index="${index}" ${item.applied || this.courseReviewFixing ? 'disabled' : ''}>
+                            ${item.applied ? '已应用并保存' : '应用讲稿修复'}
+                        </button>
+                    ` : '<span class="ai-review-manual-fix">需手动处理</span>'}
+                </div>
+            </details>
+        `;
+        const pendingItems = [];
+        const appliedItems = [];
+        findings.forEach((item, index) => {
+            (item.applied ? appliedItems : pendingItems).push(renderFinding(item, index));
+        });
+        const appliedCount = new Set(findings.filter(item => item.applied).map(item => Number(item.page_number))).size;
+        this.elements.aiReviewFindings.innerHTML = pendingItems.join('') + (appliedItems.length ? `
+            <details class="ai-review-applied-group">
+                <summary>已应用并保存 ${appliedCount} 页讲稿 · 展开查看修复记录</summary>
+                <div class="ai-review-applied-content">
+                    <div class="ai-review-applied-notice">
+                        已应用并保存：第 ${appliedPages.map(Number).join('、')} 页讲稿。
+                        智能切课时长和自动推荐范围已同步，手动范围保留；继续生成时将使用新讲稿生成配音、字幕，并按当前课程包装设置合成视频。
+                        请重新质检确认修复效果。
+                    </div>
+                    ${appliedItems.join('')}
+                </div>
+            </details>` : '');
         this.elements.aiReviewFindings
             .querySelectorAll('.ai-review-finding-detail')
             .forEach(button => {
