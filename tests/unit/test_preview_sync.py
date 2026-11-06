@@ -291,3 +291,47 @@ def test_skipping_cuts_clears_previously_applied_ranges(preview_task, monkeypatc
     course = json.loads(course_path.read_text())
     assert course['metadata']['lesson_segments'] == []
     assert all('lesson_segment' not in section.get('metadata', {}) for section in course['sections'])
+
+
+def test_review_does_not_overwrite_edits_during_model_request(preview_task, monkeypatch):
+    app, path, _ = preview_task
+    class Reviewer:
+        def review(self, preview, mode):
+            app._update_preview_scripts('sync-task', [{'page_number': 1, 'script': '二审期间的新讲稿。'}])
+            return {'status': 'passed', 'review_completed': True}
+    monkeypatch.setattr(app, 'CourseReviewer', Reviewer)
+    result = app._run_course_review('sync-task', 'full')
+    assert json.loads(path.read_text())['pages'][0]['script'] == '二审期间的新讲稿。'
+    assert result['stale'] is True
+    assert result['status'] == 'pending'
+
+
+def test_reopen_preserves_published_media(preview_task):
+    app, path, _ = preview_task
+    task = app.tasks['sync-task']
+    video = path.parent / 'lesson.mp4'
+    video.write_bytes(b'published-video')
+    task.update(status='completed', video_path=str(video))
+    response = app.app.test_client().post('/api/tasks/sync-task/reopen')
+    assert response.status_code == 200
+    assert task['status'] == 'awaiting_confirmation'
+    archived = app.Path(task['video_path'])
+    assert '_versions' in archived.parts
+    video.write_bytes(b'failed-render')
+    assert archived.read_bytes() == b'published-video'
+    assert app.app.test_client().post('/api/tasks/sync-task/reopen').status_code == 409
+
+
+def test_archive_failure_does_not_change_published_references(preview_task, monkeypatch):
+    app, path, _ = preview_task
+    video = path.parent / 'published.mp4'
+    video.write_bytes(b'published')
+    app.tasks['sync-task'].update(status='completed', video_path=str(video))
+    def disk_full(*args):
+        raise OSError('disk full')
+    monkeypatch.setattr(app.shutil, 'copy2', disk_full)
+    response = app.app.test_client().post('/api/tasks/sync-task/reopen')
+    assert response.status_code == 409
+    assert app.tasks['sync-task']['status'] == 'completed'
+    assert app.tasks['sync-task']['video_path'] == str(video)
+    assert video.read_bytes() == b'published'

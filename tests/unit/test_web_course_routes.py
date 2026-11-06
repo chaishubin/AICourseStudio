@@ -376,7 +376,11 @@ def test_review_presentation_can_be_downloaded_and_replaced(monkeypatch, temp_di
     output_dir = temp_dir / task_id
     output_dir.mkdir()
     source = temp_dir / "source.pptx"
-    source.write_bytes(b"original-pptx")
+    from pptx import Presentation
+    deck = Presentation()
+    deck.slides.add_slide(deck.slide_layouts[6])
+    deck.save(str(source))
+    original_bytes = source.read_bytes()
     old_image = output_dir / "1" / "slide.png"
     old_image.parent.mkdir()
     old_image.write_bytes(b"old")
@@ -419,11 +423,11 @@ def test_review_presentation_can_be_downloaded_and_replaced(monkeypatch, temp_di
     client = web_app.app.test_client()
     download = client.get(f"/api/course-presentation/{task_id}")
     assert download.status_code == 200
-    assert download.data == b"original-pptx"
+    assert download.data == original_bytes
 
     upload = client.post(
         f"/api/course-presentation/{task_id}",
-        data={"presentation": (io.BytesIO(b"edited-pptx"), "edited.pptx")},
+        data={"presentation": (io.BytesIO(original_bytes), "edited.pptx")},
         content_type="multipart/form-data",
     )
     assert upload.status_code == 200
@@ -431,7 +435,7 @@ def test_review_presentation_can_be_downloaded_and_replaced(monkeypatch, temp_di
     assert payload["pages"][0]["script"] == "保留讲稿"
     assert payload["pages"][0]["title"] == "修改后的标题"
     assert "&v=" in payload["pages"][0]["image_url"]
-    assert (output_dir / "reviewed.pptx").read_bytes() == b"edited-pptx"
+    assert (output_dir / "reviewed.pptx").read_bytes() == original_bytes
 
 
 def test_course_review_runs_and_persists_result(monkeypatch, temp_dir):
@@ -800,8 +804,8 @@ def test_retry_video_reuses_audio_and_enqueues_media(monkeypatch, temp_dir):
 
     assert response.status_code == 200
     assert audio_path.exists()
-    assert not (output_dir / "old.mp4").exists()
-    assert not (output_dir / "old.srt").exists()
+    assert (output_dir / "old.mp4").exists()
+    assert (output_dir / "old.srt").exists()
     assert web_app.tasks[task_id]["status"] == "queued"
     assert enqueued == [(web_app.run_media_generation, (task_id,))]
 
@@ -1698,7 +1702,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=51' in html
+    assert '/static/js/main.js?v=52' in html
 
 
 def test_course_packaging_has_a_separate_design_page():

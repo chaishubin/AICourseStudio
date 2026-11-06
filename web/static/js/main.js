@@ -28,6 +28,11 @@ class AICourseStudioApp {
             'complete': '完成'
         };
 
+        window.addEventListener('beforeunload', event => {
+            if (!this.previewDirty) return;
+            event.preventDefault();
+            event.returnValue = '';
+        });
         this.slideUrls = [];
         this.voicePreviewAudio = null;
         this.activeVoicePreviewButton = null;
@@ -2988,6 +2993,7 @@ class AICourseStudioApp {
                         <span class="result-card-name" title="${this._esc(item.fileName)}">${this._esc(this.courseDisplayName(item))}</span>
                     </div>
                     <button class="result-card-download preview-open-btn" data-index="${index}">编辑讲稿</button>
+                    ${item.videoPath ? `<small>上一版产物（新版生成成功前保留）</small>${this._artifactLinks(item)}` : ''}
                 `;
                 card.querySelector('.preview-open-btn').addEventListener('click', () => this.loadCoursePreview(item.taskId));
                 card.querySelector('.result-card-delete').addEventListener('click', () => this.deleteTask(item.taskId));
@@ -3149,6 +3155,7 @@ class AICourseStudioApp {
         if (item.status !== 'completed' || !item.previewPath) return '';
         return `
             <div class="result-stage-actions">
+                <button type="button" class="result-stage-retry" data-stage="edit">编辑并生成新版</button>
                 <button type="button" class="result-stage-retry" data-stage="video">重新合成视频</button>
                 <button type="button" class="result-stage-retry" data-stage="tts">重新生成全部配音</button>
             </div>
@@ -3256,6 +3263,7 @@ class AICourseStudioApp {
     }
 
     async retryTaskStage(taskId, stage, pageNumber = null, button = null) {
+        if (stage === 'edit') return this.reopenCourse(taskId);
         const labels = {
             page_tts: `第 ${pageNumber} 页配音`,
             tts: '全部配音',
@@ -3431,11 +3439,13 @@ class AICourseStudioApp {
             ].filter(Boolean);
         });
         if (!artifacts.length && !segmentLinks.length) return '';
-        return `<div class="artifact-links">${artifacts.map(([label, path]) =>
-            `<a class="artifact-link" href="/api/download?task_id=${encodeURIComponent(item.taskId)}&path=${encodeURIComponent(path)}">${label}</a>`
-        ).join('')}${segmentLinks.map(([label, path, range]) =>
-            `<a class="artifact-link segment-artifact-link" href="/api/download?task_id=${encodeURIComponent(item.taskId)}&path=${encodeURIComponent(path)}">${label} · ${range} 页</a>`
-        ).join('')}</div>`;
+        const link = (label, path) => `<a class="artifact-link" href="/api/download?task_id=${encodeURIComponent(item.taskId)}&path=${encodeURIComponent(path)}">${this._esc(label)}</a>`;
+        const main = artifacts.filter(([label]) => !label.includes('JSON')).map(([label, path]) => link(label, path)).join('');
+        const advanced = artifacts.filter(([label]) => label.includes('JSON')).map(([label, path]) => link(label, path)).join('')
+            + segmentLinks.filter(([label]) => label.includes('时间轴')).map(([label, path, range]) => link(`${label} · ${range} 页`, path)).join('');
+        const segments = segmentLinks.filter(([label]) => !label.includes('时间轴')).map(([label, path, range]) => link(`${label} · ${range} 页`, path)).join('');
+        return `<div class="artifact-links">${main}</div>${segments ? `<details class="artifact-group"><summary>分段视频目录</summary><div class="artifact-links">${segments}</div></details>` : ''}${advanced ? `<details class="artifact-group"><summary>高级产物</summary><div class="artifact-links">${advanced}</div></details>` : ''}`;
+
     }
 
     // ── Batch summary ──────────────────────────────────
@@ -3631,6 +3641,18 @@ class AICourseStudioApp {
                 await this.loadVoices({ preferredVoice: speech.voice });
             }
             if (this.previewLoadRequest !== request) return;
+            try {
+                const draft = JSON.parse(localStorage.getItem(this.previewDraftKey(taskId)) || 'null');
+                if (draft?.pages && await window.VidPPTUI.confirm('发现上次未同步的本地讲稿，是否恢复？', { title: '恢复本地草稿', confirmText: '恢复' })) {
+                    if (draft.strategy) {
+                        this.applyStrategyToControls(draft.strategy);
+                        await this.loadVoices({ preferredVoice: draft.strategy.voice });
+                    }
+                    const local = new Map(draft.pages.map(page => [page.page_number, page]));
+                    data.pages = data.pages.map(page => local.has(page.page_number) ? { ...page, ...local.get(page.page_number) } : page);
+                    this.previewDirty = true;
+                }
+            } catch (error) { console.warn('读取本地草稿失败', error); }
             this.smartCutRecommendationOptions = data.segmentation_settings || null;
             this.renderCoursePreview(
                 taskId,
@@ -3745,6 +3767,7 @@ class AICourseStudioApp {
                 card._focusEvents = manualEvents.length ? manualEvents : null;
                 this.renderCourseFocusEditor(card);
                 this.markCourseReviewStale(page.page_number);
+                this.storePreviewDraft();
                 updateLength();
                 coursePreviewSaveState.textContent = '等待自动保存…';
                 coursePreviewSaveState.classList.remove('saved');
@@ -3791,7 +3814,7 @@ class AICourseStudioApp {
 
             const option = document.createElement('option');
             option.value = page.page_number;
-            option.textContent = `第 ${page.page_number} 页 · ${page.title || '未命名'}`;
+            option.textContent = `第 ${page.page_number} 页 · ${(page.title || '未命名').slice(0, 28)}`;
             this.elements.previewPageSelect.appendChild(option);
         });
         this.renderSmartCutSegments();
@@ -3986,6 +4009,7 @@ class AICourseStudioApp {
                 failedReview = data.ai_review || null;
                 throw new Error(data.error || 'AI 审查失败');
             }
+            if (this.elements.coursePreviewModule.dataset.taskId !== taskId) return;
             this.renderCourseReview(
                 data.ai_review,
                 this.elements.coursePreviewModule.dataset.qualityMode || 'balanced'
@@ -4992,7 +5016,8 @@ class AICourseStudioApp {
             if (!response.ok) throw new Error(data.error || '应用切课失败');
             this.smartCutSegments = data.segments || [];
             this.smartCutApplied = this.smartCutSegments.length > 0;
-            await this.loadCoursePreview(taskId);
+            this.renderSmartCutSegments();
+            await this.savePreviewScripts({ automatic: true });
             this.showStatus('success', data.message || '已应用智能切课');
         } catch (error) {
             this.showStatus('error', error.message);
@@ -5025,6 +5050,30 @@ class AICourseStudioApp {
         };
     }
 
+    syncPreviewSpeechControls() {
+        const host = document.getElementById('preview-speech-controls');
+        if (!host) return;
+        host.replaceChildren();
+        for (const [key, label] of [['ttsEngine', '语音引擎'], ['voiceSelect', '音色'], ['ttsRate', '语速']]) {
+            const original = this.elements[key];
+            const wrapper = document.createElement('label');
+            wrapper.textContent = label;
+            const select = original.cloneNode(true);
+            select.removeAttribute('id');
+            select.removeAttribute('aria-hidden');
+            select.className = 'select-input';
+            select.value = original.value;
+            select.setAttribute('aria-label', `审核区${label}`);
+            select.addEventListener('change', () => {
+                original.value = select.value;
+                if (key === 'voiceSelect') this.elements.customVoice.value = '';
+                original.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            wrapper.appendChild(select);
+            host.appendChild(wrapper);
+        }
+    }
+
     updatePreviewSpeechSummary() {
         const summary = document.getElementById('preview-speech-summary');
         if (!summary) return;
@@ -5033,15 +5082,44 @@ class AICourseStudioApp {
             this.stopCoursePreviewPlayback('语音设置已更新，请重新播放预览确认');
         }
         this.previewSpeechSignature = speechSignature;
+        this.syncPreviewSpeechControls?.();
         const name = this.elements.customVoice.value.trim()
             || this.elements.voiceSelect.selectedOptions[0]?.textContent || '请选择音色';
         const engine = this.elements.ttsEngine.selectedOptions[0]?.textContent || '';
         summary.textContent = `当前配音：${engine} · ${name}。播放预览、保存或继续生成时应用当前设置；音色改变后将重新生成配音。`;
     }
 
+    previewDraftKey(taskId) {
+        return `vidppt.preview.${document.body.dataset.username || 'local'}.${taskId}`;
+    }
+
+    storePreviewDraft() {
+        const taskId = this.elements.coursePreviewModule.dataset.taskId;
+        if (!taskId) return;
+        this.previewDirty = true;
+        try {
+            localStorage.setItem(this.previewDraftKey(taskId), JSON.stringify({ pages: this.collectPreviewScripts(), strategy: this.collectCurrentStrategy() }));
+        } catch (error) { console.warn('本地草稿保存失败', error); }
+    }
+
+    async reopenCourse(taskId) {
+        try {
+            const response = await fetch(`/api/tasks/${taskId}/reopen`, { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+            const found = this.getItemByTaskId(taskId);
+            if (found) this.updateItem(found.index, { status: 'awaiting_confirmation',
+                videoPath: data.video_path, subtitlesPath: data.subtitles_path,
+                cueTimelinePath: data.cue_timeline_path, videoSegments: data.video_segments });
+            this.renderResultsGrid();
+            await this.loadCoursePreview(taskId);
+        } catch (error) { this.showStatus('error', error.message); }
+    }
+
     async savePreviewScripts({ automatic = false } = {}) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return false;
+        this.storePreviewDraft?.();
         const save = () => this.persistPreviewScripts({ automatic, taskId });
         this.previewSaveQueue = (this.previewSaveQueue || Promise.resolve()).then(save, save);
         return this.previewSaveQueue;
@@ -5112,6 +5190,10 @@ class AICourseStudioApp {
                 ? '草稿设置已保存，下次播放使用新音色'
                 : (automatic ? '讲稿、配音、字幕和包装设置已自动保存' : '讲稿、配音、字幕和包装设置已保存');
             this.elements.coursePreviewSaveState.classList.add('saved');
+            this.previewDirty = false;
+            if (typeof localStorage !== 'undefined') {
+                try { localStorage.removeItem(this.previewDraftKey(taskId)); } catch (_) {}
+            }
             return true;
         } catch (error) {
             if (sequence !== this.previewSaveSequence) return false;

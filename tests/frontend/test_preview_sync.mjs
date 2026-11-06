@@ -132,3 +132,26 @@ test('voice edits made during save are persisted before preview can start', asyn
     assert.equal(await saving, true);
     assert.deepEqual(voices, ['voice-a', 'voice-b']);
 });
+
+test('local draft preserves unsynced scripts and settings per account and task', () => {
+    const app = view();
+    const records = new Map();
+    const previousDocument = globalThis.document;
+    const previousStorage = globalThis.localStorage;
+    globalThis.document = { body: { dataset: { username: 'teacher-a' } } };
+    globalThis.localStorage = { setItem: (key, value) => records.set(key, value) };
+    app.collectCurrentStrategy = () => ({ voice: 'voice-a' });
+    try {
+        app.storePreviewDraft();
+        const saved = JSON.parse(records.get(app.previewDraftKey('task')));
+        assert.equal(saved.pages[0].script, '新讲稿');
+        assert.equal(saved.strategy.voice, 'voice-a');
+        assert.equal(app.previewDirty, true);
+        const first = app.previewDraftKey('task');
+        document.body.dataset.username = 'teacher-b';
+        assert.notEqual(first, app.previewDraftKey('task'));
+    } finally {
+        globalThis.document = previousDocument;
+        globalThis.localStorage = previousStorage;
+    }
+});

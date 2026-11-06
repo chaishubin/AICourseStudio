@@ -490,6 +490,19 @@ def task_for_path(file_path: str) -> tuple[str | None, dict | None]:
     return None, None
 
 
+def _log_task_outcome(task_id: str, success: bool, message: str) -> None:
+    task = tasks.get(task_id, {})
+    try:
+        task_store.add_operation_log({
+            'actor': task.get('owner_username') or task.get('created_by') or 'system',
+            'action': 'generation_completed' if success else 'generation_failed',
+            'task_id': task_id, 'target_name': task.get('original_name'),
+            'success': success, 'message': message, 'created_at': time.time(),
+        })
+    except Exception as exc:
+        logger.warning(f'记录生成结果失败: {exc}')
+
+
 def log_operation(
     action: str,
     *,
@@ -1868,6 +1881,7 @@ def index():
     user = current_user_context()
     return render_template(
         'index.html',
+        build_version=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:8],
         current_user=user['display_name'],
         current_username=user['username'],
         current_role=user['role'],
@@ -2424,6 +2438,7 @@ class WebProgressTracker:
         }
         event.update(artifacts)
         self.queue.put(event)
+        _log_task_outcome(self.task_id, True, '课程生成完成')
         logger.info(f'task={self.task_id} stage=complete video={video_path or "-"}')
 
     def preview_ready(self, preview_path: str, **artifacts):
@@ -2482,6 +2497,7 @@ class WebProgressTracker:
             'course_json_path': task.get('course_json_path'),
             'presentation_path': task.get('presentation_path'),
         })
+        _log_task_outcome(self.task_id, False, f'{failed_stage}: {error_msg}')
         logger.warning(f'task={self.task_id} stage={failed_stage} rollback error={error_msg}')
 
 
@@ -2929,10 +2945,13 @@ def _read_preview(task_id: str) -> dict:
 
 
 def _persist_preview(task_id: str, preview: dict) -> None:
-    _preview_file(task_id).write_text(
-        json.dumps(preview, ensure_ascii=False, indent=2),
-        encoding='utf-8',
-    )
+    path = _preview_file(task_id)
+    temporary = path.with_name(f'.preview-{uuid.uuid4().hex}.json')
+    try:
+        temporary.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _refresh_automatic_focus_events(page: dict) -> None:
@@ -3004,9 +3023,16 @@ def _run_course_review(task_id: str, mode: str) -> dict:
     if mode not in {'sample', 'full'}:
         raise ValueError('不支持的 AI 审查模式')
     preview = _read_preview(task_id)
+    reviewed_scripts = [(page.get('page_number'), page.get('script')) for page in preview.get('pages', [])]
     review = CourseReviewer().review(preview, mode)
-    preview['ai_review'] = review
-    _persist_preview(task_id, preview)
+    with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+        latest = _read_preview(task_id)
+        current_scripts = [(page.get('page_number'), page.get('script')) for page in latest.get('pages', [])]
+        if current_scripts != reviewed_scripts:
+            review.update(status='pending', stale=True,
+                          summary='审查期间讲稿已修改，请重新质检当前版本')
+        latest['ai_review'] = review
+        _persist_preview(task_id, latest)
     task = tasks.get(task_id)
     if task:
         task['ai_review'] = review
@@ -3879,6 +3905,32 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
     return {**preview, 'changed_pages': sorted(changed_pages)}
 
 
+def _archive_media_version(task_id: str) -> None:
+    """Keep published media downloadable while a new render replaces working files."""
+    task = tasks[task_id]
+    root = Path(task['output_dir'])
+    paths = [task.get(key) for key in ('video_path', 'subtitles_path', 'cue_timeline_path')]
+    for segment in task.get('video_segments') or []:
+        paths.extend(segment.get(key) for key in ('video_path', 'subtitles_path', 'cue_timeline_path'))
+    paths = [Path(value) for value in paths if value and Path(value).is_file()]
+    paths = [path for path in paths if '_versions' not in path.relative_to(root).parts]
+    if not paths:
+        return
+    destination = root / '_versions' / uuid.uuid4().hex
+    mapping = {}
+    for source in paths:
+        target = destination / source.relative_to(root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        mapping[str(source)] = str(target)
+    for key in ('video_path', 'subtitles_path', 'cue_timeline_path'):
+        task[key] = mapping.get(task.get(key), task.get(key))
+    task['video_segments'] = [{key: mapping.get(value, value) if isinstance(value, str) else value
+                               for key, value in segment.items()}
+                              for segment in task.get('video_segments') or []]
+    save_state(task_id)
+
+
 def _remove_media_artifacts(task: dict, retry_stage: str, page_number: int | None):
     """按重试阶段清理最小必要产物，其余检查点继续复用。"""
     output_dir = Path(task['output_dir'])
@@ -3892,10 +3944,6 @@ def _remove_media_artifacts(task: dict, retry_stage: str, page_number: int | Non
     elif retry_stage not in {'media', 'video'}:
         raise ValueError("不支持的重试阶段")
 
-    for artifact in output_dir.glob('*.mp4'):
-        artifact.unlink(missing_ok=True)
-    for artifact in output_dir.glob('*.srt'):
-        artifact.unlink(missing_ok=True)
 
 
 def run_media_generation(task_id: str):
@@ -3915,6 +3963,7 @@ def run_media_generation(task_id: str):
         from vidppt.course_pipeline import CoursePipeline
 
         task = tasks[task_id]
+        _archive_media_version(task_id)
         preview = _read_preview(task_id)
         if _ensure_preview_focus(preview):
             _persist_preview(task_id, preview)
@@ -4928,6 +4977,13 @@ def course_presentation(task_id):
     temporary_path = output_dir / f'.reviewed-{uuid.uuid4().hex}.pptx'
     try:
         upload.save(temporary_path)
+        from pptx import Presentation
+        old_presentation = Presentation(str(presentation_path))
+        new_presentation = Presentation(str(temporary_path))
+        old_ids = [slide.slide_id for slide in old_presentation.slides]
+        new_ids = [slide.slide_id for slide in new_presentation.slides]
+        if old_ids != new_ids:
+            raise ValueError('检测到插页、删页或换序。请作为新课程上传，避免旧讲稿错配')
         temporary_path.replace(reviewed_path)
 
         from vidppt.processors.ppt_processor import PPTProcessor
@@ -4971,6 +5027,10 @@ def course_presentation(task_id):
         preview['presentation_path'] = str(reviewed_path)
         preview['pages'] = refreshed_pages
         preview.pop('ai_review', None)
+        preview['lesson_segments'] = []
+        preview['segmentation_settings'] = None
+        task['lesson_segments'] = []
+        _apply_lesson_segments_to_course(preview, [])
         _preview_file(task_id).write_text(
             json.dumps(preview, ensure_ascii=False, indent=2),
             encoding='utf-8',
@@ -5029,7 +5089,9 @@ def save_course_preview(task_id):
         return jsonify({'error': str(exc)}), 400
     tasks[task_id]['message'] = '讲稿已保存，等待继续'
     save_state(task_id)
-    log_operation('save_preview', task_id=task_id, target_name=task.get('original_name'))
+    log_operation('save_preview', task_id=task_id, target_name=task.get('original_name'),
+                  message=json.dumps({'changed_pages': changed_pages, 'speech_changed': speech_changed,
+                                      'media_settings': media_options}, ensure_ascii=False))
     duration_estimate = _duration_estimate_payload(preview)
     return jsonify({
         'success': True,
@@ -5195,6 +5257,29 @@ def stop_task(task_id):
             })
     log_operation('stop_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify({'success': True, 'message': '已请求停止，正在回退上一步'})
+
+
+@app.route('/api/tasks/<task_id>/reopen', methods=['POST'])
+def reopen_course(task_id):
+    task, error = require_task_access(task_id, manage=True)
+    if error:
+        return error
+    with _continue_lock:
+        if task.get('status') != 'completed':
+            return jsonify({'error': '仅已完成课程可以返回编辑'}), 409
+        try:
+            _read_preview(task_id)
+            _archive_media_version(task_id)
+        except (OSError, ValueError, KeyError) as exc:
+            return jsonify({'error': f'无法恢复草稿: {exc}'}), 409
+        task.update(status='awaiting_confirmation', stage='preview', percentage=50,
+                    message='正在编辑新版，上一版产物已保留')
+        save_state(task_id)
+    log_operation('reopen_task', task_id=task_id, target_name=task.get('original_name'))
+    return jsonify({'success': True, 'video_path': task.get('video_path'),
+                    'subtitles_path': task.get('subtitles_path'),
+                    'cue_timeline_path': task.get('cue_timeline_path'),
+                    'video_segments': task.get('video_segments', [])})
 
 
 @app.route('/api/tasks/<task_id>/retry', methods=['POST'])
