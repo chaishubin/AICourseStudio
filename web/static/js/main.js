@@ -1417,9 +1417,10 @@ class AICourseStudioApp {
         await this.uploadFile(file, index);
     }
 
-    async uploadFile(file, index) {
+    async uploadFile(file, index, originalSlides = null) {
         const formData = new FormData();
         formData.append('file', file);
+        if (originalSlides) formData.append('original_slides', originalSlides);
 
         try {
             let progress = 0;
@@ -1444,10 +1445,11 @@ class AICourseStudioApp {
             const result = await response.json();
             this.updateItem(index, {
                 filePath: result.file_path,
+                originalSlides: Boolean(result.original_slides),
                 sourceFileExists: true,
                 status: 'pending',
                 percentage: 0,
-                message: '待转换'
+                message: result.original_slides ? '原生页面已校验，待转换' : '待转换'
             });
             this.renderFileList();
         } catch (error) {
@@ -1490,8 +1492,13 @@ class AICourseStudioApp {
                            maxlength="120">
                 </label>
                 <span class="file-route-badge ${item.sourceType === 'lesson-plan' ? 'lesson-plan' : 'presentation'}">
-                    ${item.sourceType === 'lesson-plan' ? 'AI 设计' : '保留原稿'}
+                    ${item.sourceType === 'lesson-plan' ? 'AI 设计' : item.originalSlides ? '原生页面' : '兼容渲染'}
                 </span>
+                ${item.status === 'pending' && item.file && /\.pptx$/i.test(item.fileName) ? `
+                    <button type="button" class="original-slides-button btn-secondary"
+                            title="在 PowerPoint 中导出所有幻灯片为 PNG，将图片压缩成 ZIP 后上传；按文件名末尾页码匹配，必须包含全部页面">
+                        ${item.originalSlides ? '更换原生页面 ZIP' : '上传原生页面 ZIP'}
+                    </button>` : ''}
                 <span class="file-list-status status-${item.status}">${statusText}</span>
                 ${item.status === 'pending' ? `
                     <span class="file-strategy-badge">
@@ -1505,6 +1512,18 @@ class AICourseStudioApp {
             `;
 
             row.querySelector('.file-list-remove').addEventListener('click', () => this.removeFile(index));
+            row.querySelector('.original-slides-button')?.addEventListener('click', () => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.zip';
+                input.addEventListener('change', async () => {
+                    if (!input.files[0]) return;
+                    this.updateItem(index, { status: 'uploading', message: '校验原生页面中…' });
+                    this.renderFileList();
+                    await this.uploadFile(item.file, index, input.files[0]);
+                });
+                input.click();
+            });
             const checkbox = row.querySelector('.file-select-checkbox');
             if (checkbox) {
                 checkbox.addEventListener('change', (event) => {
@@ -2412,7 +2431,8 @@ class AICourseStudioApp {
                         course_name: this.courseDisplayName(item),
                         batch_id: batchId,
                         strategy_source: item.strategySource || 'batch',
-                        ...strategy
+                        ...strategy,
+                        render_engine: item.originalSlides ? 'original' : strategy.render_engine
                     })
                 });
 
@@ -2462,7 +2482,7 @@ class AICourseStudioApp {
         this.updateItem(index, { status: 'queued', message: '排队中' });
         this.renderFileList();
 
-        const renderEngine = this.elements.renderEngine.value;
+        const renderEngine = item.originalSlides ? 'original' : this.elements.renderEngine.value;
 
         try {
             const response = await fetch('/api/render-slides', {
@@ -3384,6 +3404,7 @@ class AICourseStudioApp {
                 this.state.files = data.tasks.map(t => ({
                     file: null,
                     filePath: t.file_path || null,
+                    originalSlides: t.media_options?.render_engine === 'original',
                     fileName: t.original_name || '未知文件',
                     sourceFileExists: Boolean(t.source_file_exists),
                     courseName: t.course_name || this.defaultCourseName(t.original_name || ''),

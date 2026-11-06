@@ -191,8 +191,8 @@ LLM 文本摘要示例:
     parser.add_argument(
         "--render-engine",
         default="spire",
-        choices=["spire", "libreoffice"],
-        help="幻灯片渲染引擎（默认: spire）",
+        choices=["spire", "libreoffice", "original"],
+        help="幻灯片渲染引擎；original 使用同名 .slides.zip 中的 PowerPoint 原生 PNG 页面",
     )
 
     # 数字人配置

@@ -62,7 +62,7 @@ class ProcessConfig:
     audio_cache_expiry_days: int = 30  # 音频缓存过期天数
 
     # 渲染配置
-    render_engine: str = "spire"  # "spire" 或 "libreoffice"
+    render_engine: str = "spire"  # spire / libreoffice / original（同名 .slides.zip）
 
     # OCR 配置
     ocr_engine: str = "builtin"  # builtin, tesseract, api

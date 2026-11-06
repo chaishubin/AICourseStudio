@@ -189,8 +189,8 @@
                         <div class="option-group advanced-option" hidden>
                             <label for="render-engine">渲染引擎</label>
                             <select id="render-engine" class="select-input">
-                                <option value="libreoffice">LibreOffice (中文更友好)</option>
-                                <option value="spire">Spire (默认)</option>
+                                <option value="libreoffice">LibreOffice（兼容渲染）</option>
+                                <option value="spire">Spire（兼容渲染）</option>
                             </select>
                         </div>
                         <div class="option-group">
@@ -264,8 +264,8 @@
                             <div class="video-tuning-grid">
                                 <label for="video-resolution">分辨率
                                     <select id="video-resolution" class="select-input">
-                                        <option value="1920x1080" selected>1920x1080 正式网课</option>
-                                        <option value="1280x720">1280x720 更快预览</option>
+                                        <option value="1920x1080" selected>1920x1080 正式网课（16:9）</option>
+                                        <option value="1280x720">1280x720 更快预览（16:9）</option>
                                         <option value="854x480">854x480 快速检查</option>
                                     </select>
                                 </label>
@@ -290,7 +290,7 @@
                                            min="18" max="32" step="1" value="21">
                                 </label>
                             </div>
-                            <small class="field-hint">更快预览优先降低分辨率、使用更快 preset、适度增大 CRF；正式网课建议保留当前默认。</small>
+                            <small class="field-hint">视频使用宽屏画布，课件等比居中；4:3 原稿会在两侧留边。需要铺满 16:9 时，请先在 PowerPoint 中调整幻灯片大小并检查排版。正式网课建议 1920x1080。</small>
                             <div class="video-advanced-options" id="video-advanced-options" hidden>
                                 <div class="video-tuning-grid">
                                     <label for="video-codec">视频编码

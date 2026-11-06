@@ -3,9 +3,12 @@ PowerPoint 文档处理器
 """
 
 import io
+import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
+from importlib.metadata import version
 from pathlib import Path
 
 from loguru import logger
@@ -16,6 +19,7 @@ from PIL import Image
 from ..core.interfaces import DocumentProcessor
 from ..core.models import DocumentContent, PageContent, ProcessConfig
 from ..core.registry import register_processor
+from .original_slides import reference_path, render_original_slides
 
 
 @register_processor
@@ -73,10 +77,71 @@ class PPTProcessor(DocumentProcessor):
         return DocumentContent(pages=pages)
 
     def render_pages(self, config: ProcessConfig) -> list[Path]:
-        """渲染 PPT 页面为图像，根据 render_engine 分发"""
-        if config.render_engine == "libreoffice":
-            return self._render_with_libreoffice(config)
-        return self._render_with_spire(config)
+        """优先使用已确认的原生页面；成功渲染后才提交缓存签名。"""
+        engine = 'original' if reference_path(config.input_path).is_file() else config.render_engine
+        renderers = {
+            'original': lambda c: render_original_slides(c.input_path, c.output_dir),
+            'libreoffice': self._render_with_libreoffice,
+            'spire': self._render_with_spire,
+        }
+        if engine not in renderers:
+            raise ValueError(f'不支持的 PPT 渲染引擎：{engine}')
+        # 输入不可读时由具体引擎报告错误，不尝试读取缓存。
+        if not config.input_path.is_file():
+            return renderers[engine](config)
+        signature = self._render_signature(config, engine)
+        marker = config.output_dir / '.render_signature'
+        page_count = self._get_slide_count(config)
+        paths = [config.output_dir / str(i) / 'slide.png' for i in range(1, page_count + 1)]
+        if (config.save_intermediate and config.skip_existing and marker.is_file()
+                and marker.read_text() == signature
+                and all(p.is_file() and p.stat().st_size for p in paths)):
+            return paths
+        # 旧缓存没有完整签名时也失效，失败后不能误用部分新截图。
+        marker.unlink(missing_ok=True)
+        self._clear_slides(config)
+        paths = renderers[engine](config)
+        if len(paths) != page_count or not all(p.is_file() for p in paths):
+            raise ValueError(f'PPT 渲染页数不一致：预期 {page_count} 页，实际 {len(paths)} 页')
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(signature)
+        (config.output_dir / '.render_engine').write_text(engine)
+        return paths
+
+    @staticmethod
+    def _render_signature(config: ProcessConfig, engine: str) -> str:
+        def digest(path):
+            with path.open('rb') as stream:
+                return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+        values = {'version': 2, 'engine': engine, 'source': digest(config.input_path)}
+        if engine == 'original':
+            archive = reference_path(config.input_path)
+            values['reference'] = digest(archive) if archive.is_file() else 'missing'
+        else:
+            values['python_pptx'] = version('python-pptx')
+            if engine == 'spire':
+                values['spire'] = version('spire.presentation')
+            else:
+                executable = shutil.which('libreoffice') or shutil.which('soffice')
+                if executable and Path(executable).is_file():
+                    binary = Path(executable)
+                    values['binary'] = (str(binary.resolve()), binary.stat().st_size, binary.stat().st_mtime_ns)
+            # 字体安装、替换和 fontconfig 调整之后必须重新渲染。
+            fc_list = shutil.which('fc-list')
+            if fc_list:
+                listing = subprocess.check_output(
+                    [fc_list, '--format', '%{file}\n'], timeout=15,
+                ).decode('utf-8').splitlines()
+                values['fonts'] = sorted(
+                    (str(p), p.stat().st_size, p.stat().st_mtime_ns)
+                    for p in {Path(name) for name in listing} if p.is_file()
+                )
+            values['fontconfig'] = [
+                (str(p), digest(p)) for root in [Path('/etc/fonts'), Path.home() / '.config/fontconfig']
+                if root.is_dir() for p in sorted(root.rglob('*.conf')) if p.is_file()
+            ]
+        return json.dumps(values, sort_keys=True)
 
     def _existing_slide_count(self, config: ProcessConfig) -> int:
         """统计已存在的 slide.png 数量"""
@@ -89,11 +154,9 @@ class PPTProcessor(DocumentProcessor):
 
     def _clear_slides(self, config: ProcessConfig) -> None:
         """清除旧的幻灯片截图"""
-        page_num = 1
-        while True:
-            page_dir = config.output_dir / str(page_num)
-            if not page_dir.exists():
-                break
+        for page_dir in config.output_dir.glob('*'):
+            if not page_dir.is_dir() or not page_dir.name.isdigit():
+                continue
             slide_path = page_dir / "slide.png"
             if slide_path.exists():
                 slide_path.unlink()
@@ -102,7 +165,6 @@ class PPTProcessor(DocumentProcessor):
                 page_dir.rmdir()
             except OSError:
                 pass
-            page_num += 1
 
     def _render_with_spire(self, config: ProcessConfig) -> list[Path]:
         """使用 Spire 渲染 PPT 页面为图像"""
@@ -229,7 +291,7 @@ class PPTProcessor(DocumentProcessor):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 # 先将输入文件复制到临时目录（安全文件名），避免 LO 无法加载
                 # 含特殊字符（引号等）的原始文件名或某些 PPTX 格式会导致 LO 加载失败
-                safe_input = Path(tmp_dir) / "input.pptx"
+                safe_input = Path(tmp_dir) / f"input{config.input_path.suffix.lower()}"
                 shutil.copy2(config.input_path, safe_input)
 
                 # Step 1: LibreOffice PPT → PDF
@@ -251,12 +313,11 @@ class PPTProcessor(DocumentProcessor):
                     pdf_path = Path(tmp_dir) / "input.pdf"
                     if not pdf_path.exists():
                         raise subprocess.CalledProcessError(1, cmd_pdf)
-                except subprocess.CalledProcessError:
-                    # 某些 PPTX 格式 LO 无法直接加载，用 python-pptx 重新保存后再试
-                    logger.info("LibreOffice 加载原始文件失败，尝试重新保存后转换...")
-                    prs = Presentation(str(config.input_path))
-                    prs.save(str(safe_input))
-                    subprocess.run(cmd_pdf, check=True, capture_output=True)
+                except subprocess.CalledProcessError as exc:
+                    raise RuntimeError(
+                        'LibreOffice 无法转换原 PPT；为避免损失图表等内容，不自动重新保存原稿。'
+                        '请使用 PowerPoint 导出的 PNG 页面 ZIP。'
+                    ) from exc
 
                 pdf_path = Path(tmp_dir) / "input.pdf"
                 if not pdf_path.exists():

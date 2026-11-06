@@ -77,6 +77,7 @@ from vidppt.utils.focus_guidance import (
     normalize_focus_cues,
 )
 from vidppt.utils.progress import ProcessStage
+from vidppt.processors.original_slides import reference_path
 
 # 导入处理器以触发注册
 import vidppt.processors  # noqa: F401
@@ -2036,12 +2037,27 @@ def upload_ppt():
 
     # 保存文件
     file.save(file_path)
+    reference = request.files.get('original_slides')
+    if reference:
+        from vidppt.processors.original_slides import read_original_slides, reference_path
+        if ext != 'pptx':
+            file_path.unlink(missing_ok=True)
+            return jsonify({'error': '原生页面仅支持与 PPTX 一起上传；请先将旧版 PPT 另存为 PPTX'}), 400
+        archive_path = reference_path(file_path)
+        try:
+            reference.save(archive_path)
+            read_original_slides(file_path, archive_path)
+        except Exception as exc:
+            archive_path.unlink(missing_ok=True)
+            file_path.unlink(missing_ok=True)
+            return jsonify({'error': f'原生页面校验失败：{exc}'}), 400
     log_operation('upload', target_name=original_filename)
 
     return jsonify({
         'success': True,
         'file_path': str(file_path),
-        'original_name': original_filename
+        'original_name': original_filename,
+        'original_slides': bool(reference),
     })
 
 
@@ -4388,6 +4404,8 @@ def convert_ppt():
         except (TypeError, ValueError) as exc:
             return jsonify({'error': str(exc)}), 400
     render_engine = data.get('render_engine', 'spire')
+    if file_path and reference_path(Path(file_path)).is_file():
+        render_engine = 'original'
     llm_enabled = data.get('llm_enabled', False)
     llm_mode = data.get('llm_mode', 'per-page')
     llm_engine = data.get('llm_engine', 'qwen')
@@ -5253,6 +5271,8 @@ def render_slides():
     data = request.get_json()
     file_path = data.get('file_path')
     render_engine = data.get('render_engine', 'spire')
+    if file_path and reference_path(Path(file_path)).is_file():
+        render_engine = 'original'
 
     if not file_path:
         return jsonify({'error': '未提供文件路径'}), 400
