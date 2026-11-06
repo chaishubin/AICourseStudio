@@ -1698,7 +1698,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=48' in html
+    assert '/static/js/main.js?v=49' in html
 
 
 def test_course_packaging_has_a_separate_design_page():

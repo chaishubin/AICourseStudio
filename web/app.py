@@ -3441,6 +3441,21 @@ def _recommend_lesson_segments(
     return segments
 
 
+def _segmentation_settings(raw) -> dict | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError('切课设置必须为对象')
+    try:
+        minutes = int(raw.get('target_minutes', 5))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError('切课时长必须为整数') from exc
+    priority = raw.get('priority', 'section')
+    if not 1 <= minutes <= 120 or priority not in {'section', 'duration'}:
+        raise ValueError('切课时长或优先级无效')
+    return {'target_minutes': minutes, 'priority': priority}
+
+
 def _normalize_lesson_segments(raw_segments: list[dict], pages: list[dict]) -> list[dict]:
     page_numbers = [int(page['page_number']) for page in pages]
     if not page_numbers:
@@ -3537,6 +3552,8 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         if page_number in by_page:
             if page.get('script', '').strip() != by_page[page_number]:
                 changed_pages.add(page_number)
+                page.pop('duration', None)
+                page.pop('audio_signature', None)
             page['script'] = by_page[page_number]
         if page_number in reviewed_by_page:
             page['reviewed'] = reviewed_by_page[page_number]
@@ -3555,6 +3572,9 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             previous_focus_target,
         )
         if page_number in changed_pages:
+            for cue in page['focus_cues']:
+                for key in ('start', 'end', 'duration', 'timing_source', 'audio_path'):
+                    cue.pop(key, None)
             manual_events = [
                 {**event, 'needs_review': True}
                 for event in page.get('focus_events', [])
@@ -3607,6 +3627,20 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         task = tasks.get(task_id)
         if task:
             task['ai_review'] = review
+    if changed_pages and preview.get('lesson_segments'):
+        options = preview.get('segmentation_settings')
+        if options:
+            preview['lesson_segments'] = _recommend_lesson_segments(
+                preview['pages'], options['target_minutes'], options['priority'],
+            )
+        preview['lesson_segments'] = _duration_estimate_payload(preview)['segments']
+        for page in preview['pages']:
+            page['lesson_segment'] = next((
+                segment for segment in preview['lesson_segments']
+                if segment['start_page'] <= int(page['page_number']) <= segment['end_page']
+            ), None)
+        tasks[task_id]['lesson_segments'] = preview['lesson_segments']
+    preview['duration_estimate'] = _duration_estimate_payload(preview)
     _persist_preview(task_id, preview)
 
     course_json_path = preview.get('course_json_path')
@@ -3624,10 +3658,12 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
+        if changed_pages and preview.get('lesson_segments'):
+            _apply_lesson_segments_to_course(preview, preview['lesson_segments'])
     output_dir = Path(tasks[task_id]['output_dir'])
     for page_number in changed_pages:
         (output_dir / str(page_number) / 'audio.mp3').unlink(missing_ok=True)
-    return preview
+    return {**preview, 'changed_pages': sorted(changed_pages)}
 
 
 def _remove_media_artifacts(task: dict, retry_stage: str, page_number: int | None):
@@ -4598,6 +4634,15 @@ def apply_course_segments(task_id):
             raw_segments,
             preview.get('pages', []),
         )
+        settings = _segmentation_settings(data.get('recommendation_options'))
+        if settings:
+            recommended = _normalize_lesson_segments(
+                _recommend_lesson_segments(preview['pages'], **settings), preview['pages'],
+            )
+            ranges = lambda items: [(item['start_page'], item['end_page'], item['title']) for item in items]
+            if ranges(segments) != ranges(recommended):
+                settings = None  # A manually edited range must not be replaced later.
+        preview['segmentation_settings'] = settings
     except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -4744,19 +4789,30 @@ def save_course_preview(task_id):
     if not isinstance(pages, list):
         return jsonify({'error': 'pages 必须是数组'}), 400
     try:
-        _update_preview_scripts(task_id, pages)
+        options = _segmentation_settings(data.get('recommendation_options'))
+        preview = _update_preview_scripts(task_id, pages)
     except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
         return jsonify({'error': str(exc)}), 400
     tasks[task_id]['message'] = '讲稿已保存，等待继续'
     save_state(task_id)
     log_operation('save_preview', task_id=task_id, target_name=task.get('original_name'))
-    preview = _read_preview(task_id)
     duration_estimate = _duration_estimate_payload(preview)
     return jsonify({
         'success': True,
         'message': '讲稿已保存',
         'duration_estimate': duration_estimate,
         'lesson_segments': duration_estimate['segments'],
+        'changed_pages': preview.get('changed_pages', []),
+        'ai_review': preview.get('ai_review'),
+        'pages': [{
+            'page_number': page['page_number'],
+            'script': page.get('script', ''),
+            'focus_cues': page.get('focus_cues', []),
+            'focus_events': page.get('focus_events'),
+            'lesson_segment': page.get('lesson_segment'),
+            'estimated_seconds': round(_estimate_page_duration(page), 1),
+        } for page in preview.get('pages', [])],
+        'recommended_segments': _recommend_lesson_segments(preview['pages'], **options) if options else None,
     })
 
 

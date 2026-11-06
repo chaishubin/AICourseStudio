@@ -3473,6 +3473,7 @@ class AICourseStudioApp {
             const response = await fetch(`/api/course-preview/${taskId}`);
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '加载预览失败');
+            this.smartCutRecommendationOptions = data.segmentation_settings || null;
             this.renderCoursePreview(
                 taskId,
                 data.pages || [],
@@ -4701,6 +4702,9 @@ class AICourseStudioApp {
             ? `已应用 ${this.smartCutSegments.length} 段，继续生成将输出完整 MP4 和分段 MP4`
             : `已生成 ${this.smartCutSegments.length} 段建议，应用后将额外输出分段 MP4`;
         this.smartCutSegments.forEach((segment, index) => {
+            const segmentSeconds = this.collectPreviewPageDurations()
+                .filter(page => page.pageNumber >= segment.start_page && page.pageNumber <= segment.end_page)
+                .reduce((sum, page) => sum + page.seconds, 0);
             const row = document.createElement('div');
             row.className = 'smart-cut-row';
             row.innerHTML = `
@@ -4715,10 +4719,11 @@ class AICourseStudioApp {
                 <input type="number" class="smart-cut-end" min="1"
                        value="${Number(segment.end_page) || 1}"
                        aria-label="第 ${index + 1} 段结束页">
-                <span class="smart-cut-estimate">约 ${segment.estimated_minutes || '?'} 分钟</span>
+                <span class="smart-cut-estimate">${this.formatCourseDuration(segmentSeconds)}</span>
             `;
             row.querySelectorAll('input').forEach(input => {
                 input.addEventListener('input', () => {
+                    this.smartCutRecommendationOptions = null;
                     this.smartCutApplied = false;
                     smartCutApplyBtn.disabled = false;
                     this.updateContinueCourseLabel();
@@ -4751,22 +4756,24 @@ class AICourseStudioApp {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return;
         clearTimeout(this.previewAutoSaveTimer);
-        await this.savePreviewScripts({ automatic: true });
+        if (!await this.savePreviewScripts({ automatic: true })) return;
         const button = this.elements.smartCutRecommendBtn;
         button.disabled = true;
         button.textContent = '分析中...';
         try {
+            const recommendationOptions = {
+                target_minutes: Number(this.elements.cutDurationMinutes.value) || 5,
+                priority: this.getSmartCutPriority()
+            };
             const response = await fetch(`/api/course-segments/${taskId}/recommend`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    target_minutes: Number(this.elements.cutDurationMinutes.value) || 5,
-                    priority: this.getSmartCutPriority()
-                })
+                body: JSON.stringify(recommendationOptions)
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '智能切课失败');
             this.smartCutSegments = data.segments || [];
+            this.smartCutRecommendationOptions = recommendationOptions;
             this.smartCutApplied = false;
             this.renderSmartCutSegments();
             this.showStatus('success', `已生成 ${this.smartCutSegments.length} 段切课建议`);
@@ -4781,9 +4788,10 @@ class AICourseStudioApp {
     async applySmartCuts() {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return;
+        clearTimeout(this.previewAutoSaveTimer);
+        if (!await this.savePreviewScripts({ automatic: true })) return;
         const segments = this.collectSmartCutSegments();
         if (!segments.length) return;
-        clearTimeout(this.previewAutoSaveTimer);
         const button = this.elements.smartCutApplyBtn;
         button.disabled = true;
         button.textContent = '应用中...';
@@ -4791,7 +4799,7 @@ class AICourseStudioApp {
             const response = await fetch(`/api/course-segments/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ segments })
+                body: JSON.stringify({ segments, recommendation_options: this.smartCutRecommendationOptions || null })
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '应用切课失败');
@@ -4810,19 +4818,60 @@ class AICourseStudioApp {
     async savePreviewScripts({ automatic = false } = {}) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return false;
+        const save = () => this.persistPreviewScripts({ automatic, taskId });
+        this.previewSaveQueue = (this.previewSaveQueue || Promise.resolve()).then(save, save);
+        return this.previewSaveQueue;
+    }
+
+    async persistPreviewScripts({ automatic, taskId }) {
+        if (taskId !== this.elements.coursePreviewModule.dataset.taskId) return false;
+        if (!this.smartCutApplied && this.smartCutSegments.length) {
+            this.smartCutSegments = this.collectSmartCutSegments();
+        }
         const sequence = ++this.previewSaveSequence;
+        const submittedPages = this.collectPreviewScripts();
         this.elements.coursePreviewSaveState.textContent = '保存中…';
         try {
             const response = await fetch(`/api/course-preview/${taskId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pages: this.collectPreviewScripts() })
+                body: JSON.stringify({
+                    pages: submittedPages,
+                    recommendation_options: this.smartCutRecommendationOptions || null
+                })
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '保存讲稿失败');
-            if (sequence !== this.previewSaveSequence) return true;
-            if (Array.isArray(data.lesson_segments)) {
+            if (taskId !== this.elements.coursePreviewModule.dataset.taskId) return false;
+            if (JSON.stringify(submittedPages) !== JSON.stringify(this.collectPreviewScripts())) {
+                return this.persistPreviewScripts({ automatic, taskId });
+            }
+            if (sequence !== this.previewSaveSequence) return false;
+            (data.pages || []).forEach(page => {
+                const card = this.previewCardByPage(page.page_number);
+                if (!card) return;
+                card._focusCues = page.focus_cues || [];
+                card._focusEvents = page.focus_events || null;
+                card.dataset.estimatedSeconds = String(page.estimated_seconds || 0);
+                const seconds = Math.round(Number(page.estimated_seconds) || 0);
+                card.querySelector('.course-preview-length').textContent =
+                    `${page.script.trim().length} 字 · 预计 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+                const label = card.querySelector('.course-preview-segment');
+                if (label && page.lesson_segment) {
+                    label.textContent = `第 ${page.lesson_segment.id} 段 · ${page.lesson_segment.title}`;
+                }
+                this.renderCourseFocusEditor(card);
+            });
+            if (data.ai_review) {
+                this.renderCourseReview(data.ai_review, this.elements.coursePreviewModule.dataset.qualityMode || 'balanced');
+            }
+            if (!this.smartCutApplied && this.smartCutSegments.length) {
+                // Keep manual drafts; regenerate automatic drafts from the saved script.
+                if (Array.isArray(data.recommended_segments)) this.smartCutSegments = data.recommended_segments;
+                this.renderSmartCutSegments();
+            } else if (Array.isArray(data.lesson_segments)) {
                 this.smartCutSegments = data.lesson_segments;
+                this.smartCutApplied = this.smartCutSegments.length > 0;
                 this.renderSmartCutSegments();
             } else {
                 this.updateCourseDurationEstimate(data.duration_estimate || null);
@@ -4834,7 +4883,7 @@ class AICourseStudioApp {
             if (sequence !== this.previewSaveSequence) return false;
             this.elements.coursePreviewSaveState.textContent = '自动保存失败，请手动保存';
             this.elements.coursePreviewSaveState.classList.remove('saved');
-            if (!automatic) this.showStatus('error', error.message);
+            this.showStatus('error', error.message);
             return false;
         }
     }
@@ -4878,6 +4927,7 @@ class AICourseStudioApp {
         if (!taskId || !found) return;
         clearTimeout(this.previewAutoSaveTimer);
         this.stopCoursePreviewPlayback();
+        if (!await this.savePreviewScripts({ automatic: true })) return;
         const button = this.elements.continueCourseBtn;
         button.disabled = true;
         if (!await this.confirmCourseReviewBeforeContinue()) {
