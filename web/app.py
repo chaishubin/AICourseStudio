@@ -3447,39 +3447,71 @@ def _recommend_lesson_segments(
         return []
     target_seconds = max(60, int(target_minutes) * 60)
     ordered_pages = sorted(pages, key=lambda page: int(page['page_number']))
-    segments = []
-
-    if priority == 'section':
-        current_key = _page_section_key(ordered_pages[0])
-        current_pages = []
-        for page in ordered_pages:
-            page_key = _page_section_key(page)
-            current_duration = sum(_estimate_page_duration(item) for item in current_pages)
-            should_split = (
-                current_pages
-                and page_key != current_key
-                and current_duration >= target_seconds * 0.55
-            )
-            if should_split:
-                segments.append(_segment_payload(len(segments) + 1, current_key, current_pages))
-                current_pages = []
-                current_key = page_key
-            current_pages.append(page)
-        if current_pages:
-            segments.append(_segment_payload(len(segments) + 1, current_key, current_pages))
-        return segments
-
-    current_pages = []
+    # Compare candidate boundaries against the target on a cumulative timeline.
+    elapsed = [0.0]
     for page in ordered_pages:
-        current_pages.append(page)
-        current_duration = sum(_estimate_page_duration(item) for item in current_pages)
-        if current_duration >= target_seconds:
-            title = _page_section_key(current_pages[0])
-            segments.append(_segment_payload(len(segments) + 1, title, current_pages))
-            current_pages = []
-    if current_pages:
-        title = _page_section_key(current_pages[0])
-        segments.append(_segment_payload(len(segments) + 1, title, current_pages))
+        elapsed.append(elapsed[-1] + _estimate_page_duration(page))
+    groups = []
+    start = 0
+    count = len(ordered_pages)
+    while start < count:
+        remaining = elapsed[-1] - elapsed[start]
+        if priority == 'section':
+            # Prefer a modest overrun to an unnecessary short final lesson.
+            if remaining <= target_seconds * 1.25:
+                groups.append(ordered_pages[start:])
+                break
+            candidates = [
+                end for end in range(start + 1, count)
+                if elapsed[-1] - elapsed[end] >= target_seconds * 0.3
+            ]
+            if not candidates:
+                groups.append(ordered_pages[start:])
+                break
+            section_boundaries = [
+                end for end in candidates
+                if _page_section_key(ordered_pages[end - 1]) != _page_section_key(ordered_pages[end])
+                and target_seconds * 0.75 <= elapsed[end] - elapsed[start] <= target_seconds * 1.25
+            ]
+            end = min(
+                section_boundaries or candidates,
+                key=lambda end: abs(elapsed[end] - elapsed[start] - target_seconds),
+            )
+        else:
+            # Duration priority cuts at the first complete page reaching the target.
+            end = start + 1
+            while end < count and elapsed[end] - elapsed[start] < target_seconds:
+                end += 1
+        groups.append(ordered_pages[start:end])
+        start = end
+
+    if len(groups) > 1:
+        tail_duration = sum(_estimate_page_duration(page) for page in groups[-1])
+        if tail_duration < target_seconds * 0.3:
+            combined = groups[-2] + groups[-1]
+            total = sum(_estimate_page_duration(page) for page in combined)
+            if total <= target_seconds * 1.25:
+                groups[-2:] = [combined]
+            else:
+                # Share the last two lessons evenly when merging would be too long.
+                cursor = 0.0
+                boundaries = []
+                for end, page in enumerate(combined[:-1], 1):
+                    cursor += _estimate_page_duration(page)
+                    boundaries.append((abs(cursor - total / 2), end))
+                _, end = min(boundaries)
+                groups[-2:] = [combined[:end], combined[end:]]
+
+    segments = []
+    for group in groups:
+        title = _page_section_key(group[0])
+        # Imported titles may contain an entire narration paragraph. Only shorten
+        # generated suggestions; manually entered titles stay intact.
+        if len(title) > 28:
+            title = re.split(r'[。！？!?；;\n]', title, maxsplit=1)[0]
+            if len(title) > 28:
+                title = title[:27].rstrip() + '…'
+        segments.append(_segment_payload(len(segments) + 1, title, group))
     return segments
 
 

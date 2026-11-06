@@ -4546,13 +4546,17 @@ class AICourseStudioApp {
                 <input type="text" class="smart-cut-title"
                        value="${this._escAttr(segment.title || `第 ${index + 1} 课`)}"
                        aria-label="第 ${index + 1} 段标题">
-                <input type="number" class="smart-cut-start" min="1"
-                       value="${Number(segment.start_page) || 1}"
-                       aria-label="第 ${index + 1} 段起始页">
-                <span class="smart-cut-dash">-</span>
-                <input type="number" class="smart-cut-end" min="1"
-                       value="${Number(segment.end_page) || 1}"
-                       aria-label="第 ${index + 1} 段结束页">
+                <label class="smart-cut-page">起始页
+                    <input type="number" class="smart-cut-start" min="1"
+                           value="${Number(segment.start_page) || 1}"
+                           aria-label="第 ${index + 1} 段起始页">
+                </label>
+                <span class="smart-cut-dash">—</span>
+                <label class="smart-cut-page">结束页
+                    <input type="number" class="smart-cut-end" min="1"
+                           value="${Number(segment.end_page) || 1}"
+                           aria-label="第 ${index + 1} 段结束页">
+                </label>
                 <span class="smart-cut-estimate">${this.formatCourseDuration(segmentSeconds)}</span>
             `;
             row.querySelectorAll('input').forEach(input => {
