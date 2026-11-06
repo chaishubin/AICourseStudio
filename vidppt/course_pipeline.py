@@ -187,6 +187,7 @@ class CoursePipeline:
                 targets,
                 course_page.metadata.get("focus_cues"),
                 page_context=course_page.title,
+                page_kind="cover" if index == 0 else "summary" if index == len(course.sections) - 1 else course_page.layout,
                 previous_target_id=previous_target,
             )
             course_page.metadata["focus_cues"] = planned
@@ -203,6 +204,8 @@ class CoursePipeline:
                 "script": course_page.script,
                 "duration": duration,
                 "cues": course_page.metadata.get("focus_cues", []),
+                "focus_mode": course_page.metadata.get("focus_mode", "auto"),
+                **({"focus_events": course_page.metadata["focus_events"]} if "focus_events" in course_page.metadata else {}),
             }
             for index, (course_page, duration) in enumerate(timed_pages, 1)
         ])

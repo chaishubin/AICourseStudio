@@ -103,10 +103,15 @@ class VideoComposer:
         )
         layers = [image]
         if metadata and metadata.get("focus_highlight", True):
+            from ..core.cue_timeline import select_focus_events
+
             layers.extend(
                 VideoComposer._focus_layers(
                     metadata.get("focus_targets", []),
-                    metadata.get("focus_events", metadata.get("focus_cues", [])),
+                    select_focus_events(
+                        metadata.get("focus_events", metadata.get("focus_cues", [])),
+                        metadata.get("focus_mode", "auto"),
+                    ),
                     duration,
                     width,
                     height,

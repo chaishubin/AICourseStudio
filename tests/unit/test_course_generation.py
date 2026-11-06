@@ -1231,3 +1231,29 @@ def test_burn_focus_uses_the_same_ass_time_boundary():
     assert CoursePipeline._ass_time("00:00:00,503") == "0:00:00.50"
     assert CoursePipeline._ass_time("00:00:00,999") == "0:00:01.00"
     assert timeline["focus_events"][0]["end"] == 0.503
+
+
+def test_generation_preserves_clear_cues_without_requiring_an_anchor():
+    from vidppt.generation.course_builder import _normalize_llm_focus_cues
+    cues = _normalize_llm_focus_cues([
+        {'text': '本页介绍两种方法。', 'action': 'clear', 'anchor': ''},
+        {'text': '先看方法一。', 'action': 'switch', 'anchor': 'bullet-1'},
+    ], '方法比较', ['方法一', '方法二'])
+    assert len(cues) == 2
+    assert cues[0]['action'] == 'clear'
+    assert cues[0]['target_text'] == ''
+    assert cues[1]['target_text'] == '方法一'
+
+
+@pytest.mark.parametrize('mode,expected', [('auto', ['a', 'b']), ('off', []), ('manual', ['b'])])
+def test_page_visibility_filters_focus_without_changing_subtitles(mode, expected):
+    timeline = build_cue_timeline([{
+        'page_number': 1, 'duration': 4, 'script': '第一句。第二句。', 'focus_mode': mode,
+        'cues': [
+            {'text': '第一句。', 'start': 0, 'end': 2, 'target_id': 'a', 'subtitle_unit': True},
+            {'text': '第二句。', 'start': 2, 'end': 4, 'target_id': 'b', 'manual': True, 'subtitle_unit': True},
+        ],
+    }])
+    assert [event['target_ids'][0] for event in timeline['focus_events']] == expected
+    assert [cue['text'] for cue in timeline['cues']] == ['第一句。', '第二句。']
+    assert timeline['duration'] == 4

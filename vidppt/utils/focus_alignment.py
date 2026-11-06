@@ -23,6 +23,28 @@ _TOPIC_SWITCH = re.compile(
 _CONTINUATION = re.compile(
     r"^(?:它|其|这[个种一]|其中|因此|所以|也|既|特别|适合|例如|比如|由|从而|并且|同时|说明|可以|能够)"
 )
+_NO_FOCUS_DISCOURSE = re.compile(
+    r"^(?:大家好|同学们好|欢迎(?:大家)?(?:来到|学习|参加)|感谢(?:大家)?(?:观看|收看|聆听)|"
+    r"谢谢大家|本(?:页|节|课|章)(?:主要)?(?:介绍|讲解|学习|包括|涵盖)|"
+    r"(?:下面|接下来)(?:我们)?(?:进入|开始学习|学习下一)|"
+    r"(?:请|大家)(?:先)?(?:暂停|思考一下|想一想|思考这|独立思考)|"
+    r"(?:不同|这些|上述|以上).*(?:根据|适合|各有|选择))"
+)
+_LOCAL_REFERENCE = re.compile(r"左侧|右侧|上方|下方|图中|表中|这个公式|该公式|这个步骤|第[一二三四五六七八九十\d]+[行列步]")
+
+
+def no_focus_reason(text: str, context: str, cue: dict) -> str:
+    """Decide whether a visual pointer is useful before scoring its location."""
+    value, sentence = compact(text), compact(context)
+    if cue.get("action") == "clear":
+        return "explicit_clear"
+    if _LOCAL_REFERENCE.search(sentence):
+        return ""
+    if _NO_FOCUS_DISCOURSE.match(sentence) or _NO_FOCUS_DISCOURSE.match(value):
+        return "discourse_without_local_reference"
+    if _OVERVIEW.match(value) or _OVERVIEW.match(sentence):
+        return "overview_or_clear"
+    return ""
 
 
 def compact(value: str) -> str:
@@ -177,7 +199,7 @@ def _sentence_contexts(script: str, cues: list[dict]) -> list[str]:
 
 
 def align_cues(
-    script: str, cues: list[dict], targets: list[dict]
+    script: str, cues: list[dict], targets: list[dict], *, suppress_automatic: bool = False
 ) -> tuple[list[dict], dict]:
     """Decode a page sequence with lexical anchors and a no-focus state.
 
@@ -196,7 +218,7 @@ def align_cues(
         why = {key: "local_text" for key in scores}
         chosen = str(cue.get("target_id") or "")
         manual = cue.get("manual") is True or cue.get("reviewed") is True
-        overview = bool(_OVERVIEW.match(value) or _OVERVIEW.match(compact(context)))
+        suppression = no_focus_reason(text, context, cue)
         mentions = [
             (pos, -length, str(t["id"]))
             for t in indexed
@@ -217,15 +239,14 @@ def align_cues(
             why = {key: "manual" for key in scores}
             fixed.append(True)
         elif (
-            overview
-            or (cue.get("action") == "clear" and not direct)
+            suppress_automatic or suppression
             or (
                 _TRANSITION.match(value)
                 and not direct
                 and max(scores.values(), default=0) < 0.38
             )
         ):
-            scores, why = {"": 1.0}, {"": "overview_or_clear"}
+            scores, why = {"": 1.0}, {"": "page_overview" if suppress_automatic else suppression or "overview_or_clear"}
             fixed.append(True)
         elif direct:
             detail = max(indexed, key=lambda t: scores[str(t["id"])])
@@ -363,7 +384,7 @@ def align_cues(
         focused += bool(state)
         accepted += bool(state) and reason != "manual"
         manual_count += reason == "manual"
-        intentional_clear += reason == "overview_or_clear"
+        intentional_clear += reason in {"overview_or_clear", "page_overview", "explicit_clear", "discourse_without_local_reference"}
         if not state and reason == "insufficient_evidence":
             anomalies.append(
                 {

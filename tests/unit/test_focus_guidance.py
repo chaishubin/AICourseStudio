@@ -310,3 +310,26 @@ def test_spotlight_multiple_targets_share_one_clear_region():
     assert len(layers) == 5
     for layer in layers:
         layer.close()
+
+
+def test_exported_video_applies_page_visibility_without_mutating_saved_events(tmp_path, monkeypatch):
+    from PIL import Image
+    from vidppt.core.models import ProcessConfig
+    image_path = tmp_path / 'slide.png'
+    Image.new('RGB', (160, 90), 'white').save(image_path)
+    config = ProcessConfig(input_path=image_path, output_dir=tmp_path, video_width=160, video_height=90)
+    events = [
+        {'start': 0, 'end': 1, 'target_ids': ['a']},
+        {'start': 1, 'end': 2, 'target_ids': ['b'], 'manual': True},
+    ]
+    captured = []
+    monkeypatch.setattr(VideoComposer, '_focus_layers', lambda targets, track, *args: captured.append(track) or [])
+    for mode, expected in [('off', []), ('manual', [events[1]]), ('auto', events)]:
+        clip = VideoComposer._image_clip(image_path, 2, config, metadata={
+            'focus_mode': mode, 'focus_events': events, 'focus_targets': []
+        })
+        try:
+            assert captured[-1] == expected
+            assert len(events) == 2
+        finally:
+            clip.close()

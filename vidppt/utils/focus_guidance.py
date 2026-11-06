@@ -13,7 +13,7 @@ from .subtitle_rules import subtitle_chunks
 from .focus_alignment import align_cues
 
 
-FOCUS_CUES_VERSION = 8
+FOCUS_CUES_VERSION = 9
 _QUOTED_ENGLISH = re.compile(r"""[‘“'"]([A-Za-z]+(?: +[A-Za-z]+)+)[’”'"]""")
 _MIN_VISIBLE_FOCUS_CONFIDENCE = 0.34
 _IGNORED_TEXT = {
@@ -102,6 +102,7 @@ def plan_page_focus(
     annotated_cues: list[dict] | None = None,
     *,
     page_context: str = "",
+    page_kind: str = "",
     previous_target_id: str = "",
 ) -> tuple[list[dict], dict]:
     """Plan a page using local concepts and a shared subtitle/audio timeline.
@@ -122,7 +123,12 @@ def plan_page_focus(
     cues = normalize_focus_cues(annotated_cues, script, targets)
     if not cues and str(script or "").strip():
         cues = [{"text": unit, "source": "fallback"} for unit in _narration_units(script)]
-    return align_cues(script, cues, targets)
+    # Page titles only suppress overview pages; they never supply match evidence.
+    overview_page = page_kind in {"cover", "section", "summary", "ending"} or bool(re.fullmatch(
+        r"(?:封面|课程导入|课程概览|目录|章节过渡|结束(?:语|页)?|谢谢(?:大家|观看)?|感谢观看|本课小结|课程总结)",
+        str(page_context or "").strip(),
+    ))
+    return align_cues(script, cues, targets, suppress_automatic=overview_page)
 
 
 def validate_focus_events(events: list[dict], targets: list[dict], duration: float) -> list[dict]:
@@ -298,6 +304,8 @@ def normalize_focus_cues(raw_cues, script: str, targets: list[dict]) -> list[dic
             cue["target_id"] = str(raw.get("target_id") or "")
             if raw.get("manual") is True:
                 cue["manual"] = True
+                if raw.get("focus_mode") in {"off", "target"}:
+                    cue["focus_mode"] = raw["focus_mode"]
             if raw.get("source") == "llm":
                 cue["source"] = "llm"
     return automatic
@@ -404,8 +412,11 @@ def rebuild_focus_events(cues: list[dict], existing: list[dict] | None = None) -
     """
     from vidppt.core.cue_timeline import focus_events_from_cues
 
+    # Cue choices follow regenerated speech timestamps, not their old seconds.
+    # Independently calibrated intervals retain their explicit time boundaries.
     manual = [dict(event) for event in existing or []
-              if event.get('manual') or event.get('reviewed')]
+              if (event.get('manual') or event.get('reviewed'))
+              and event.get('binding') != 'cue']
     timed = []
     previous = 0.0
     for cue in cues:
@@ -418,6 +429,9 @@ def rebuild_focus_events(cues: list[dict], existing: list[dict] | None = None) -
         timed.append({**cue, 'start': start, 'end': end})
         previous = end
     automatic = focus_events_from_cues(timed)
+    for event in automatic:
+        if event.get('manual') or event.get('reviewed'):
+            event['binding'] = 'cue'
     if not manual:
         return automatic if timed else None
     # Subtract manually controlled spans from the automatic track. Preserve

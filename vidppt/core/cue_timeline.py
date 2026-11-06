@@ -9,6 +9,15 @@ from pathlib import Path
 CUE_TIMELINE_VERSION = 2
 
 
+def select_focus_events(events: list[dict], mode: str = "auto") -> list[dict]:
+    """Apply page visibility without deleting saved mappings or calibration."""
+    if mode == "off":
+        return []
+    if mode == "manual":
+        return [event for event in events if event.get("manual") or event.get("reviewed")]
+    return events
+
+
 def build_cue_timeline(pages: list[dict], *, focus_smoothing_seconds: float = 0.0) -> dict:
     """Build a course-global timeline from page-local narration cues."""
     course_cursor = 0.0
@@ -51,11 +60,11 @@ def build_cue_timeline(pages: list[dict], *, focus_smoothing_seconds: float = 0.
                 "reviewed": bool(cue.get("reviewed") or cue.get("manual")),
                 **{key: cue[key] for key in (
                     "action", "teaching_stage", "knowledge_point_id", "model_target_id",
-                    "original_target_id", "confidence_kind", "evidence",
+                    "original_target_id", "confidence_kind", "evidence", "focus_mode",
                 ) if key in cue},
             })
         if "focus_events" in page:
-            for event in page["focus_events"]:
+            for event in select_focus_events(page["focus_events"], page.get("focus_mode", "auto")):
                 start = max(0.0, float(event["start"]))
                 end = min(duration, float(event["end"]))
                 if end <= start:
@@ -67,9 +76,9 @@ def build_cue_timeline(pages: list[dict], *, focus_smoothing_seconds: float = 0.
                     "end": round(course_cursor + end, 3),
                 })
         else:
-            explicit_focus.extend(focus_events_from_cues([
+            explicit_focus.extend(select_focus_events(focus_events_from_cues([
                 cue for cue in timeline_cues if cue["page_number"] == page_number
-            ]))
+            ]), page.get("focus_mode", "auto")))
         course_cursor += duration
     return {
         "version": CUE_TIMELINE_VERSION,
@@ -93,12 +102,14 @@ def focus_events_from_cues(cues: list[dict]) -> list[dict]:
             continue
         event = {key: cue[key] for key in (
             "page_number", "slide_id", "start", "end", "page_start", "page_end",
-            "mapping_source", "timing_source", "confidence", "reviewed", "manual", "needs_review"
+            "mapping_source", "timing_source", "confidence", "reviewed", "manual", "needs_review", "binding"
         ) if key in cue}
         event["target_ids"] = ids
         if (events and events[-1].get("page_number") == event.get("page_number")
                 and events[-1]["target_ids"] == ids
                 and events[-1].get("reviewed", False) == event.get("reviewed", False)
+                and bool(events[-1].get("manual")) == bool(event.get("manual"))
+                and events[-1].get("binding") == event.get("binding")
                 and abs(float(events[-1]["end"]) - float(event["start"])) < 0.000001):
             events[-1]["end"] = event["end"]
             if "confidence" in event and "confidence" in events[-1]:

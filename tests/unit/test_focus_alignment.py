@@ -442,3 +442,78 @@ def test_fresh_generation_annotations_are_resolved_before_planning(binding):
     cue = plans[0]["cues"][0]
     assert cue["target_id"] == "case"
     assert cue["model_target_id"] == "case"
+
+
+@pytest.mark.parametrize('script', [
+    '本页介绍梯形图。',
+    '欢迎学习梯形图。',
+    '接下来我们进入梯形图章节。',
+    '请思考一下梯形图。',
+    '总结一下，梯形图是本课的重点。',
+])
+def test_discourse_does_not_highlight_even_when_it_mentions_a_visible_term(script):
+    cues, report = plan_page_focus(script, [{'id': 'a', 'text': '梯形图'}])
+    assert all(not cue['target_id'] for cue in cues)
+    assert report['intentional_clear_count'] > 0
+
+
+@pytest.mark.parametrize('script', [
+    '下面看右侧的梯形图。',
+    '因此，梯形图适合表达继电器电路。',
+    '例如，梯形图可以用来实现电机启停。',
+    '总结一下右侧的梯形图。',
+])
+def test_local_explanations_keep_focus_despite_discourse_words(script):
+    cues, _ = plan_page_focus(script, [{'id': 'a', 'text': '梯形图'}])
+    assert any(cue['target_id'] == 'a' for cue in cues)
+
+
+def test_clear_annotation_and_manual_override_take_precedence_over_term_matching():
+    script = '梯形图。'
+    targets = [{'id': 'a', 'text': '梯形图'}]
+    raw = [{'text': script, 'action': 'clear', 'source': 'llm', 'target_id': 'a'}]
+    assert plan_page_focus(script, targets, raw)[0][0]['target_id'] == ''
+    raw[0].update(manual=True)
+    assert plan_page_focus(script, targets, raw)[0][0]['target_id'] == 'a'
+
+
+def test_overview_page_suppression_preserves_manual_choices_and_audio_boundaries():
+    targets = [{'id': 'a', 'text': '梯形图'}]
+    raw = [{'text': '梯形图。', 'start': 1, 'end': 3, 'subtitle_unit': True, 'target_id': 'a'}]
+    cue = plan_page_focus('梯形图。', targets, raw, page_context='课程总结')[0][0]
+    assert cue['target_id'] == ''
+    assert (cue['start'], cue['end']) == (1, 3)
+    raw[0]['manual'] = True
+    assert plan_page_focus('梯形图。', targets, raw, page_context='课程总结')[0][0]['target_id'] == 'a'
+
+
+def test_cue_bound_clear_tracks_new_tts_times_without_masking_neighboring_cues():
+    cues = [
+        {'text': '不聚焦', 'target_id': '', 'manual': True, 'start': 1, 'end': 2},
+        {'text': '讲解', 'target_id': 'a', 'start': 2, 'end': 4},
+    ]
+    old = [{'start': 1, 'end': 3, 'target_ids': [], 'manual': True, 'binding': 'cue'}]
+    events = rebuild_focus_events(cues, old)
+    assert [(e['start'], e['end'], e['target_ids']) for e in events] == [(2, 4, ['a'])]
+
+
+@pytest.mark.parametrize('kind', ['cover', 'section', 'summary', 'ending'])
+def test_page_layout_suppresses_automatic_focus_independently_of_title(kind):
+    cues, _ = plan_page_focus('梯形图。', [{'id': 'a', 'text': '梯形图'}], page_context='电机控制', page_kind=kind)
+    assert cues[0]['target_id'] == ''
+
+
+def test_repeated_rebuilds_keep_cue_choices_bound_to_regenerated_speech():
+    cues = [
+        {'text': '第一句', 'target_id': 'a', 'start': 0, 'end': 2},
+        {'text': '第二句', 'target_id': 'b', 'start': 2, 'end': 4, 'manual': True},
+    ]
+    old = rebuild_focus_events(cues)
+    assert old[-1]['binding'] == 'cue'
+    cues[0]['end'] = 3
+    cues[1].update(start=3, end=6)
+    refreshed = rebuild_focus_events(cues, old)
+    assert [(e['start'], e['end'], e['target_ids']) for e in refreshed] == [
+        (0, 3, ['a']), (3, 6, ['b'])
+    ]
+    assert rebuild_focus_events(cues, refreshed) == refreshed

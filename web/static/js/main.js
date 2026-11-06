@@ -3557,6 +3557,8 @@ class AICourseStudioApp {
                     </div>
                 </div>
             `;
+            card._focusMode = page.focus_mode || 'auto';
+            card._focusEventsManualClear = Boolean(page.focus_events_manual_clear);
             card._focusTargets = Array.isArray(page.focus_targets) ? page.focus_targets : [];
             card._focusCues = Array.isArray(page.focus_cues) ? page.focus_cues : [];
             card._focusEvents = Array.isArray(page.focus_events) ? page.focus_events : null;
@@ -4093,7 +4095,8 @@ class AICourseStudioApp {
         if (sample) sample.hidden = !text;
         if (text) this.renderSubtitlePreviewImage(card, text);
         const events = card._focusEvents ?? this.previewFocusEvents(card._focusCues || []);
-        const smoothed = this.smoothPreviewFocusEvents(events, Number(this.elements.focusSmoothingSeconds?.value || 0));
+        const visibleEvents = this.visibleCourseFocusEvents(card, events);
+        const smoothed = this.smoothPreviewFocusEvents(visibleEvents, Number(this.elements.focusSmoothingSeconds?.value || 0));
         const focus = smoothed.find(event => audio.currentTime >= event.start && audio.currentTime < event.end);
         card.querySelectorAll('.course-focus-target').forEach(node => {
             node.classList.toggle('active', Boolean(focus) && (focus.target_ids || [focus.target_id]).includes(node.dataset.targetId));
@@ -4103,13 +4106,15 @@ class AICourseStudioApp {
     previewFocusEvents(cues) {
         const events = [];
         cues.forEach(cue => {
-            if (!cue.target_id || !Number.isFinite(cue.start) || !Number.isFinite(cue.end)) return;
+            const ids = cue.target_ids || (cue.target_id ? [cue.target_id] : []);
+            const manual = Boolean(cue.manual || cue.reviewed);
+            if (!ids.length || !Number.isFinite(cue.start) || !Number.isFinite(cue.end)) return;
             const previous = events[events.length - 1];
-            if (previous && previous.target_id === cue.target_id
-                && previous.manual === Boolean(cue.manual) && previous.end === cue.start) {
+            if (previous && JSON.stringify(previous.target_ids) === JSON.stringify(ids)
+                && previous.manual === manual && previous.end === cue.start) {
                 previous.end = cue.end;
             } else {
-                events.push({ start: cue.start, end: cue.end, target_id: cue.target_id, manual: Boolean(cue.manual), mapping_source: cue.mapping_source || cue.source || 'fallback', confidence: cue.confidence });
+                events.push({ start: cue.start, end: cue.end, target_id: cue.target_id, target_ids: ids, manual, mapping_source: cue.mapping_source || cue.source || 'fallback', confidence: cue.confidence });
             }
         });
         return events;
@@ -4137,13 +4142,35 @@ class AICourseStudioApp {
         return result;
     }
 
+    visibleCourseFocusEvents(card, events) {
+        if (card._focusMode === 'off') return [];
+        if (card._focusMode === 'manual') return events.filter(event => event.manual || event.reviewed);
+        return events;
+    }
+
+    scheduleCourseFocusSave() {
+        this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
+        this.elements.coursePreviewSaveState.classList.remove('saved');
+        clearTimeout(this.previewAutoSaveTimer);
+        this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+    }
+
     updateCourseFocusCueTarget(card, index, targetId) {
         const cue = card._focusCues[index];
+        const automatic = targetId === null;
         const targetIds = targetId ? [targetId] : [];
+        const updated = { ...cue };
+        if (automatic) {
+            for (const key of ['anchor_id', 'model_target_id', 'action', 'original_target_id', 'reviewed']) delete updated[key];
+        }
         card._focusCues[index] = {
-            ...cue, target_id: targetId, anchor_id: targetId, target_ids: targetIds,
-            confidence: 1, source: 'manual', mapping_source: 'manual', manual: true
+            ...updated, target_id: targetId || '', target_ids: targetIds,
+            focus_mode: automatic ? 'auto' : targetId ? 'target' : 'off',
+            confidence: automatic ? 0 : 1, source: automatic ? 'fallback' : 'manual',
+            mapping_source: automatic ? 'automatic' : 'manual', manual: !automatic
         };
+        if (!automatic) card._focusCues[index].anchor_id = targetId;
+        card._focusEventsManualClear = false;
         if (!Array.isArray(card._focusEvents)
             || !Number.isFinite(cue.start) || !Number.isFinite(cue.end)
             || cue.end <= cue.start) return;
@@ -4155,8 +4182,9 @@ class AICourseStudioApp {
             if (event.end > cue.end) remaining.push({ ...event, start: cue.end });
             return remaining;
         });
-        events.push({
+        if (!automatic) events.push({
             start: cue.start, end: cue.end, target_ids: targetIds,
+            binding: 'cue',
             reviewed: true, manual: true, needs_review: false,
             mapping_source: 'manual', confidence: 1
         });
@@ -4183,34 +4211,57 @@ class AICourseStudioApp {
             box.style.height = `${Number(target.height || 0) * 100}%`;
             overlayRoot.appendChild(box);
         });
+        editor.innerHTML = '<strong>讲解焦点与校准</strong>';
+        const controls = document.createElement('label');
+        controls.className = 'course-focus-mode-control';
+        controls.innerHTML = `本页焦点
+            <select aria-label="本页讲解焦点模式">
+                <option value="auto">自动判断</option>
+                <option value="off">整页不显示</option>
+                <option value="manual">仅显示手动指定</option>
+            </select>`;
+        const modeSelect = controls.querySelector('select');
+        modeSelect.value = card._focusMode || 'auto';
+        modeSelect.addEventListener('change', () => {
+            card._focusMode = modeSelect.value;
+            this.renderCourseFocusEditor(card);
+            this.scheduleCourseFocusSave();
+        });
+        editor.appendChild(controls);
+        const hint = document.createElement('span');
+        hint.textContent = card._focusMode === 'off'
+            ? '本页视频和预览均不显示焦点；原有校准已保留。'
+            : card._focusMode === 'manual'
+                ? '仅显示手动指定的片段或时间区间，其余内容不显示焦点。'
+                : '概述、过渡和无明确对应位置的讲解不显示焦点；可逐条覆盖自动判断。';
+        editor.appendChild(hint);
         if (!targets.length) {
-            editor.innerHTML = '<span class="course-focus-empty">本页未识别到可跟随的文字元素</span>';
+            const empty = document.createElement('span');
+            empty.className = 'course-focus-empty';
+            empty.textContent = '本页未识别到可跟随的文字元素';
+            editor.appendChild(empty);
             return;
         }
-        editor.innerHTML = '<strong>讲解焦点校准</strong><span>逐条确认声音对应的页面位置</span>';
         cues.forEach((cue, index) => {
             const row = document.createElement('label');
             row.className = 'course-focus-cue-row';
+            const manual = Boolean(cue.manual || cue.reviewed);
             const cueMode = cue.target_id
                 ? (['segment_audio', 'tts_word_boundary'].includes(cue.timing_source) ? '锚点 · 真实音频时间' : '锚点 · 待生成时间')
                 : '仅同步讲稿 · 不强行框选';
             row.innerHTML = `
-                <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}<small>${cueMode}</small></span>
+                <span>${this._esc(cue.text || `讲解片段 ${index + 1}`)}<small>${manual ? '手动' : '自动'} · ${cueMode}</small></span>
                 <select aria-label="讲解片段 ${index + 1} 对应位置">
-                    <option value="" ${cue.target_id ? '' : 'selected'}>手动设为整页（不聚焦）</option>
-                    ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
+                    <option value="__auto__" ${manual ? '' : 'selected'}>自动判断${!manual ? (card._focusMode === 'off' ? '（整页已关闭）' : card._focusMode === 'manual' || !cue.target_id ? '（当前不显示）' : '（当前显示）') : ''}</option>
+                    <option value="" ${manual && !cue.target_id ? 'selected' : ''}>此片段不显示焦点</option>
+                    ${targets.map(target => `<option value="${this._escAttr(target.id)}" ${manual && target.id === cue.target_id ? 'selected' : ''}>${this._esc(target.text || target.id)}</option>`).join('')}
                 </select>
             `;
             row.querySelector('select').addEventListener('change', event => {
-                this.updateCourseFocusCueTarget(card, index, event.target.value);
+                this.updateCourseFocusCueTarget(card, index, event.target.value === '__auto__' ? null : event.target.value);
                 this.renderCourseFocusEditor(card);
                 if (this.coursePreviewSubtitlePage !== card) this.syncCourseFocusCue(card, index);
-                this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
-                clearTimeout(this.previewAutoSaveTimer);
-                this.previewAutoSaveTimer = setTimeout(
-                    () => this.savePreviewScripts({ automatic: true }),
-                    400
-                );
+                this.scheduleCourseFocusSave();
             });
             const seek = document.createElement('button');
             seek.type = 'button';
@@ -4229,7 +4280,7 @@ class AICourseStudioApp {
             editor.appendChild(row);
         });
         const events = card._focusEvents ?? this.previewFocusEvents(cues).map(event => ({
-            start: event.start, end: event.end, target_ids: [event.target_id],
+            start: event.start, end: event.end, target_ids: event.target_ids || [event.target_id],
             reviewed: event.manual, mapping_source: event.mapping_source, confidence: event.confidence
         }));
         {
@@ -4261,24 +4312,24 @@ class AICourseStudioApp {
                         return;
                     }
                     events[index] = {
-                        ...item, start, end,
+                        ...item, start, end, binding: 'interval',
                         target_ids: Array.from(row.querySelector('select').selectedOptions, option => option.value),
                         reviewed: true, manual: true, needs_review: false, mapping_source: 'manual', confidence: 1
                     };
                     card._focusEvents = events;
-                    this.elements.coursePreviewSaveState.textContent = '等待自动保存…';
-                    clearTimeout(this.previewAutoSaveTimer);
-                    this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+                    card._focusEventsManualClear = false;
+                    this.scheduleCourseFocusSave();
                 });
                 const remove = document.createElement('button');
                 remove.type = 'button';
-                remove.textContent = '删除';
+                remove.textContent = '不显示';
                 remove.addEventListener('click', () => {
-                    events.splice(index, 1);
+                    // Preserve this deletion as an explicit no-focus interval.
+                    events[index] = { ...item, binding: 'interval', target_ids: [], manual: true, reviewed: true, mapping_source: 'manual' };
                     card._focusEvents = events;
+                    card._focusEventsManualClear = false;
                     this.renderCourseFocusEditor(card);
-                    clearTimeout(this.previewAutoSaveTimer);
-                    this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+                    this.scheduleCourseFocusSave();
                 });
                 row.appendChild(remove);
                 editor.appendChild(row);
@@ -4303,14 +4354,14 @@ class AICourseStudioApp {
                     return;
                 }
                 events.push({
-                    start, end, target_ids: [], reviewed: true,
+                    start, end, target_ids: [], reviewed: true, binding: 'interval',
                     manual: true, mapping_source: 'manual', confidence: 1
                 });
                 events.sort((a, b) => a.start - b.start);
                 card._focusEvents = events;
+                card._focusEventsManualClear = false;
                 this.renderCourseFocusEditor(card);
-                clearTimeout(this.previewAutoSaveTimer);
-                this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 400);
+                this.scheduleCourseFocusSave();
             });
             editor.appendChild(add);
         }
@@ -4318,7 +4369,8 @@ class AICourseStudioApp {
 
     syncCourseFocusCue(card, cueIndex) {
         if (!card) return;
-        const cue = (card._focusCues || [])[cueIndex];
+        const candidate = (card._focusCues || [])[cueIndex];
+        const cue = this.visibleCourseFocusEvents(card, candidate ? [candidate] : [])[0];
         card.querySelectorAll('.course-focus-target').forEach(node => {
             node.classList.toggle('active', Boolean(cue) && node.dataset.targetId === cue.target_id);
         });
@@ -4470,7 +4522,9 @@ class AICourseStudioApp {
             page_number: Number(card.dataset.pageNumber),
             script: card.querySelector('.course-preview-script').value,
             reviewed: card.querySelector('.page-reviewed').checked,
+            focus_mode: card._focusMode || 'auto',
             focus_cues: card._focusCues || [],
+            focus_events_manual_clear: Boolean(card._focusEventsManualClear),
             ...(card._focusEvents !== null ? { focus_events: card._focusEvents } : {})
         }));
     }
@@ -4730,6 +4784,8 @@ class AICourseStudioApp {
             (data.pages || []).forEach(page => {
                 const card = this.previewCardByPage(page.page_number);
                 if (!card) return;
+                card._focusMode = page.focus_mode || 'auto';
+                card._focusEventsManualClear = Boolean(page.focus_events_manual_clear);
                 card._focusCues = page.focus_cues || [];
                 card._focusEvents = page.focus_events || null;
                 card.dataset.estimatedSeconds = String(page.estimated_seconds || 0);

@@ -115,3 +115,53 @@ def test_invalid_cut_settings_do_not_save_script(preview_task):
     })
     assert response.status_code == 400
     assert path.read_bytes() == before
+
+
+def test_page_focus_mode_roundtrips_without_erasing_calibration(preview_task):
+    app, path, course_path = preview_task
+    preview = json.loads(path.read_text())
+    page = preview['pages'][0]
+    page['focus_cues'][0].update(start=0, end=4, target_id='box', subtitle_unit=True)
+    manual = {'start': 1, 'end': 2, 'target_ids': [], 'manual': True}
+    page['focus_events'] = [manual]
+    path.write_text(json.dumps(preview))
+    client = app.app.test_client()
+    for mode in ['off', 'manual', 'auto']:
+        result = client.patch('/api/course-preview/sync-task', json={
+            'pages': [{'page_number': 1, 'script': '原讲稿。', 'focus_mode': mode}]
+        })
+        assert result.status_code == 200
+        saved = result.get_json()['pages'][0]
+        assert saved['focus_mode'] == mode
+        assert any(e.get('manual') and e['target_ids'] == [] for e in saved['focus_events'])
+        assert json.loads(course_path.read_text())['sections'][0]['metadata']['focus_mode'] == mode
+
+
+def test_resetting_cue_to_auto_does_not_retain_a_stale_clear_interval(preview_task):
+    app, path, _ = preview_task
+    preview = json.loads(path.read_text())
+    page = preview['pages'][0]
+    page['script'] = '课程内容。'
+    page['focus_cues'] = [{'text': '课程内容。', 'start': 0, 'end': 4, 'subtitle_unit': True,
+                           'target_id': '', 'manual': True}]
+    page['focus_events'] = [{'start': 0, 'end': 4, 'target_ids': [], 'manual': True}]
+    path.write_text(json.dumps(preview))
+    result = app.app.test_client().patch('/api/course-preview/sync-task', json={
+        'pages': [{'page_number': 1, 'script': '课程内容。',
+                   'focus_cues': [{'text': '课程内容。', 'start': 0, 'end': 4, 'subtitle_unit': True,
+                                   'manual': False, 'source': 'fallback', 'target_id': ''}],
+                   'focus_events': [], 'focus_events_manual_clear': False}]
+    })
+    assert result.status_code == 200
+    page = result.get_json()['pages'][0]
+    assert page['focus_cues'][0]['target_id'] == 'box'
+    assert page['focus_events'][0]['target_ids'] == ['box']
+    assert page['focus_events_manual_clear'] is False
+
+
+def test_invalid_focus_mode_is_rejected(preview_task):
+    app, _, _ = preview_task
+    result = app.app.test_client().patch('/api/course-preview/sync-task', json={
+        'pages': [{'page_number': 1, 'focus_mode': 'invalid'}]
+    })
+    assert result.status_code == 400

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const source = await readFile(new URL('../../web/static/js/main.js', import.meta.url), 'utf8');
-const methods = source.slice(source.indexOf('    updateCourseFocusCueTarget('), source.indexOf('    syncCourseFocusCue('));
+const methods = source.slice(source.indexOf('    visibleCourseFocusEvents('), source.indexOf('    syncCourseFocusCue('));
 const { Preview } = await import(`data:text/javascript,${encodeURIComponent(`export class Preview { ${methods} }`)}`);
 
 function card(events) {
@@ -65,7 +65,35 @@ test('cue mapping stays enabled with an independent focus timeline', () => {
     page._focusTargets = [{ id: 'old', text: '原位置' }, { id: 'new', text: '新位置' }];
     page.querySelector = selector => selector === '.course-focus-overlays' ? overlay : editor;
     app.renderCourseFocusEditor(page);
-    const row = editor.children[0];
+    const row = editor.children.find(node => node.className === 'course-focus-cue-row');
     assert.notEqual(row.select.disabled, true);
     assert.equal(row.children[0].className, 'course-focus-cue-seek');
+});
+
+test('restoring automatic mapping removes only that interval override', () => {
+    const app = new Preview();
+    const page = card([
+        { start: 0, end: 6, target_ids: ['old'], manual: true },
+        { start: 6, end: 8, target_ids: ['other'], manual: true }
+    ]);
+    page._focusCues[0].action = 'clear';
+    page._focusCues[0].reviewed = true;
+    app.updateCourseFocusCueTarget(page, 0, null);
+    assert.equal(page._focusCues[0].manual, false);
+    assert.equal(page._focusCues[0].action, undefined);
+    assert.equal(page._focusCues[0].reviewed, undefined);
+    assert.equal(page._focusEventsManualClear, false);
+    assert.deepEqual(page._focusEvents.map(e => [e.start, e.end]), [[0, 2], [4, 6], [6, 8]]);
+});
+
+test('page visibility preserves saved mappings and shows only manual choices when requested', () => {
+    const app = new Preview();
+    const events = [{ target_id: 'auto' }, { target_id: 'manual', manual: true }];
+    const page = { _focusMode: 'off' };
+    assert.deepEqual(app.visibleCourseFocusEvents(page, events), []);
+    page._focusMode = 'manual';
+    assert.deepEqual(app.visibleCourseFocusEvents(page, events), [events[1]]);
+    page._focusMode = 'auto';
+    assert.equal(app.visibleCourseFocusEvents(page, events), events);
+    assert.equal(events.length, 2);
 });

@@ -2785,7 +2785,8 @@ def run_course_generation(
             (section.script or section.title,
              focus_targets_by_page[page.page_number - 1]
              if page.page_number <= len(focus_targets_by_page) else [],
-             section.metadata.get('focus_cues'), section.title)
+             section.metadata.get('focus_cues'), section.title,
+             'cover' if page.page_number == 1 else 'summary' if page.page_number == len(result.course.sections) else section.layout)
             for page, section in zip(preview_content.pages, result.course.sections)
         ])
         preview_path = _write_preview(
@@ -2795,6 +2796,7 @@ def run_course_generation(
                 {
                     'page_number': page.page_number,
                     'title': section.title,
+                    'focus_page_kind': 'cover' if page.page_number == 1 else 'summary' if page.page_number == len(result.course.sections) else section.layout,
                     'image_path': str(page.slide_image),
                     'script': section.script or section.title,
                     'original_script': section.script or section.title,
@@ -2832,9 +2834,10 @@ def _page_title(text: str, page_number: int) -> str:
 def _plan_focus_pages(page_specs: list[tuple]) -> list[dict]:
     """Plan pages independently; shape IDs and focus state are page-scoped."""
     plans = []
-    for script, targets, annotations, page_context in page_specs:
+    for script, targets, annotations, page_context, *kinds in page_specs:
         cues, report = plan_page_focus(
             script, targets, annotations, page_context=page_context,
+            page_kind=kinds[0] if kinds else '',
         )
         plans.append({'cues': cues, 'report': report})
     total = sum(item['report']['cue_count'] for item in plans)
@@ -2959,7 +2962,8 @@ def _ensure_preview_focus(preview: dict) -> bool:
             )
             page['focus_cues'], page['focus_quality'] = plan_page_focus(
                 page.get('script', ''), page.get('focus_targets', []),
-                page.get('focus_cues'),
+                page.get('focus_cues'), page_context=page.get('title', ''),
+                page_kind=page.get('focus_page_kind', ''),
             )
             _refresh_automatic_focus_events(page)
             page['focus_cues_version'] = FOCUS_CUES_VERSION
@@ -3154,6 +3158,8 @@ def _generate_audio_with_focus_segments(
         if page.metadata.get('focus_targets') and _focus_cues_cover_script(saved_cues, page.text):
             saved_cues, page.metadata['focus_quality'] = plan_page_focus(
                 page.text, page.metadata['focus_targets'], saved_cues,
+                page_context=page.metadata.get('title', ''),
+                page_kind=page.metadata.get('focus_page_kind', ''),
             )
             page.metadata['focus_cues'] = saved_cues
             _refresh_automatic_focus_events(page.metadata)
@@ -3193,6 +3199,8 @@ def _generate_audio_with_focus_segments(
         if page.metadata.get('focus_targets'):
             subtitle_cues, page.metadata['focus_quality'] = plan_page_focus(
                 page.text, page.metadata['focus_targets'], subtitle_cues,
+                page_context=page.metadata.get('title', ''),
+                page_kind=page.metadata.get('focus_page_kind', ''),
             )
         page.metadata['focus_cues'] = subtitle_cues
         if subtitle_cues:
@@ -3331,6 +3339,9 @@ def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
                           'focus_targets': page.get('focus_targets', []),
                           'focus_events': page.get('focus_events', []),
                           'focus_events_manual_clear': page.get('focus_events_manual_clear', False),
+                          'focus_mode': page.get('focus_mode', 'auto'),
+                          'title': page.get('title', ''),
+                          'focus_page_kind': page.get('focus_page_kind', ''),
                           'audio_signature': page.get('audio_signature')},
             )
         ])
@@ -3620,8 +3631,17 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         int(item['page_number']): item['focus_events']
         for item in updates if 'page_number' in item and 'focus_events' in item
     }
+    modes_by_page = {
+        int(item['page_number']): item['focus_mode']
+        for item in updates if 'page_number' in item and 'focus_mode' in item
+    }
+    for mode in modes_by_page.values():
+        if mode not in ('auto', 'off', 'manual'):
+            raise ValueError('无效的页面焦点模式')
     for page in preview.get('pages', []):
         page_number = int(page['page_number'])
+        if page_number in modes_by_page:
+            page['focus_mode'] = modes_by_page[page_number]
         if page_number in by_page:
             if page.get('script', '').strip() != by_page[page_number]:
                 changed_pages.add(page_number)
@@ -3638,6 +3658,7 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         page['focus_cues'], page['focus_quality'] = plan_page_focus(
             page.get('script', ''), page.get('focus_targets', []),
             page.get('focus_cues'), page_context=page.get('title', ''),
+            page_kind=page.get('focus_page_kind', ''),
         )
         if page_number in changed_pages:
             page.pop('focus_events_manual_clear', None)
@@ -3681,9 +3702,9 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
                 previous_end = end
                 validated.append({**event, 'start': start, 'end': end, 'target_ids': ids})
             page['focus_events'] = validated
-            page['focus_events_manual_clear'] = not validated
-            if any(not (event.get('manual') or event.get('reviewed')) for event in validated):
-                _refresh_automatic_focus_events(page)
+            update = next(item for item in updates if int(item.get('page_number', 0)) == page_number)
+            page['focus_events_manual_clear'] = not validated and update.get('focus_events_manual_clear', True)
+            _refresh_automatic_focus_events(page)
         else:
             _refresh_automatic_focus_events(page)
         page['focus_cues_version'] = FOCUS_CUES_VERSION
@@ -3726,9 +3747,15 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
             int(page['page_number']): page.get('script', '')
             for page in preview.get('pages', [])
         }
+        preview_pages = {int(page['page_number']): page for page in preview.get('pages', [])}
         for page_number, section in enumerate(course.sections, 1):
             if page_number in scripts:
                 section.script = scripts[page_number]
+                saved_page = preview_pages[page_number]
+                section.metadata['focus_mode'] = saved_page.get('focus_mode', 'auto')
+                section.metadata['focus_cues'] = saved_page.get('focus_cues', [])
+                if 'focus_events' in saved_page:
+                    section.metadata['focus_events'] = saved_page['focus_events']
         course_path.write_text(
             json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
             encoding='utf-8',
@@ -3808,6 +3835,9 @@ def run_media_generation(task_id: str):
                     'audio_signature': page.get('audio_signature'),
                     **({'focus_events': page['focus_events']} if 'focus_events' in page else {}),
                     'focus_events_manual_clear': page.get('focus_events_manual_clear', False),
+                    'focus_mode': page.get('focus_mode', 'auto'),
+                    'title': page.get('title', ''),
+                    'focus_page_kind': page.get('focus_page_kind', ''),
                     'focus_highlight': options.get('focus_highlight', True),
                     'focus_highlight_style': options.get(
                         'focus_highlight_style', 'outline'
@@ -3858,6 +3888,7 @@ def run_media_generation(task_id: str):
                 'script': page.text,
                 'duration': durations_by_page[int(page.page_number)],
                 'cues': page.metadata.get('focus_cues', []),
+                'focus_mode': page.metadata.get('focus_mode', 'auto'),
                 **({'focus_events': page.metadata['focus_events']} if 'focus_events' in page.metadata else {}),
             }
             for page in content.pages
@@ -3940,7 +3971,7 @@ def run_media_generation(task_id: str):
             )
             if generated_page is not None:
                 page['audio_signature'] = generated_page.metadata.get('audio_signature')
-                if not any(event.get('needs_review') for event in page.get('focus_events', [])):
+                if page.get('focus_mode', 'auto') == 'auto' and not any(event.get('needs_review') for event in page.get('focus_events', [])):
                     page['focus_events'] = page_focus_from_timeline(
                         {**cue_timeline, 'focus_events': original_focus_events}, page_number
                     )
@@ -4885,6 +4916,8 @@ def save_course_preview(task_id):
             'script': page.get('script', ''),
             'focus_cues': page.get('focus_cues', []),
             'focus_events': page.get('focus_events'),
+            'focus_events_manual_clear': page.get('focus_events_manual_clear', False),
+            'focus_mode': page.get('focus_mode', 'auto'),
             'lesson_segment': page.get('lesson_segment'),
             'estimated_seconds': round(_estimate_page_duration(page), 1),
         } for page in preview.get('pages', [])],

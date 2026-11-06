@@ -39,8 +39,10 @@ COURSE_PROMPT = """你是一名教学设计师。请把输入教案设计成适�
 3. 根据内容关系选择版式：对照关系用 comparison，步骤用 process，阶段演进用 timeline，
    体系结构用 framework，单一核心结论用 key_point，图文内容用 two_column；
 4. 不要让所有正文页使用同一种版式，相邻页面应有合理的视觉节奏。
-5. focus_cues 必须覆盖整页讲稿，anchor 必须引用本页稳定内容锚点：title 或 bullet-N；
-   即使讲稿是概括、过渡或举例，也要选择最相关锚点，不要自行复述可见文字或输出空目标。
+5. focus_cues 必须覆盖整页讲稿。先判断是否需要引导观众看具体位置，再决定锚点。
+   明确解释页面对象时，anchor 引用 title 或 bullet-N；开场、全页概述、过渡、综合总结、
+   等待思考，以及画面没有对应对象的拓展举例，应使用 action=clear、anchor=""。
+   封面、章节过渡、结束页默认不强调；不得为覆盖讲稿而强行匹配目标。
 6. 每个 focus_cue 同时标注教学阶段、对应知识点序号（bullet-N）和焦点动作；同一对象延续时用 continue，转向对象用 switch，无可定位内容时用 clear。
 """
 
@@ -286,7 +288,7 @@ def _normalize_llm_focus_cues(
             target_text = str(
                 item.get("target_text") or item.get("target") or ""
             ).strip()
-        if text and target_text:
+        if text and (target_text or item.get("action") == "clear"):
             cue = {
                 "text": text,
                 "anchor": anchor or "legacy",
