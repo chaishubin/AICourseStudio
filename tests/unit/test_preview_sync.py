@@ -74,6 +74,40 @@ def test_manual_cuts_keep_ranges_and_refresh_duration(preview_task):
     assert segments[0]['estimated_seconds'] > 100
 
 
+def test_review_fix_status_survives_reload_and_tracks_later_edits(preview_task):
+    app, path, course_path = preview_task
+    preview = json.loads(path.read_text())
+    preview['ai_review'] = {
+        'review_completed': True, 'status': 'warning',
+        'findings': [
+            {'page_number': n, 'message': '需修改', 'replacement_script': f'修复{n}。'}
+            for n in (1, 2)
+        ] + [{'page_number': 0, 'message': '请人工检查课程结构'}],
+    }
+    path.write_text(json.dumps(preview))
+    client = app.app.test_client()
+    for number in (1, 2):
+        response = client.patch('/api/course-preview/sync-task', json={
+            'pages': [{'page_number': number, 'script': f'修复{number}。'}],
+        })
+        assert response.status_code == 200
+        review = response.get_json()['ai_review']
+        assert review['applied_pages'] == list(range(1, number + 1))
+        assert len(review['findings']) == 3
+        assert review['findings'][number - 1]['applied'] is True
+        assert review['status'] == 'pending'  # Applied does not imply QA passed.
+        assert json.loads(path.read_text())['ai_review'] == review
+        assert app.tasks['sync-task']['ai_review'] == review
+    assert json.loads(course_path.read_text())['sections'][1]['script'] == '修复2。'
+    review = client.patch('/api/course-preview/sync-task', json={
+        'pages': [{'page_number': 1, 'script': '再次编辑。'}],
+    }).get_json()['ai_review']
+    assert review['applied_pages'] == [2]
+    assert review['findings'][0]['applied'] is False
+    assert review['findings'][1]['applied'] is True
+    assert review['stale_pages'] == [1, 2]
+
+
 def test_draft_recommendations_refresh_without_overwriting_applied_cuts(preview_task):
     app, path, _ = preview_task
     preview = json.loads(path.read_text())
@@ -165,3 +199,95 @@ def test_invalid_focus_mode_is_rejected(preview_task):
         'pages': [{'page_number': 1, 'focus_mode': 'invalid'}]
     })
     assert result.status_code == 400
+
+
+@pytest.mark.parametrize('engine,voice,vendor_key', [
+    ('edge-tts', 'zh-CN-YunxiNeural', None),
+    ('volcengine', 'zh_male_example', 'voice_type'),
+    ('minimax', 'male-qn-qingse', 'voice_id'),
+])
+def test_voice_change_invalidates_audio_and_preview_uses_saved_voice(
+    preview_task, monkeypatch, engine, voice, vendor_key,
+):
+    app, path, _ = preview_task
+    task = app.tasks['sync-task']
+    task['file_path'] = str(path.parent / 'source.pptx')
+    task['media_options'] = {'tts_engine': 'edge-tts', 'tts_voice': 'old',
+                             'tts_rate': '+0%', 'tts_options': {}}
+    preview = json.loads(path.read_text())
+    preview['ai_review'] = {'status': 'passed', 'review_completed': True, 'findings': []}
+    path.write_text(json.dumps(preview))
+    speech = {'tts_engine': engine, 'voice': voice, 'tts_rate': '-8%',
+              'tts_emotion': 'happy', 'tts_emotion_scale': 3, 'tts_sentence_pause': 260}
+    client = app.app.test_client()
+    response = client.patch('/api/course-preview/sync-task', json={'pages': [], **speech})
+    assert response.status_code == 200
+    assert response.get_json()['speech_changed'] is True
+    assert response.get_json()['ai_review']['status'] == 'passed'
+    assert all(not (path.parent / str(n) / 'audio.mp3').exists() for n in (1, 2, 3))
+    saved = json.loads(path.read_text())
+    assert all('duration' not in page and 'audio_signature' not in page for page in saved['pages'])
+    restored = client.get('/api/course-preview/sync-task').get_json()['speech_settings']
+    assert restored['voice'] == voice
+    assert restored['tts_engine'] == engine
+    if engine == 'volcengine':
+        assert restored['tts_rate'] == '-8%'
+        assert restored['tts_sentence_pause'] == 260
+
+    def generate(content, config):
+        assert config.tts_engine == engine
+        if vendor_key:
+            assert config.tts_options[vendor_key] == voice
+            assert config.tts_voice is None
+        else:
+            assert config.tts_voice == voice
+        (path.parent / '1/audio.mp3').write_bytes(b'new-voice-audio')
+    monkeypatch.setattr(app, '_generate_audio_with_focus_segments', generate)
+    response = client.post('/api/course-preview/sync-task/page-audio', json={'page_number': 1})
+    assert response.status_code == 200
+    assert client.get(response.get_json()['audio_url']).data == b'new-voice-audio'
+    # Re-saving the same settings must preserve the newly generated audio.
+    response = client.patch('/api/course-preview/sync-task', json={'pages': [], **speech})
+    assert response.get_json()['speech_changed'] is False
+    assert (path.parent / '1/audio.mp3').exists()
+
+
+def test_invalid_voice_does_not_save_scripts_or_settings(preview_task):
+    app, path, _ = preview_task
+    before = path.read_bytes()
+    response = app.app.test_client().patch('/api/course-preview/sync-task', json={
+        'pages': [{'page_number': 1, 'script': '不应保存'}],
+        'tts_engine': 'edge-tts', 'voice': '',
+    })
+    assert response.status_code == 400
+    assert path.read_bytes() == before
+
+
+def test_preview_restores_its_saved_media_settings(preview_task):
+    app, _, _ = preview_task
+    client = app.app.test_client()
+    media = {'burn_subtitles': False, 'subtitle_font_size': 42,
+             'packaging_template': 'academic', 'packaging_intro_title': '本课程片头',
+             'enable_intro': False, 'video_width': 1280, 'video_height': 720,
+             'focus_highlight': False, 'focus_smoothing_seconds': 0.5}
+    result = client.patch('/api/course-preview/sync-task', json={'pages': [], 'media_settings': media})
+    assert result.status_code == 200
+    restored = client.get('/api/course-preview/sync-task').get_json()['strategy']
+    for key, value in media.items():
+        assert restored[key] == value
+    options = app.tasks['sync-task']['media_options']
+    assert options['course_packaging']['intro_title'] == '本课程片头'
+    assert options['subtitle_font_size'] == 42
+
+
+def test_skipping_cuts_clears_previously_applied_ranges(preview_task, monkeypatch):
+    app, path, course_path = preview_task
+    monkeypatch.setattr(app.conversion_queue, 'enqueue', lambda *args: None)
+    preview = json.loads(path.read_text())
+    app._apply_lesson_segments_to_course(preview, preview['lesson_segments'])
+    response = app.app.test_client().post('/api/course-continue/sync-task', json={'apply_segments': False})
+    assert response.status_code == 200
+    assert json.loads(path.read_text())['lesson_segments'] == []
+    course = json.loads(course_path.read_text())
+    assert course['metadata']['lesson_segments'] == []
+    assert all('lesson_segment' not in section.get('metadata', {}) for section in course['sections'])

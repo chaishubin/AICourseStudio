@@ -206,12 +206,20 @@
                             <select id="voice-select" class="select-input voice-native-select" aria-hidden="true">
                                 <option value="">正在加载音色...</option>
                             </select>
+                            <label for="voice-gender-filter" class="voice-gender-label">按老师声音筛选</label>
+                            <select id="voice-gender-filter" class="select-input">
+                                <option value="all">全部音色</option>
+                                <option value="male">男老师 · 男声</option>
+                                <option value="female">女老师 · 女声</option>
+                                <option value="unknown">性别未标注</option>
+                            </select>
                             <div class="voice-preview-list" id="voice-preview-list"
                                  role="listbox" aria-label="可试听音色列表">
                                 <div class="voice-list-message">正在加载音色...</div>
                             </div>
                             <input id="custom-voice" class="select-input"
                                    placeholder="可选：输入账户专属/复刻音色 ID">
+                            <small class="course-preview-hint">专属 ID 优先于列表音色；点击列表音色会清空专属 ID。更改音色无需重新生成课程草稿。</small>
                         </div>
                         <div class="option-group" id="volcengine-expression-group" hidden>
                             <label for="tts-emotion">火山表达风格</label>
@@ -258,25 +266,30 @@
                         <div class="option-group video-tuning-group">
                             <div class="video-tuning-heading">
                                 <label>视频合成参数</label>
-                                <button class="advanced-toggle" id="video-advanced-toggle" type="button"
-                                        aria-expanded="false">展开完整参数</button>
+                                <div class="video-tuning-actions">
+                                    <button class="advanced-toggle" id="video-defaults-reset" type="button">一键恢复默认</button>
+                                    <button class="advanced-toggle" id="video-advanced-toggle" type="button"
+                                            aria-expanded="false" aria-controls="video-advanced-options">展开完整参数</button>
+                                </div>
                             </div>
                             <div class="video-tuning-grid">
                                 <label for="video-resolution">分辨率
-                                    <select id="video-resolution" class="select-input">
+                                    <select id="video-resolution" class="select-input" aria-describedby="video-resolution-hint">
                                         <option value="1920x1080" selected>1920x1080 正式网课（16:9）</option>
                                         <option value="1280x720">1280x720 更快预览（16:9）</option>
                                         <option value="854x480">854x480 快速检查</option>
                                     </select>
+                                    <small class="field-hint" id="video-resolution-hint">决定画面清晰度与输出尺寸。正式网课建议 1080p；预览可选 720p 或 480p，加快合成。</small>
                                 </label>
                                 <label for="video-fps">帧率
-                                    <select id="video-fps" class="select-input">
+                                    <select id="video-fps" class="select-input" aria-describedby="video-fps-hint">
                                         <option value="24" selected>24 FPS</option>
                                         <option value="30">30 FPS</option>
                                     </select>
+                                    <small class="field-hint" id="video-fps-hint">每秒画面数量。课件讲解建议 24 FPS；30 FPS 更流畅，合成耗时和文件体积可能增加。</small>
                                 </label>
                                 <label for="video-preset">编码速度
-                                    <select id="video-preset" class="select-input">
+                                    <select id="video-preset" class="select-input" aria-describedby="video-preset-hint">
                                         <option value="ultrafast">ultrafast 最快预览</option>
                                         <option value="superfast">superfast</option>
                                         <option value="veryfast" selected>veryfast 当前默认</option>
@@ -284,59 +297,69 @@
                                         <option value="fast">fast</option>
                                         <option value="medium">medium 更小体积</option>
                                     </select>
+                                    <small class="field-hint" id="video-preset-hint">控制编码速度与压缩效率。ultrafast 适合快速预览；速度越慢，通常文件越小。默认 veryfast。</small>
                                 </label>
                                 <label for="video-crf">画质 CRF
-                                    <input id="video-crf" class="select-input" type="number"
+                                    <input id="video-crf" class="select-input" aria-describedby="video-crf-hint" type="number"
                                            min="18" max="32" step="1" value="21">
+                                    <small class="field-hint" id="video-crf-hint">控制画质与文件体积，范围 18–32。数值越小画质越高、文件越大；默认 21。</small>
                                 </label>
                             </div>
                             <small class="field-hint">视频使用宽屏画布，课件等比居中；4:3 原稿会在两侧留边。需要铺满 16:9 时，请先在 PowerPoint 中调整幻灯片大小并检查排版。正式网课建议 1920x1080。</small>
                             <div class="video-advanced-options" id="video-advanced-options" hidden>
                                 <div class="video-tuning-grid">
                                     <label for="video-codec">视频编码
-                                        <select id="video-codec" class="select-input">
+                                        <select id="video-codec" class="select-input" aria-describedby="video-codec-hint">
                                             <option value="libx264" selected>H.264 / libx264</option>
                                         </select>
+                                        <small class="field-hint" id="video-codec-hint">视频压缩方式。目前使用 H.264，兼顾压缩效率与常见播放器的兼容性。</small>
                                     </label>
                                     <label for="video-pixel-format">像素格式
-                                        <select id="video-pixel-format" class="select-input">
+                                        <select id="video-pixel-format" class="select-input" aria-describedby="video-pixel-format-hint">
                                             <option value="yuv420p" selected>yuv420p</option>
                                         </select>
+                                        <small class="field-hint" id="video-pixel-format-hint">决定颜色采样格式。目前使用 yuv420p，适合常见浏览器和移动设备播放。</small>
                                     </label>
                                     <label for="video-profile">H.264 Profile
-                                        <select id="video-profile" class="select-input">
+                                        <select id="video-profile" class="select-input" aria-describedby="video-profile-hint">
                                             <option value="high" selected>High</option>
                                             <option value="main">Main</option>
                                             <option value="baseline">Baseline</option>
                                         </select>
+                                        <small class="field-hint" id="video-profile-hint">H.264 编码规格。默认 High，压缩效率较好；旧设备可尝试 Main 或 Baseline。</small>
                                     </label>
                                     <label for="video-gop-seconds">GOP 秒数
-                                        <input id="video-gop-seconds" class="select-input" type="number"
+                                        <input id="video-gop-seconds" class="select-input" aria-describedby="video-gop-seconds-hint" type="number"
                                                min="1" max="6" step="1" value="2">
+                                        <small class="field-hint" id="video-gop-seconds-hint">关键帧之间的间隔，范围 1–6 秒。越短越方便拖动定位，但文件可能变大；默认 2 秒。</small>
                                     </label>
                                     <label for="audio-bitrate">音频码率
-                                        <select id="audio-bitrate" class="select-input">
+                                        <select id="audio-bitrate" class="select-input" aria-describedby="audio-bitrate-hint">
                                             <option value="96k">96k</option>
                                             <option value="128k" selected>128k 当前默认</option>
                                             <option value="160k">160k</option>
                                             <option value="192k">192k</option>
                                         </select>
+                                        <small class="field-hint" id="audio-bitrate-hint">每秒音频数据量。越高音质越好、文件越大；讲解人声建议使用默认 128k。</small>
                                     </label>
                                     <label for="audio-sample-rate">采样率
-                                        <select id="audio-sample-rate" class="select-input">
+                                        <select id="audio-sample-rate" class="select-input" aria-describedby="audio-sample-rate-hint">
                                             <option value="44100">44.1 kHz</option>
                                             <option value="48000" selected>48 kHz</option>
                                         </select>
+                                        <small class="field-hint" id="audio-sample-rate-hint">每秒音频采样次数。默认 48 kHz，适合视频制作；44.1 kHz 也可用于一般人声。</small>
                                     </label>
                                     <label for="audio-channels">声道
-                                        <select id="audio-channels" class="select-input">
+                                        <select id="audio-channels" class="select-input" aria-describedby="audio-channels-hint">
                                             <option value="1" selected>单声道</option>
                                             <option value="2">立体声</option>
                                         </select>
+                                        <small class="field-hint" id="audio-channels-hint">单声道适合讲解人声；立体声适合保留左右声场的音乐或素材。默认单声道。</small>
                                     </label>
                                     <label for="audio-loudness-lufs">响度目标 LUFS
-                                        <input id="audio-loudness-lufs" class="select-input" type="number"
+                                        <input id="audio-loudness-lufs" class="select-input" aria-describedby="audio-loudness-lufs-hint" type="number"
                                                min="-24" max="-12" step="0.5" value="-16">
+                                        <small class="field-hint" id="audio-loudness-lufs-hint">统一输出音量，范围 -24 至 -12 LUFS。越接近 0 听感越响；默认 -16 LUFS。</small>
                                     </label>
                                 </div>
                             </div>
@@ -485,12 +508,20 @@
                     <div class="course-preview-header">
                         <div>
                             <h3 class="results-title">确认课程草稿</h3>
-                            <p class="course-preview-hint">逐页核对 PPT、讲稿和字幕效果。需要分段课程时先应用智能切课，也可跳过切课直接继续生成完整视频。</p>
+                            <p class="course-preview-hint">按顺序确认内容与配音、质检、切课和包装，最后继续生成视频。讲稿自动保存；切课建议需点击“应用切课”后生效。</p>
                         </div>
                         <div class="course-preview-status">
                             <span class="course-preview-position" id="course-preview-position"></span>
                             <span class="course-preview-save-state" id="course-preview-save-state"></span>
                         </div>
+                    </div>
+                    <ol class="preview-workflow" aria-label="课程确认操作顺序">
+                        <li>核对讲稿与配音</li><li>质检并应用修复</li><li>按需应用切课</li><li>确认包装与字幕</li><li>生成视频</li>
+                    </ol>
+                    <div class="preview-speech-panel">
+                        <p id="preview-speech-summary" role="status" aria-live="polite"></p>
+                        <a class="btn-preview" href="#tts-engine">调整音色与语速</a>
+                        <span class="course-preview-hint">修改后回到此处播放本页确认。预览展示正文配音与字幕，片头片尾请在课程包装中单独预览。</span>
                     </div>
                     <div class="course-preview-toolbar">
                         <button type="button" class="btn-secondary" id="preview-previous-btn">上一页</button>
@@ -728,7 +759,16 @@
                             </div>
                         </div>
                     </div>
+                    <div class="preview-playback-options">
+                        <label><input type="checkbox" id="preview-autoplay"> 连续播放后续页面</label>
+                        <span>默认只播放本页；播放或准备配音时可随时停止，Esc 也可停止。</span>
+                    </div>
                     <div class="course-preview-pages" id="course-preview-pages"></div>
+                    <div class="preview-playback-dock" id="preview-playback-dock" hidden>
+                        <span id="preview-playback-status" role="status" aria-live="polite"></span>
+                        <button type="button" class="btn-preview" id="preview-locate-btn">查看播放页</button>
+                        <button type="button" class="btn-secondary" id="preview-stop-btn">停止预览（Esc）</button>
+                    </div>
                     <div class="course-duration-estimate" id="course-duration-estimate">
                         <div class="course-duration-total">
                             <span>预计完整视频总时长</span>
@@ -740,8 +780,8 @@
                         <a class="btn-preview" id="download-editable-ppt-btn" href="#">下载并编辑 PPT</a>
                         <input type="file" id="edited-ppt-input" accept=".pptx" hidden>
                         <button class="btn-preview" id="upload-edited-ppt-btn">上传修改后的 PPT</button>
-                        <button class="btn-preview" id="cancel-course-btn">取消并返回生成策略</button>
-                        <button class="btn-preview" id="save-scripts-btn">保存讲稿</button>
+                        <button class="btn-preview" id="cancel-course-btn">放弃草稿，返回策略</button>
+                        <button class="btn-preview" id="save-scripts-btn">保存草稿与生成设置</button>
                         <button class="btn-convert" id="continue-course-btn">
                             <span class="btn-text">继续生成视频</span>
                         </button>

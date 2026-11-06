@@ -67,6 +67,7 @@ class AICourseStudioApp {
 
                 ttsEngine: document.getElementById('tts-engine'),
                 voiceSelect: document.getElementById('voice-select'),
+                voiceGenderFilter: document.getElementById('voice-gender-filter'),
                 voicePreviewList: document.getElementById('voice-preview-list'),
                 customVoice: document.getElementById('custom-voice'),
                 volcengineExpressionGroup: document.getElementById('volcengine-expression-group'),
@@ -93,6 +94,7 @@ class AICourseStudioApp {
                 subtitleOutlineWidth: document.getElementById('subtitle-outline-width'),
                 subtitleOutlineColor: document.getElementById('subtitle-outline-color'),
                 renderEngine: document.getElementById('render-engine'),
+                videoDefaultsReset: document.getElementById('video-defaults-reset'),
                 videoAdvancedToggle: document.getElementById('video-advanced-toggle'),
                 videoAdvancedOptions: document.getElementById('video-advanced-options'),
                 videoResolution: document.getElementById('video-resolution'),
@@ -208,6 +210,11 @@ class AICourseStudioApp {
                 coursePreviewPages: document.getElementById('course-preview-pages'),
                 coursePreviewSaveState: document.getElementById('course-preview-save-state'),
                 coursePreviewPosition: document.getElementById('course-preview-position'),
+                previewAutoplay: document.getElementById('preview-autoplay'),
+                previewPlaybackDock: document.getElementById('preview-playback-dock'),
+                previewPlaybackStatus: document.getElementById('preview-playback-status'),
+                previewStopBtn: document.getElementById('preview-stop-btn'),
+                previewLocateBtn: document.getElementById('preview-locate-btn'),
                 previewPreviousBtn: document.getElementById('preview-previous-btn'),
                 previewNextBtn: document.getElementById('preview-next-btn'),
                 previewPageSelect: document.getElementById('preview-page-select'),
@@ -413,6 +420,19 @@ class AICourseStudioApp {
                 this.saveCurrentStrategy();
             });
         });
+    }
+
+    resetVideoDefaults() {
+        document.querySelectorAll('.video-tuning-group select, .video-tuning-group input').forEach(control => {
+            if (control.tagName === 'SELECT') {
+                const defaultOption = Array.from(control.options).find(option => option.defaultSelected);
+                control.value = (defaultOption || control.options[0]).value;
+            } else {
+                control.value = control.defaultValue;
+            }
+        });
+        this.saveCurrentStrategy();
+        window.VidPPTUI?.toast('视频合成参数已恢复默认', { type: 'success' });
     }
 
     bindSubtitleControls() {
@@ -793,6 +813,7 @@ class AICourseStudioApp {
     }
 
     saveCurrentStrategy() {
+        this.updatePreviewSpeechSummary();
         try {
             localStorage.setItem(
                 this.strategyDraftStorageKey,
@@ -800,6 +821,13 @@ class AICourseStudioApp {
             );
         } catch (error) {
             console.warn('保存当前生成策略失败:', error);
+        }
+        if (this.elements.coursePreviewModule?.dataset.taskId
+            && !this.elements.coursePreviewModule.hidden) {
+            this.elements.coursePreviewSaveState.textContent = '生成设置已修改，等待自动保存…';
+            this.elements.coursePreviewSaveState.classList.remove('saved');
+            clearTimeout(this.previewAutoSaveTimer);
+            this.previewAutoSaveTimer = setTimeout(() => this.savePreviewScripts({ automatic: true }), 1200);
         }
     }
 
@@ -853,6 +881,8 @@ class AICourseStudioApp {
             ttsRate: 'tts_rate',
             ttsEmotionScale: 'tts_emotion_scale',
             ttsSentencePause: 'tts_sentence_pause',
+            focusHighlightStyle: 'focus_highlight_style',
+            focusSmoothingSeconds: 'focus_smoothing_seconds',
             subtitleX: 'subtitle_x',
             subtitleY: 'subtitle_y',
             subtitleWidth: 'subtitle_width',
@@ -893,6 +923,9 @@ class AICourseStudioApp {
         }
         if (strategy.burn_subtitles !== undefined) {
             this.elements.burnSubtitles.checked = Boolean(strategy.burn_subtitles);
+        }
+        if (strategy.focus_highlight !== undefined && this.elements.focusHighlight) {
+            this.elements.focusHighlight.checked = Boolean(strategy.focus_highlight);
         }
         if (strategy.enable_intro !== undefined && this.elements.enableIntro) {
             this.elements.enableIntro.checked = Boolean(strategy.enable_intro);
@@ -985,7 +1018,13 @@ class AICourseStudioApp {
 
         convertBtn.addEventListener('click', () => this.handleConvert());
         renderBtn.addEventListener('click', () => this.handleRender());
+        this.elements.voiceGenderFilter?.addEventListener('change', () => {
+            this.renderVoicePreviewList(this.elements.ttsEngine.value, this.loadedVoices || [], this.elements.voiceSelect.value);
+        });
         ttsEngine.addEventListener('change', async () => {
+            this.elements.customVoice.value = '';
+            this.elements.voiceSelect.value = '';
+            this.pendingVoiceSelection = null;
             await this.loadVoices();
             this.saveCurrentStrategy();
         });
@@ -998,6 +1037,17 @@ class AICourseStudioApp {
         this.elements.cancelCourseBtn.addEventListener('click', () => this.cancelCourse());
         this.elements.saveScriptsBtn.addEventListener('click', () => this.savePreviewScripts());
         this.elements.continueCourseBtn.addEventListener('click', () => this.continueCourse());
+        this.elements.previewStopBtn?.addEventListener('click', () => this.stopCoursePreviewPlayback());
+        this.elements.previewLocateBtn?.addEventListener('click', () => {
+            this.goToPreviewPage(this.coursePreviewActivePage, { focusEditor: false });
+            this.openCoursePreviewStage(this.previewCardByPage(this.coursePreviewActivePage));
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                if (this.coursePreviewSession || this.coursePreviewPlaying) this.stopCoursePreviewPlayback();
+                this.closeCoursePreviewStage();
+            }
+        });
         this.elements.previewPreviousBtn.addEventListener(
             'click', () => this.goToPreviewPage(this.currentPreviewPage - 1)
         );
@@ -1090,6 +1140,7 @@ class AICourseStudioApp {
             });
             if (!expanded) this.toggleLLMMode();
         });
+        this.elements.videoDefaultsReset?.addEventListener('click', () => this.resetVideoDefaults());
         this.elements.videoAdvancedToggle?.addEventListener('click', () => {
             const expanded = this.elements.videoAdvancedToggle.getAttribute('aria-expanded') === 'true';
             this.elements.videoAdvancedToggle.setAttribute('aria-expanded', String(!expanded));
@@ -1147,12 +1198,14 @@ class AICourseStudioApp {
     }
 
     async loadVoices({ preferredVoice = null } = {}) {
+        const request = this.voiceListRequest = {};
         const { ttsEngine, voiceSelect, voicePreviewList } = this.elements;
         preferredVoice = preferredVoice || this.pendingVoiceSelection || voiceSelect.value;
         this.pendingVoiceSelection = null;
         this.elements.volcengineExpressionGroup.hidden =
             ttsEngine.value !== 'volcengine';
         this.stopVoicePreview();
+        this.loadedVoices = [];
         voiceSelect.disabled = true;
         voiceSelect.innerHTML = '<option value="">正在加载对应厂商音色...</option>';
         voicePreviewList.innerHTML = '<div class="voice-list-message">正在加载音色...</div>';
@@ -1160,14 +1213,21 @@ class AICourseStudioApp {
             const engine = ttsEngine.value;
             const response = await fetch(`/api/voices?engine=${encodeURIComponent(engine)}`);
             const data = await response.json();
+            if (this.voiceListRequest !== request) return;
             if (!response.ok) throw new Error(data.error || '加载音色失败');
             const voiceList = data.voices || [];
+            this.loadedVoices = voiceList;
             voiceSelect.innerHTML = '';
-            voiceList.forEach(voice => {
-                const option = document.createElement('option');
-                option.value = voice.id;
-                option.textContent = `${voice.name} · ${voice.id}`;
-                voiceSelect.appendChild(option);
+            this.groupVoicesByGender(voiceList).forEach(group => {
+                const options = document.createElement('optgroup');
+                options.label = group.label;
+                group.voices.forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice.id;
+                    option.textContent = `${voice.name} · ${voice.id}`;
+                    options.appendChild(option);
+                });
+                voiceSelect.appendChild(options);
             });
             const matchedPreferredVoice = voiceList.some(voice => voice.id === preferredVoice);
             this.renderVoicePreviewList(
@@ -1182,12 +1242,37 @@ class AICourseStudioApp {
                 voiceSelect.innerHTML = '<option value="">无公共音色，请输入专属音色 ID</option>';
             }
         } catch (error) {
+            if (this.voiceListRequest !== request) return;
             console.error('加载语音列表失败:', error);
             voiceSelect.innerHTML = '<option value="">加载失败，请输入专属音色 ID</option>';
             voicePreviewList.innerHTML = '<div class="voice-list-message">音色加载失败，请使用专属音色 ID</div>';
         } finally {
-            voiceSelect.disabled = false;
+            if (this.voiceListRequest === request) {
+                voiceSelect.disabled = false;
+                this.updatePreviewSpeechSummary();
+            }
         }
+    }
+
+    voiceGender(voice) {
+        const gender = String(voice.gender || '').trim().toLowerCase();
+        if (['female', '女', '女声'].includes(gender)) return 'female';
+        if (['male', '男', '男声'].includes(gender)) return 'male';
+        const id = String(voice.id || '').toLowerCase();
+        if (/(^|[_\s(-])(female|woman|women|girl|lady)(?=$|[_\s)-])/.test(id)) return 'female';
+        if (/(^|[_\s(-])(male|man|boy|gentleman)(?=$|[_\s)-])/.test(id)) return 'male';
+        if (/女声|女性|女童|女孩|少女|御姐|学姐|学妹|闺蜜|姐姐|萌妹/.test(voice.name || '')) return 'female';
+        if (/男声|男性|男童|男孩|男友|男主播|男主持|弟弟|学弟|学长|少爷/.test(voice.name || '')) return 'male';
+        return 'unknown';
+    }
+
+    groupVoicesByGender(voices) {
+        return [
+            { gender: 'male', label: '男老师 · 男声' },
+            { gender: 'female', label: '女老师 · 女声' },
+            { gender: 'unknown', label: '性别未标注' }
+        ].map(group => ({ ...group, voices: voices.filter(voice => this.voiceGender(voice) === group.gender) }))
+            .filter(group => group.voices.length);
     }
 
     renderVoicePreviewList(engine, voices, selectedVoiceId = null) {
@@ -1204,7 +1289,20 @@ class AICourseStudioApp {
             return 0;
         });
         const selectedVoice = selectedVoiceId || sortedVoices[0]?.id || '';
-        sortedVoices.forEach((voice, index) => {
+        const filter = this.elements.voiceGenderFilter?.value || 'all';
+        let visibleCount = 0;
+        this.groupVoicesByGender(sortedVoices).forEach(group => {
+            if (filter !== 'all' && filter !== group.gender) return;
+            const section = document.createElement('div');
+            section.setAttribute('role', 'group');
+            section.setAttribute('aria-label', group.label);
+            const heading = document.createElement('div');
+            heading.className = 'voice-gender-heading';
+            heading.textContent = `${group.label}（${group.voices.length}）`;
+            section.appendChild(heading);
+            voicePreviewList.appendChild(section);
+            group.voices.forEach(voice => {
+            visibleCount += 1;
             const isFavorite = this.isVoiceFavorite(engine, voice.id);
             const isSelected = voice.id === selectedVoice;
             const voiceNameAttr = this._escAttr(voice.name);
@@ -1239,8 +1337,12 @@ class AICourseStudioApp {
                     );
                 }
             });
-            voicePreviewList.appendChild(item);
+            section.appendChild(item);
+            });
         });
+        if (!visibleCount) {
+            voicePreviewList.innerHTML = '<div class="voice-list-message">当前厂商暂无此类音色，可切换分类或厂商</div>';
+        }
         voiceSelect.value = selectedVoice;
     }
 
@@ -1722,9 +1824,9 @@ class AICourseStudioApp {
             enable_outro: this.elements.enableOutro?.checked ?? true,
             packaging_template: this.elements.packagingTemplate?.value || 'academic',
             packaging_organization: this.elements.packagingOrganization?.value.trim() || '',
-            packaging_department: this.elements.packagingDepartment?.value.trim() || saved.packaging_department || '',
+            packaging_department: this.elements.packagingDepartment?.value.trim() ?? saved.packaging_department ?? '',
             packaging_instructor: this.elements.packagingInstructor?.value.trim() || '',
-            packaging_instructor_title: this.elements.packagingInstructorTitle?.value.trim() || saved.packaging_instructor_title || '',
+            packaging_instructor_title: this.elements.packagingInstructorTitle?.value.trim() ?? saved.packaging_instructor_title ?? '',
             packaging_copyright: saved.packaging_copyright || '',
             packaging_duration_seconds: Number(this.elements.packagingDuration?.value) || 4,
             packaging_transition_seconds: Number(this.elements.packagingTransitionSeconds?.value ?? saved.packaging_transition_seconds ?? 0.35),
@@ -1733,16 +1835,16 @@ class AICourseStudioApp {
             packaging_use_slide_background: this.elements.packagingUseSlideBackground?.checked ?? true,
             packaging_enable_motion: this.elements.packagingEnableMotion?.checked ?? true,
             packaging_enable_music: this.elements.packagingEnableMusic?.checked ?? true,
-            packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() || saved.packaging_intro_label || '在线开放课程',
-            packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() || saved.packaging_intro_title || '',
-            packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() || saved.packaging_intro_subtitle || '',
+            packaging_intro_label: this.elements.packagingIntroLabel?.value.trim() ?? saved.packaging_intro_label ?? '在线开放课程',
+            packaging_intro_title: this.elements.packagingIntroTitle?.value.trim() ?? saved.packaging_intro_title ?? '',
+            packaging_intro_subtitle: this.elements.packagingIntroSubtitle?.value.trim() ?? saved.packaging_intro_subtitle ?? '',
             packaging_intro_duration_seconds: Number(this.elements.packagingIntroDuration?.value) || Number(saved.packaging_intro_duration_seconds) || Number(this.elements.packagingDuration?.value) || 4,
             packaging_mid_title: saved.packaging_mid_title || '章节过渡',
             packaging_mid_subtitle: saved.packaging_mid_subtitle || '',
             packaging_mid_label: saved.packaging_mid_label || '课程继续',
             packaging_mid_duration_seconds: Number(saved.packaging_mid_duration_seconds) || 2.5,
-            packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() || saved.packaging_outro_title || '',
-            packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() || saved.packaging_outro_subtitle || '',
+            packaging_outro_title: this.elements.packagingOutroTitle?.value.trim() ?? saved.packaging_outro_title ?? '',
+            packaging_outro_subtitle: this.elements.packagingOutroSubtitle?.value.trim() ?? saved.packaging_outro_subtitle ?? '',
             packaging_outro_duration_seconds: Number(this.elements.packagingOutroDuration?.value) || Number(saved.packaging_outro_duration_seconds) || Number(this.elements.packagingDuration?.value) || 4,
             packaging_accent_color: this.elements.packagingAccentColor?.value || saved.packaging_accent_color || '#D6A239',
             packaging_background_style: this.elements.packagingBackgroundStyle?.value || saved.packaging_background_style || 'ppt',
@@ -3499,10 +3601,36 @@ class AICourseStudioApp {
 
     // ── Editable course preview ─────────────────────────
     async loadCoursePreview(taskId) {
+        if (this.previewLoading) return;
+        this.previewLoading = true;
         try {
+            const request = this.previewLoadRequest = {};
+            const currentTask = this.elements.coursePreviewModule.dataset.taskId;
+            if (currentTask && currentTask !== taskId && !this.elements.coursePreviewModule.hidden) {
+                clearTimeout(this.previewAutoSaveTimer);
+                if (!await this.savePreviewScripts({ automatic: true })) return;
+            }
+            if (this.previewLoadRequest !== request) return;
+            this.stopCoursePreviewPlayback();
             const response = await fetch(`/api/course-preview/${taskId}`);
             const data = await response.json();
+            if (this.previewLoadRequest !== request) return;
             if (!response.ok) throw new Error(data.error || '加载预览失败');
+            if (data.speech_settings && this.elements.coursePreviewModule.dataset.taskId !== taskId) {
+                if (data.strategy) {
+                    localStorage.setItem(this.strategyDraftStorageKey, JSON.stringify(data.strategy));
+                    this.applyStrategyToControls(data.strategy);
+                }
+                const speech = data.speech_settings;
+                this.elements.ttsEngine.value = speech.tts_engine;
+                this.elements.customVoice.value = '';
+                ['ttsRate', 'ttsEmotion', 'ttsEmotionScale', 'ttsSentencePause'].forEach((key, index) => {
+                    const field = ['tts_rate', 'tts_emotion', 'tts_emotion_scale', 'tts_sentence_pause'][index];
+                    if (this.elements[key]) this.elements[key].value = speech[field];
+                });
+                await this.loadVoices({ preferredVoice: speech.voice });
+            }
+            if (this.previewLoadRequest !== request) return;
             this.smartCutRecommendationOptions = data.segmentation_settings || null;
             this.renderCoursePreview(
                 taskId,
@@ -3514,6 +3642,8 @@ class AICourseStudioApp {
             );
         } catch (error) {
             this.showStatus('error', error.message);
+        } finally {
+            this.previewLoading = false;
         }
     }
 
@@ -3527,6 +3657,7 @@ class AICourseStudioApp {
     ) {
         const { coursePreviewModule, coursePreviewPages, coursePreviewSaveState } = this.elements;
         clearTimeout(this.previewAutoSaveTimer);
+        this.closeCoursePreviewStage();
         this.stopCoursePreviewPlayback(
             '从当前页开始，按页图、讲稿、字幕和配音预览课程效果'
         );
@@ -3535,6 +3666,7 @@ class AICourseStudioApp {
         this.elements.continueCourseBtn.disabled = false;
         coursePreviewModule.dataset.taskId = taskId;
         coursePreviewModule.dataset.qualityMode = qualityMode || 'balanced';
+        this.updatePreviewSpeechSummary();
         this.elements.downloadEditablePptBtn.href = `/api/course-presentation/${taskId}`;
         this.renderCourseReview(aiReview, qualityMode);
         coursePreviewPages.innerHTML = '';
@@ -3548,6 +3680,11 @@ class AICourseStudioApp {
                 ? `<span class="course-preview-segment">第 ${segment.id} 段 · ${this._esc(segment.title || '')}</span>`
                 : '';
             card.innerHTML = `
+                <div class="course-preview-stage">
+                <div class="course-preview-stage-heading">
+                    <span>第 ${page.page_number} 页 · 画面与配音预览</span>
+                    <button type="button" class="btn-preview course-preview-expand" aria-expanded="false">放大预览</button>
+                </div>
                 <div class="course-preview-slide-canvas">
                     <img class="course-preview-image" src="${page.image_url}" alt="第 ${page.page_number} 页">
                     <div class="course-focus-overlays" aria-label="讲解焦点预览"></div>
@@ -3561,6 +3698,7 @@ class AICourseStudioApp {
                     <button type="button" class="btn-secondary course-preview-page-stop" disabled>停止</button>
                     <span class="course-preview-page-player-status">使用本页讲稿预览 PPT、字幕和配音</span>
                     <span class="course-focus-now" aria-live="polite">当前讲解位置将在播放时显示</span>
+                </div>
                 </div>
                 <div class="course-preview-editor">
                     <div class="course-preview-page-title">第 ${page.page_number} 页 · ${this._esc(page.title || '')}${segmentLabel}</div>
@@ -3606,7 +3744,7 @@ class AICourseStudioApp {
                     .map(event => ({ ...event, needs_review: true }));
                 card._focusEvents = manualEvents.length ? manualEvents : null;
                 this.renderCourseFocusEditor(card);
-                this.markCourseReviewStale();
+                this.markCourseReviewStale(page.page_number);
                 updateLength();
                 coursePreviewSaveState.textContent = '等待自动保存…';
                 coursePreviewSaveState.classList.remove('saved');
@@ -3615,6 +3753,13 @@ class AICourseStudioApp {
                     () => this.savePreviewScripts({ automatic: true }),
                     1200
                 );
+            });
+            card.querySelector('.course-preview-expand').addEventListener('click', () => {
+                if (this.expandedPreviewStage === card.querySelector('.course-preview-stage')) {
+                    this.closeCoursePreviewStage();
+                } else {
+                    this.openCoursePreviewStage(card);
+                }
             });
             card.querySelector('.course-preview-page-play').addEventListener(
                 'click', () => this.startCoursePreviewPlayback(page.page_number)
@@ -3634,7 +3779,12 @@ class AICourseStudioApp {
             });
             card.querySelector('.page-retry-tts-button').addEventListener(
                 'click',
-                event => this.retryTaskStage(taskId, 'page_tts', page.page_number, event.currentTarget)
+                async event => {
+                    const button = event.currentTarget;
+                    if (await this.savePreviewScripts({ automatic: true })) {
+                        this.retryTaskStage(taskId, 'page_tts', page.page_number, button);
+                    }
+                }
             );
             this.bindCourseSubtitleOverlayDrag(card.querySelector('.course-preview-subtitle-overlay'));
             coursePreviewPages.appendChild(card);
@@ -3702,11 +3852,12 @@ class AICourseStudioApp {
             review.estimated_cost_cny == null ? '费用未核算' : `约 ${cost.toFixed(4)} 元`,
             pages
         ].filter(Boolean).join(' · ');
-        const findings = completed && Array.isArray(review.findings) ? review.findings : [];
+        const findings = (completed || review.stale) && Array.isArray(review.findings) ? review.findings : [];
         const fixableFindings = findings.filter(item =>
-            Number(item.page_number) > 0 && String(item.replacement_script || '').trim()
+            !item.applied && Number(item.page_number) > 0 && String(item.replacement_script || '').trim()
         );
         this.elements.aiReviewFixAllBtn.hidden = fixableFindings.length === 0;
+        this.elements.aiReviewFixAllBtn.disabled = Boolean(this.courseReviewFixing);
         if (!findings.length) {
             const emptyMessage = !completed
                 ? (status === 'pending' ? '请重新运行 AI 质检' : '质检未完成，无法判断课程质量，请重新运行 AI 质检')
@@ -3715,8 +3866,15 @@ class AICourseStudioApp {
                 `<div class="ai-review-empty">${emptyMessage}</div>`;
             return;
         }
-        this.elements.aiReviewFindings.innerHTML = findings.map((item, index) => `
-            <div class="ai-review-finding ${this._escAttr(item.level || 'info')}"
+        const appliedPages = review.applied_pages || [];
+        const appliedNotice = appliedPages.length ? `
+            <div class="ai-review-applied-notice" role="status">
+                已应用并保存：第 ${appliedPages.map(Number).join('、')} 页讲稿。
+                智能切课时长和自动推荐范围已同步，手动范围保留；继续生成时将使用新讲稿生成配音、字幕，并按当前课程包装设置合成视频。
+                请重新质检确认修复效果。
+            </div>` : '';
+        this.elements.aiReviewFindings.innerHTML = appliedNotice + findings.map((item, index) => `
+            <div class="ai-review-finding ${item.applied ? 'applied' : this._escAttr(item.level || 'info')}"
                  data-page-number="${Number(item.page_number) || 0}">
                 <button type="button" class="ai-review-finding-detail">
                     <span>第 ${Number(item.page_number) || '-'} 页 · ${this._esc(item.category || '内容质量')}</span>
@@ -3724,10 +3882,10 @@ class AICourseStudioApp {
                     ${item.suggestion ? `<small>${this._esc(item.suggestion)}</small>` : ''}
                 </button>
                 ${item.replacement_script ? `
-                    <button type="button" class="ai-review-apply-fix" data-finding-index="${index}">
-                        一键修复本页
+                    <button type="button" class="ai-review-apply-fix" data-finding-index="${index}" ${item.applied || this.courseReviewFixing ? 'disabled' : ''}>
+                        ${item.applied ? '已应用并保存' : '应用讲稿修复'}
                     </button>
-                ` : ''}
+                ` : '<span class="ai-review-manual-fix">需手动处理</span>'}
             </div>
         `).join('');
         this.elements.aiReviewFindings
@@ -3749,11 +3907,13 @@ class AICourseStudioApp {
     }
 
     async applyCourseReviewFixes(findings = null) {
+        if (this.courseReviewFixing) return;
         const source = Array.isArray(findings)
             ? findings
             : (Array.isArray(this.currentAIReview?.findings) ? this.currentAIReview.findings : []);
         const fixesByPage = new Map();
         source.forEach(item => {
+            if (item.applied) return;
             const pageNumber = Number(item.page_number);
             const replacement = String(item.replacement_script || '').trim();
             if (pageNumber > 0 && replacement) fixesByPage.set(pageNumber, replacement);
@@ -3762,24 +3922,43 @@ class AICourseStudioApp {
             this.showStatus('error', '当前质检结果没有可直接应用的修复讲稿');
             return;
         }
-        let applied = 0;
-        fixesByPage.forEach((replacement, pageNumber) => {
-            const card = this.previewCardByPage(pageNumber);
-            const textarea = card?.querySelector('.course-preview-script');
-            if (!textarea || textarea.value.trim() === replacement) return;
-            textarea.value = replacement;
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            applied += 1;
+        this.courseReviewFixing = true;
+        this.elements.aiReviewFixAllBtn.disabled = true;
+        this.elements.aiReviewFixAllBtn.textContent = '正在应用并保存…';
+        this.elements.aiReviewFindings.querySelectorAll('.ai-review-apply-fix').forEach(button => {
+            button.disabled = true;
         });
-        if (!applied) {
-            this.showStatus('success', '建议讲稿已经应用');
-            return;
-        }
-        clearTimeout(this.previewAutoSaveTimer);
-        const saved = await this.savePreviewScripts({ automatic: true });
-        if (saved) {
-            this.markCourseReviewStale();
-            this.showStatus('success', `已修复并保存 ${applied} 页讲稿，请重新运行全课质检`);
+        try {
+            let applied = 0;
+            fixesByPage.forEach((replacement, pageNumber) => {
+                const card = this.previewCardByPage(pageNumber);
+                const textarea = card?.querySelector('.course-preview-script');
+                if (!textarea) return;
+                if (textarea.value.trim() !== replacement) {
+                    textarea.value = replacement;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                applied += 1;
+            });
+            if (!applied) {
+                this.showStatus('error', '未找到建议对应的讲稿页，请刷新后重试');
+                return;
+            }
+            clearTimeout(this.previewAutoSaveTimer);
+            const saved = await this.savePreviewScripts({ automatic: true });
+            if (saved) {
+                const confirmed = (this.currentAIReview?.applied_pages || [])
+                    .filter(number => fixesByPage.has(Number(number))).length;
+                this.showStatus(confirmed ? 'success' : 'info', confirmed
+                    ? `已应用并保存 ${confirmed} 页讲稿，后续生成将使用新内容；请重新质检确认效果`
+                    : '已保存最新讲稿；修复内容已被后续编辑改变，请重新质检确认');
+            } else {
+                this.showStatus('error', '修复尚未确认保存成功，请重试或手动保存');
+            }
+        } finally {
+            this.courseReviewFixing = false;
+            this.elements.aiReviewFixAllBtn.textContent = '一键修复全部';
+            this.renderCourseReview(this.currentAIReview, this.elements.coursePreviewModule.dataset.qualityMode || 'balanced');
         }
     }
 
@@ -3831,13 +4010,17 @@ class AICourseStudioApp {
         }
     }
 
-    markCourseReviewStale() {
-        if (!this.currentAIReview || this.currentAIReview.status === 'pending') return;
+    markCourseReviewStale(pageNumber) {
+        if (!this.currentAIReview) return;
         this.currentAIReview = {
             ...this.currentAIReview,
             status: 'pending',
             summary: '讲稿已修改，建议重新运行 AI 审查',
-            findings: []
+            stale: true,
+            findings: (this.currentAIReview.findings || []).map(item =>
+                Number(item.page_number) === Number(pageNumber) ? { ...item, applied: false } : item
+            ),
+            applied_pages: (this.currentAIReview.applied_pages || []).filter(number => Number(number) !== Number(pageNumber))
         };
         this.renderCourseReview(
             this.currentAIReview,
@@ -3933,12 +4116,50 @@ class AICourseStudioApp {
         });
     }
 
+    openCoursePreviewStage(card) {
+        const stage = card?.querySelector('.course-preview-stage');
+        if (!stage || this.expandedPreviewStage === stage) return;
+        this.closeCoursePreviewStage();
+        this.expandedPreviewStage = stage;
+        const button = stage.querySelector('.course-preview-expand');
+        button.textContent = '收起预览';
+        button.setAttribute('aria-expanded', 'true');
+        if (stage.showPopover) {
+            stage.setAttribute('popover', 'manual');
+            stage.showPopover();
+        } else {
+            stage.classList.add('preview-stage-expanded');
+        }
+        button.focus({ preventScroll: true });
+    }
+
+    closeCoursePreviewStage() {
+        const stage = this.expandedPreviewStage;
+        if (!stage) return;
+        if (stage.hasAttribute('popover')) {
+            stage.hidePopover();
+            stage.removeAttribute('popover');
+        }
+        stage.classList.remove('preview-stage-expanded');
+        const button = stage.querySelector('.course-preview-expand');
+        button.textContent = '放大预览';
+        button.setAttribute('aria-expanded', 'false');
+        this.expandedPreviewStage = null;
+        button.focus({ preventScroll: true });
+    }
+
     async startCoursePreviewPlayback(startPage = this.currentPreviewPage) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return;
         this.stopCoursePreviewPlayback();
         const session = this.coursePreviewSession = {};
-        if (!await this.savePreviewScripts({ automatic: true })) return;
+        this.coursePreviewPlaying = true;
+        this.coursePreviewActivePage = Number(startPage) || this.currentPreviewPage;
+        this.updateCoursePreviewPagePlayerState(this.coursePreviewActivePage, '正在保存讲稿…');
+        if (!await this.savePreviewScripts({ automatic: true })) {
+            if (this.coursePreviewSession === session) this.stopCoursePreviewPlayback('保存失败，请重试');
+            return;
+        }
         if (this.coursePreviewSession !== session) return;
         this.stopVoicePreview();
         this.coursePreviewPlaying = true;
@@ -3963,6 +4184,8 @@ class AICourseStudioApp {
 
     async playCoursePreviewPage(pageNumber) {
         if (!this.coursePreviewPlaying) return;
+        const expanded = Boolean(this.expandedPreviewStage);
+        this.coursePreviewActivePage = Number(pageNumber);
         const request = this.coursePreviewRequest = {};
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         const card = this.previewCardByPage(pageNumber);
@@ -3971,6 +4194,7 @@ class AICourseStudioApp {
             return;
         }
         this.goToPreviewPage(pageNumber, { focusEditor: false });
+        if (expanded) this.openCoursePreviewStage(card);
         const script = card.querySelector('.course-preview-script')?.value || '';
         const title = card.querySelector('.course-preview-page-title')?.textContent?.trim()
             || `第 ${pageNumber} 页`;
@@ -4024,11 +4248,12 @@ class AICourseStudioApp {
         audio.addEventListener('ended', () => {
             if (this.coursePreviewAudio !== audio) return;
             this.clearCoursePreviewSubtitlePlayback(card);
-            const nextPage = this.nextPreviewPageNumber(pageNumber);
+            const nextPage = this.elements.previewAutoplay?.checked
+                ? this.nextPreviewPageNumber(pageNumber) : null;
             if (nextPage) {
                 this.playCoursePreviewPage(nextPage);
             } else {
-                this.stopCoursePreviewPlayback('课程预览播放完成');
+                this.stopCoursePreviewPlayback(this.elements.previewAutoplay?.checked ? '课程预览播放完成' : '本页预览播放完成');
             }
         }, { once: true });
         audio.addEventListener('error', () => {
@@ -4045,6 +4270,12 @@ class AICourseStudioApp {
     }
 
     updateCoursePreviewPagePlayerState(activePageNumber = null, status = '') {
+        if (this.elements.previewPlaybackDock) {
+            this.elements.previewPlaybackDock.hidden = !this.coursePreviewPlaying;
+        }
+        if (this.elements.previewPlaybackStatus) {
+            this.elements.previewPlaybackStatus.textContent = `第 ${activePageNumber || this.coursePreviewActivePage} 页 · ${status}`;
+        }
         this.elements.coursePreviewPages
             ?.querySelectorAll('.course-preview-page')
             .forEach(card => {
@@ -4060,9 +4291,9 @@ class AICourseStudioApp {
                 }
                 if (stopButton) stopButton.disabled = !isActive;
                 if (statusNode) {
-                    statusNode.textContent = isActive
-                        ? status
-                        : '使用本页讲稿预览 PPT、字幕和配音';
+                    statusNode.textContent = isActive ? status
+                        : Number(card.dataset.pageNumber) === Number(this.coursePreviewActivePage) && status
+                            ? status : '使用本页讲稿预览 PPT、字幕和配音';
                 }
             });
     }
@@ -4680,6 +4911,7 @@ class AICourseStudioApp {
                 input.addEventListener('input', () => {
                     this.smartCutRecommendationOptions = null;
                     this.smartCutApplied = false;
+                    smartCutSummary.textContent = '切课范围已修改，尚未应用；请点击“应用切课”，或继续生成完整视频';
                     smartCutApplyBtn.disabled = false;
                     this.updateContinueCourseLabel();
                     this.updateCourseDurationEstimate();
@@ -4770,6 +5002,43 @@ class AICourseStudioApp {
         }
     }
 
+    collectSpeechSettings() {
+        return {
+            tts_engine: this.elements.ttsEngine.value,
+            voice: this.elements.customVoice.value.trim() || this.elements.voiceSelect.value,
+            tts_rate: this.elements.ttsRate.value,
+            tts_emotion: this.elements.ttsEmotion.value,
+            tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
+            tts_sentence_pause: Number(this.elements.ttsSentencePause.value)
+        };
+    }
+
+    collectPreviewMediaSettings() {
+        return {
+            burn_subtitles: this.elements.burnSubtitles.checked,
+            focus_highlight: this.elements.focusHighlight?.checked !== false,
+            focus_highlight_style: this.elements.focusHighlightStyle?.value || 'outline',
+            focus_smoothing_seconds: Number(this.elements.focusSmoothingSeconds?.value || 0),
+            ...this.collectCoursePackagingOptions(),
+            ...this.collectVideoOptions(),
+            ...this.collectSubtitleOptions()
+        };
+    }
+
+    updatePreviewSpeechSummary() {
+        const summary = document.getElementById('preview-speech-summary');
+        if (!summary) return;
+        const speechSignature = JSON.stringify(this.collectSpeechSettings());
+        if (this.previewSpeechSignature && this.previewSpeechSignature !== speechSignature) {
+            this.stopCoursePreviewPlayback('语音设置已更新，请重新播放预览确认');
+        }
+        this.previewSpeechSignature = speechSignature;
+        const name = this.elements.customVoice.value.trim()
+            || this.elements.voiceSelect.selectedOptions[0]?.textContent || '请选择音色';
+        const engine = this.elements.ttsEngine.selectedOptions[0]?.textContent || '';
+        summary.textContent = `当前配音：${engine} · ${name}。播放预览、保存或继续生成时应用当前设置；音色改变后将重新生成配音。`;
+    }
+
     async savePreviewScripts({ automatic = false } = {}) {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return false;
@@ -4785,6 +5054,8 @@ class AICourseStudioApp {
         }
         const sequence = ++this.previewSaveSequence;
         const submittedPages = this.collectPreviewScripts();
+        const submittedSpeech = this.collectSpeechSettings();
+        const submittedMedia = this.collectPreviewMediaSettings();
         this.elements.coursePreviewSaveState.textContent = '保存中…';
         try {
             const response = await fetch(`/api/course-preview/${taskId}`, {
@@ -4792,13 +5063,17 @@ class AICourseStudioApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     pages: submittedPages,
+                    ...submittedSpeech,
+                    media_settings: submittedMedia,
                     recommendation_options: this.smartCutRecommendationOptions || null
                 })
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || '保存讲稿失败');
             if (taskId !== this.elements.coursePreviewModule.dataset.taskId) return false;
-            if (JSON.stringify(submittedPages) !== JSON.stringify(this.collectPreviewScripts())) {
+            if (JSON.stringify(submittedPages) !== JSON.stringify(this.collectPreviewScripts())
+                || JSON.stringify(submittedSpeech) !== JSON.stringify(this.collectSpeechSettings())
+                || JSON.stringify(submittedMedia) !== JSON.stringify(this.collectPreviewMediaSettings())) {
                 return this.persistPreviewScripts({ automatic, taskId });
             }
             if (sequence !== this.previewSaveSequence) return false;
@@ -4833,7 +5108,9 @@ class AICourseStudioApp {
             } else {
                 this.updateCourseDurationEstimate(data.duration_estimate || null);
             }
-            this.elements.coursePreviewSaveState.textContent = automatic ? '已自动保存' : '已保存';
+            this.elements.coursePreviewSaveState.textContent = data.speech_changed
+                ? '草稿设置已保存，下次播放使用新音色'
+                : (automatic ? '讲稿、配音、字幕和包装设置已自动保存' : '讲稿、配音、字幕和包装设置已保存');
             this.elements.coursePreviewSaveState.classList.add('saved');
             return true;
         } catch (error) {
@@ -4913,6 +5190,7 @@ class AICourseStudioApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     pages: this.collectPreviewScripts(),
+                    apply_segments: this.smartCutApplied,
                     tts_engine: this.elements.ttsEngine.value,
                     voice: (
                         this.elements.customVoice.value.trim()
@@ -4971,12 +5249,17 @@ class AICourseStudioApp {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         const found = this.getItemByTaskId(taskId);
         if (!taskId || !found) return;
+        if (!await window.VidPPTUI.confirm(
+            '将放弃当前草稿及其讲稿修改、质检结果和切课范围，保留上传文件。重新提交时使用生成策略区的最新设置。仅修改音色可直接调整后重新播放，无需放弃草稿。',
+            { title: '放弃草稿并返回策略？', confirmText: '放弃草稿' }
+        )) return;
         clearTimeout(this.previewAutoSaveTimer);
         this.stopCoursePreviewPlayback();
 
         const button = this.elements.cancelCourseBtn;
         button.disabled = true;
         try {
+            await this.previewSaveQueue;
             const response = await fetch(`/api/course-cancel/${taskId}`, {
                 method: 'POST'
             });
@@ -4985,6 +5268,8 @@ class AICourseStudioApp {
 
             this.updateItem(found.index, {
                 taskId: null,
+                strategy: null,
+                strategySource: 'batch',
                 status: 'pending',
                 percentage: 0,
                 stage: null,
@@ -4999,6 +5284,10 @@ class AICourseStudioApp {
             });
             this.elements.coursePreviewModule.hidden = true;
             delete this.elements.coursePreviewModule.dataset.taskId;
+            this.smartCutSegments = [];
+            this.smartCutApplied = false;
+            this.smartCutRecommendationOptions = null;
+            this.currentAIReview = null;
             this.renderFileList();
             this.renderResultsGrid();
             this.updateBatchSummary();

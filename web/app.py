@@ -3303,6 +3303,86 @@ def _generate_audio_with_focus_segments(
         )
 
 
+def _speech_media_options(data: dict) -> dict:
+    """Use the same voice identity for preview playback and final synthesis."""
+    if 'tts_engine' not in data and 'voice' not in data:
+        return {}
+    engine = data.get('tts_engine')
+    voice = str(data.get('voice') or '').strip()
+    if engine not in {'edge-tts', 'volcengine', 'minimax'}:
+        raise ValueError('不支持的语音引擎')
+    if not voice or len(voice) > 200:
+        raise ValueError('请选择音色或填写有效的专属音色 ID')
+    rate, options = '+0%', {}
+    if engine == 'volcengine':
+        rate, options = _volcengine_tts_options(data, voice)
+    elif engine == 'minimax':
+        options = {'voice_id': voice}
+    return {'tts_engine': engine, 'tts_voice': None if engine != 'edge-tts' else voice,
+            'tts_rate': rate, 'tts_options': options}
+
+
+def _preview_speech_settings(task: dict) -> dict:
+    options = task.get('media_options') or {}
+    vendor = options.get('tts_options') or {}
+    return {
+        'tts_engine': options.get('tts_engine', 'edge-tts'),
+        'voice': options.get('tts_voice') or vendor.get('voice_type')
+        or vendor.get('voice_id') or 'zh-CN-XiaoxiaoNeural',
+        'tts_rate': options.get('tts_rate', '+0%'),
+        'tts_emotion': vendor.get('emotion', ''),
+        'tts_emotion_scale': vendor.get('emotion_scale', 3),
+        'tts_sentence_pause': vendor.get('silence_duration', 260),
+    }
+
+
+def _preview_media_options(data: dict) -> dict:
+    smoothing = float(data.get('focus_smoothing_seconds', 0))
+    if not math.isfinite(smoothing) or not 0 <= smoothing <= 2:
+        raise ValueError('焦点平滑时长必须在 0 到 2 秒之间')
+    return {**_subtitle_options(data), **_video_options(data), **_course_packaging_options(data),
+            'burn_subtitles': bool(data.get('burn_subtitles', True)),
+            'focus_highlight': bool(data.get('focus_highlight', True)),
+            'focus_highlight_style': _focus_highlight_style(data),
+            'focus_smoothing_seconds': smoothing}
+
+
+def _preview_strategy(task: dict) -> dict:
+    strategy = {**(task.get('strategy') or {}), **(task.get('media_options') or {})}
+    packaging = strategy.pop('course_packaging', {})
+    for key, value in packaging.items():
+        field = key if key in {'enable_intro', 'enable_mid', 'enable_outro'} else f'packaging_{key}'
+        if key == 'template':
+            value = packaging.get('template_id') or value
+        strategy[field] = value
+    return {**strategy, **_preview_speech_settings(task)}
+
+
+def _save_preview_speech(task_id: str, speech: dict) -> bool:
+    task = tasks[task_id]
+    previous = task.get('media_options') or {}
+    if not speech or all(previous.get(key) == value for key, value in speech.items()):
+        return False
+    preview = _read_preview(task_id)
+    for page in preview.get('pages', []):
+        page.pop('audio_signature', None)
+        page.pop('duration', None)
+        for cue in page.get('focus_cues', []):
+            for key in ('start', 'end', 'duration', 'timing_source', 'audio_path'):
+                cue.pop(key, None)
+        manual = [{**event, 'needs_review': True} for event in page.get('focus_events', [])
+                  if event.get('manual') or event.get('reviewed')]
+        if manual:
+            page['focus_events'] = manual
+        else:
+            page.pop('focus_events', None)
+        (Path(task['output_dir']) / str(page['page_number']) / 'audio.mp3').unlink(missing_ok=True)
+    task['media_options'] = {**previous, **speech}
+    task['strategy'] = {**(task.get('strategy') or {}), **_preview_speech_settings(task)}
+    _persist_preview(task_id, preview)
+    return True
+
+
 def _ensure_course_preview_audio(task_id: str, page_number: int) -> Path:
     """为课程准视频预览生成或复用单页完整配音。"""
     task = tasks.get(task_id)
@@ -3618,6 +3698,8 @@ def _apply_lesson_segments_to_course(preview: dict, segments: list[dict]) -> Non
         )
         if segment:
             section.metadata['lesson_segment'] = segment
+        else:
+            section.metadata.pop('lesson_segment', None)
     course.metadata['lesson_segments'] = segments
     course_path.write_text(
         json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
@@ -3728,12 +3810,25 @@ def _update_preview_scripts(task_id: str, updates: list[dict]) -> dict:
         raise ValueError("至少需要保留一页非空讲稿")
     if changed_pages and preview.get('ai_review'):
         review = dict(preview['ai_review'])
+        scripts = {
+            int(page['page_number']): page.get('script', '').strip()
+            for page in preview.get('pages', [])
+        }
+        findings = [
+            {**item, 'applied': bool(item.get('replacement_script', '').strip())
+             and scripts.get(int(item.get('page_number') or 0))
+             == item.get('replacement_script', '').strip()}
+            for item in review.get('findings', [])
+        ]
         review.update({
             'status': 'pending',
             'summary': '讲稿已修改，建议重新运行 AI 审查',
-            'findings': [],
+            'findings': findings,
+            'applied_pages': sorted({
+                int(item['page_number']) for item in findings if item['applied']
+            }),
             'stale': True,
-            'stale_pages': sorted(changed_pages),
+            'stale_pages': sorted(set(review.get('stale_pages', [])) | changed_pages),
         })
         preview['ai_review'] = review
         task = tasks.get(task_id)
@@ -4587,6 +4682,8 @@ def get_course_preview(task_id):
     preview['lesson_segments'] = duration_estimate['segments']
     preview['quality_mode'] = _quality_mode_for_task(task)
     preview['ai_review'] = preview.get('ai_review') or task.get('ai_review')
+    preview['speech_settings'] = _preview_speech_settings(task)
+    preview['strategy'] = _preview_strategy(task)
     log_operation('preview_task', task_id=task_id, target_name=task.get('original_name'))
     return jsonify(preview)
 
@@ -4915,8 +5012,20 @@ def save_course_preview(task_id):
         return jsonify({'error': 'pages 必须是数组'}), 400
     try:
         options = _segmentation_settings(data.get('recommendation_options'))
-        preview = _update_preview_scripts(task_id, pages)
-    except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
+        speech = _speech_media_options(data)
+        media_settings = data.get('media_settings')
+        if media_settings is not None and not isinstance(media_settings, dict):
+            raise ValueError('媒体设置必须是对象')
+        media_options = _preview_media_options(media_settings) if media_settings is not None else {}
+        with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+            preview = _update_preview_scripts(task_id, pages)
+            changed_pages = preview.get('changed_pages', [])
+            speech_changed = _save_preview_speech(task_id, speech)
+            if speech_changed:
+                preview = _update_preview_scripts(task_id, [])
+                preview['changed_pages'] = changed_pages
+            task['media_options'] = {**task.get('media_options', {}), **media_options}
+    except (TypeError, ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
         return jsonify({'error': str(exc)}), 400
     tasks[task_id]['message'] = '讲稿已保存，等待继续'
     save_state(task_id)
@@ -4925,6 +5034,8 @@ def save_course_preview(task_id):
     return jsonify({
         'success': True,
         'message': '讲稿已保存',
+        'speech_settings': _preview_speech_settings(task),
+        'speech_changed': speech_changed,
         'duration_estimate': duration_estimate,
         'lesson_segments': duration_estimate['segments'],
         'changed_pages': preview.get('changed_pages', []),
@@ -4951,10 +5062,9 @@ def continue_course(task_id):
         return error
     data = request.get_json(silent=True) or {}
     pages = data.get('pages')
-    tts_engine = data.get('tts_engine')
-    voice = data.get('voice')
     burn_subtitles = bool(data.get('burn_subtitles', True))
     try:
+        speech = _speech_media_options(data)
         subtitle_options = _subtitle_options(data)
         video_options = _video_options(data)
         packaging_options = _course_packaging_options(data)
@@ -4978,45 +5088,26 @@ def continue_course(task_id):
         except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
             return jsonify({'error': str(exc)}), 400
 
-        if tts_engine and voice:
-            tts_rate = '+0%'
-            volcengine_options = None
-            if tts_engine == 'volcengine':
-                try:
-                    tts_rate, volcengine_options = _volcengine_tts_options(
-                        data, voice
-                    )
-                except (TypeError, ValueError) as exc:
-                    return jsonify({'error': str(exc)}), 400
-            task['media_options'] = {
-                **task.get('media_options', {}),
-                'tts_engine': tts_engine,
-                'tts_voice': None if tts_engine in {'volcengine', 'minimax'} else voice,
-                'tts_options': (
-                    volcengine_options if tts_engine == 'volcengine'
-                    else {'voice_id': voice} if tts_engine == 'minimax'
-                    else {}
-                ),
-                'tts_rate': tts_rate,
-                'burn_subtitles': burn_subtitles,
-                'focus_highlight': bool(data.get('focus_highlight', True)),
-                'focus_highlight_style': focus_highlight_style,
-                'focus_smoothing_seconds': focus_smoothing_seconds,
-                **video_options,
-                **subtitle_options,
-                **packaging_options,
-            }
-        else:
-            task['media_options'] = {
-                **task.get('media_options', {}),
-                'burn_subtitles': burn_subtitles,
-                'focus_highlight': bool(data.get('focus_highlight', True)),
-                'focus_highlight_style': focus_highlight_style,
-                'focus_smoothing_seconds': focus_smoothing_seconds,
-                **video_options,
-                **subtitle_options,
-                **packaging_options,
-            }
+        _save_preview_speech(task_id, speech)
+        if data.get('apply_segments') is False:
+            preview = _read_preview(task_id)
+            preview['lesson_segments'] = []
+            preview['segmentation_settings'] = None
+            for page in preview.get('pages', []):
+                page.pop('lesson_segment', None)
+            _apply_lesson_segments_to_course(preview, [])
+            _persist_preview(task_id, preview)
+            task['lesson_segments'] = []
+        task['media_options'] = {
+            **task.get('media_options', {}),
+            'burn_subtitles': burn_subtitles,
+            'focus_highlight': bool(data.get('focus_highlight', True)),
+            'focus_highlight_style': focus_highlight_style,
+            'focus_smoothing_seconds': focus_smoothing_seconds,
+            **video_options,
+            **subtitle_options,
+            **packaging_options,
+        }
 
         progress_queues[task_id] = Queue()
         cancellation_events[task_id] = threading.Event()

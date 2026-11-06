@@ -18,6 +18,8 @@ function view() {
         cutDurationMinutes: { value: '5' }
     };
     app.previewSaveSequence = 0;
+    app.collectSpeechSettings = () => ({ tts_engine: 'edge-tts', voice: app.voice || 'voice-a' });
+    app.collectPreviewMediaSettings = () => ({ burn_subtitles: true });
     app.smartCutApplied = false;
     app.smartCutSegments = [];
     app.collectPreviewScripts = () => [{ page_number: 1, script: app.script, focus_cues: app.focus }];
@@ -111,4 +113,22 @@ test('failed saves prevent recommending and applying cuts', async () => {
     await app.applySmartCuts();
     assert.equal(calls, 2); // Only PATCH requests; neither cut endpoint is called.
     assert.equal(app.errors.length, 2);
+});
+
+test('voice edits made during save are persisted before preview can start', async () => {
+    const app = view();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const voices = [];
+    globalThis.fetch = async (_, init) => {
+        voices.push(JSON.parse(init.body).voice);
+        if (voices.length === 1) await gate;
+        return ok({ lesson_segments: [] });
+    };
+    const saving = app.savePreviewScripts();
+    await Promise.resolve();
+    app.voice = 'voice-b';
+    release();
+    assert.equal(await saving, true);
+    assert.deepEqual(voices, ['voice-a', 'voice-b']);
 });

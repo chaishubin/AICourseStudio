@@ -136,3 +136,47 @@ test('current playback errors remain visible', async () => {
     assert.deepEqual(app.errors, ['Unsupported audio']);
     assert.equal(app.coursePreviewPlaying, false);
 });
+
+
+test('page preview stops at the end by default', async () => {
+    const { app, audios } = setup();
+    globalThis.fetch = async () => courseResponse('page.mp3');
+    app.coursePreviewPlaying = true;
+    const playing = app.playCoursePreviewPage(1);
+    await flush();
+    audios[0].pending.resolve();
+    await playing;
+    audios[0].events.ended();
+    assert.equal(app.coursePreviewPlaying, false);
+    assert.equal(app.coursePreviewAudio, null);
+});
+
+test('continuous playback advances only when enabled', async () => {
+    const { app, audios } = setup();
+    app.elements.previewAutoplay = { checked: true };
+    app.nextPreviewPageNumber = () => 2;
+    globalThis.fetch = async () => courseResponse('page.mp3');
+    app.coursePreviewPlaying = true;
+    const playing = app.playCoursePreviewPage(1);
+    await flush();
+    audios[0].pending.resolve();
+    await playing;
+    let next;
+    app.playCoursePreviewPage = page => { next = page; };
+    audios[0].events.ended();
+    assert.equal(next, 2);
+    app.stopCoursePreviewPlayback();
+});
+
+test('saving is cancellable and a failed save resets playback state', async () => {
+    const { app } = setup();
+    const save = deferred();
+    app.savePreviewScripts = () => save.promise;
+    const playing = app.startCoursePreviewPlayback(3);
+    assert.equal(app.coursePreviewPlaying, true);
+    assert.equal(app.coursePreviewActivePage, 3);
+    save.resolve(false);
+    await playing;
+    assert.equal(app.coursePreviewPlaying, false);
+    assert.equal(app.coursePreviewSession, null);
+});
