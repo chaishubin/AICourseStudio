@@ -1454,7 +1454,7 @@ def test_index_contains_editable_course_preview():
 def test_focus_highlight_style_validation():
     import web.app as web_app
 
-    assert web_app._focus_highlight_style({}) == "outline"
+    assert web_app._focus_highlight_style({}) == "underline"
     assert web_app._focus_highlight_style({"focus_highlight_style": "spotlight"}) == "spotlight"
     try:
         web_app._focus_highlight_style({"focus_highlight_style": "blink"})

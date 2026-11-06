@@ -117,7 +117,9 @@ class VideoComposer:
                     height,
                     (config.video_width - width) // 2,
                     (config.video_height - height) // 2,
-                    metadata.get("focus_highlight_style", "outline"),
+                    metadata.get("focus_highlight_style", "underline"),
+                    metadata.get("focus_highlight_color", "#FFAE1F"),
+                    metadata.get("focus_highlight_width", 2),
                 )
             )
         clip = CompositeVideoClip(
@@ -138,9 +140,15 @@ class VideoComposer:
         image_height: int,
         image_left: int,
         image_top: int,
-        style: str = "outline",
+        style: str = "underline",
+        color: str = "#FFAE1F",
+        line_width: int = 2,
     ) -> list:
         """Create time-bound outline, spotlight, or underline focus layers."""
+        from .focus_style import focus_appearance
+        appearance = focus_appearance({'focus_highlight_color': color, 'focus_highlight_width': line_width})
+        color = appearance['focus_highlight_color']
+        rgb = tuple(int(color[i:i+2], 16) for i in (1, 3, 5))
         targets_by_id = {str(target.get("id")): target for target in targets}
         timeline = focus_timeline(cues, duration)
         from ..core.cue_timeline import focus_events_from_cues
@@ -161,7 +169,7 @@ class VideoComposer:
                 expanded.extend((cue, target) for target in selected)
 
         for cue, target in expanded:
-            padding = 10
+            padding = 0 if style == "underline" else 10
             x = image_left + round(float(target.get("x", 0)) * image_width) - padding
             y = image_top + round(float(target.get("y", 0)) * image_height) - padding
             width = round(float(target.get("width", 0)) * image_width) + padding * 2
@@ -182,7 +190,7 @@ class VideoComposer:
                     .with_position(position)
                 )
 
-            border = max(3, min(7, round(min(image_width, image_height) * 0.004)))
+            border = max(1, round(appearance["focus_highlight_width"] * image_height / 1080))
             if style == "spotlight":
                 shade = (8, 15, 28)
                 regions = [
@@ -207,21 +215,17 @@ class VideoComposer:
                     (x, y + height - border),
                 ))
             elif style == "underline":
+                thickness = min(height, border)
                 layers.append(focus_clip(
-                    (width, border), (255, 174, 31), 0.96,
-                    (x, y + height - border),
-                ))
-                glow_height = min(height, border * 3)
-                layers.append(focus_clip(
-                    (width, glow_height), (255, 190, 30), 0.18,
-                    (x, y + height - glow_height),
+                    (width, thickness), rgb, 1.0,
+                    (x, y + height - thickness),
                 ))
             else:
                 layers.append(focus_clip((width, height), (255, 190, 30), 0.13, (x, y)))
-                layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y)))
-                layers.append(focus_clip((width, border), (255, 174, 31), 0.92, (x, y + height - border)))
-                layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x, y)))
-                layers.append(focus_clip((border, height), (255, 174, 31), 0.92, (x + width - border, y)))
+                layers.append(focus_clip((width, border), rgb, 0.92, (x, y)))
+                layers.append(focus_clip((width, border), rgb, 0.92, (x, y + height - border)))
+                layers.append(focus_clip((border, height), rgb, 0.92, (x, y)))
+                layers.append(focus_clip((border, height), rgb, 0.92, (x + width - border, y)))
         return layers
 
     @staticmethod

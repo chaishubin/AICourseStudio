@@ -21,6 +21,7 @@ class SourceDocument:
     source_path: Path
     sections: list[SourceSection] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    title_from_filename: bool = False  # Restore filename-derived titles on cache hits.
 
     @property
     def full_text(self) -> str:

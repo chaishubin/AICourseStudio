@@ -248,7 +248,7 @@ def test_video_focus_layers_follow_cue_timeline():
         image_top=0,
     )
     try:
-        assert len(layers) == 5
+        assert len(layers) == 1
         assert all(layer.start == 0 for layer in layers)
         assert all(layer.duration == 3.5 for layer in layers)
     finally:
@@ -275,7 +275,7 @@ def test_video_focus_layers_support_spotlight_and_underline_styles():
         )
         generated.extend(spotlight + underline)
         assert len(spotlight) == 5
-        assert len(underline) == 2
+        assert len(underline) == 1
     finally:
         for layer in generated:
             layer.close()

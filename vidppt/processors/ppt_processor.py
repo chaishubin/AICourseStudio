@@ -3,6 +3,7 @@ PowerPoint 文档处理器
 """
 
 import io
+from dataclasses import replace
 import hashlib
 import json
 import shutil
@@ -20,6 +21,7 @@ from ..core.interfaces import DocumentProcessor
 from ..core.models import DocumentContent, PageContent, ProcessConfig
 from ..core.registry import register_processor
 from .original_slides import reference_path, render_original_slides
+from ..utils.document_cache import DocumentCache, file_digest
 
 
 @register_processor
@@ -31,6 +33,46 @@ class PPTProcessor(DocumentProcessor):
         return [".ppt", ".pptx"]
 
     def extract_content(self, config: ProcessConfig) -> DocumentContent:
+        if not config.input_path.is_file():
+            return self._extract_content(config)
+        cache = DocumentCache('ppt-content', {
+            'version': 1, 'source': file_digest(config.input_path),
+            'parser': version('python-pptx'), 'images': config.save_intermediate,
+        })
+        cached = cache.load()
+        if cached is not None:
+            payload, assets = cached
+            try:
+                pages = []
+                for number, item in enumerate(payload['pages'], 1):
+                    page = PageContent(page_number=number, text=item['text'])
+                    page_dir = config.output_dir / str(number)
+                    for asset in item['images']:
+                        target = page_dir / Path(asset['name']).name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(assets[asset['index']], target)
+                        page.images.append(target)
+                    if config.save_intermediate and page.text.strip():
+                        page_dir.mkdir(parents=True, exist_ok=True)
+                        (page_dir / 'text.txt').write_text(page.text, encoding='utf-8')
+                    pages.append(page)
+                logger.info(f'复用文件解析缓存，共 {len(pages)} 页')
+                return DocumentContent(pages=pages)
+            except (OSError, KeyError, IndexError, TypeError, ValueError):
+                pass
+        # A changed source must not inherit stale text.txt from this output directory.
+        content = self._extract_content(replace(config, skip_existing=False))
+        assets, pages = [], []
+        for page in content.pages:
+            images = []
+            for image in page.images:
+                images.append({'index': len(assets), 'name': image.name})
+                assets.append(image)
+            pages.append({'text': page.text, 'images': images})
+        cache.store({'pages': pages}, assets)
+        return content
+
+    def _extract_content(self, config: ProcessConfig) -> DocumentContent:
         """提取 PPT 内容"""
         prs = Presentation(str(config.input_path))
         pages = []
@@ -97,6 +139,24 @@ class PPTProcessor(DocumentProcessor):
                 and marker.read_text() == signature
                 and all(p.is_file() and p.stat().st_size for p in paths)):
             return paths
+        cache = DocumentCache('ppt-render', signature)
+        if config.save_intermediate and config.skip_existing:
+            cached = cache.load()
+            if cached is not None:
+                payload, assets = cached
+                if payload == {'page_count': page_count} and len(assets) == page_count:
+                    try:
+                        marker.unlink(missing_ok=True)
+                        self._clear_slides(config)
+                        for source, target in zip(assets, paths):
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(source, target)
+                        marker.write_text(signature)
+                        (config.output_dir / '.render_engine').write_text(engine)
+                        logger.info(f'复用原始页面截图缓存，共 {page_count} 页')
+                        return paths
+                    except OSError:
+                        pass
         # 旧缓存没有完整签名时也失效，失败后不能误用部分新截图。
         marker.unlink(missing_ok=True)
         self._clear_slides(config)
@@ -106,6 +166,8 @@ class PPTProcessor(DocumentProcessor):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(signature)
         (config.output_dir / '.render_engine').write_text(engine)
+        if config.save_intermediate and config.skip_existing:
+            cache.store({'page_count': page_count}, paths)
         return paths
 
     @staticmethod

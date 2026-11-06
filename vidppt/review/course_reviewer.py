@@ -166,6 +166,7 @@ class CourseReviewer:
                 "每页最多返回一条综合问题，避免同一页的修复建议互相覆盖。",
                 "发现可修复问题时给出 replacement_script，内容必须是可直接替换该页的完整讲稿。",
                 "replacement_script 要保留原知识事实，只修复已指出的问题；无需修复时返回空字符串。",
+                "若提供 page_analysis，结合其依据核对图表、公式及数值；不要补写 uncertainties 中不确定的细节或无依据的推导。",
             ],
             "pages": [
                 {
@@ -173,6 +174,8 @@ class CourseReviewer:
                     "title": str(page.get("title", ""))[:120],
                     "script": str(page.get("script", "")),
                     "estimated_seconds": page.get("estimated_seconds"),
+                    "source_text": page.get("source_text", ""),
+                    "page_analysis": page.get("page_analysis"),
                 }
                 for index, page in enumerate(pages)
             ],

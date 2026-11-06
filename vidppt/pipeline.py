@@ -170,6 +170,21 @@ class Pipeline:
             progress.start_stage(ProcessStage.LLM)
             progress.stages[ProcessStage.LLM].total = content.total_pages
 
+            if self.config.input_path.suffix.lower() in {'.ppt', '.pptx'} and all(page.slide_image for page in content.pages):
+                from .generation.page_analysis import generate_presentation_narration
+                from .utils.focus_guidance import extract_presentation_focus_targets, plan_page_focus
+                native = extract_presentation_focus_targets(self.config.input_path) if self.config.input_path.suffix.lower() == '.pptx' else []
+                generate_presentation_narration(
+                    self.llm_engine, content.pages, native, self.config.output_dir,
+                    mode=self.config.llm_mode,
+                    instructions=self.config.llm_options.get('system_prompt', ''),
+                )
+                for page in content.pages:
+                    page.metadata['focus_cues'], page.metadata['focus_quality'] = plan_page_focus(
+                        page.text, page.metadata['focus_targets'], page.metadata.get('focus_cues'))
+                progress.complete_stage(ProcessStage.LLM)
+                return
+
             # 保存原文到 metadata
             for page in content.pages:
                 page.metadata["original_text"] = page.text

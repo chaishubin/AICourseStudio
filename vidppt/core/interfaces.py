@@ -57,6 +57,9 @@ class LLMEngine(ABC):
         """对单段文本进行摘要/改写"""
         pass
 
+    def analyze_slide(self, text: str, image_path, **kwargs) -> str:
+        raise NotImplementedError("当前模型引擎不支持页面视觉分析，请配置支持图片的模型")
+
     def summarize_pages(self, pages: list[str], **kwargs) -> list[str]:
         """逐页摘要（默认：逐个调用 summarize）"""
         return [self.summarize(text, **kwargs) for text in pages]

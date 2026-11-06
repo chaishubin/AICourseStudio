@@ -62,6 +62,7 @@ from vidppt.core.cue_timeline import (
 from vidppt.review import CourseReviewError, CourseReviewer
 from vidppt.generation.teaching_context import normalize_teaching_context, teaching_prompt
 from vidppt.generation.page_revision import PageRevisionError, PageScriptReviser
+from vidppt.utils.focus_style import focus_appearance
 from vidppt.utils.subtitle_rules import (
     ASCII_WORD_RE,
     normalize_subtitle_text,
@@ -1183,7 +1184,8 @@ def _subtitle_options(data: dict) -> dict:
 
 
 def _focus_highlight_style(data: dict) -> str:
-    style = str(data.get('focus_highlight_style', 'outline')).strip().lower()
+    focus_appearance(data)
+    style = str(data.get('focus_highlight_style', 'underline')).strip().lower()
     if style not in {'outline', 'spotlight', 'underline'}:
         raise ValueError('不支持的讲解焦点标注方式')
     return style
@@ -2589,98 +2591,22 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
             except Exception as exc:
                 logger.warning(f'提取 PPT 讲解焦点候选失败: {exc}')
 
-        # 4c. LLM 文本摘要
+        # Analyze screenshots and native objects before writing any narration.
         if llm_enabled and not cancel_event.is_set():
-            progress.set_stage('llm', 'LLM 文本摘要...')
-
-            llm_provider = pipeline.llm_engine
-
-            # 保存原文
-            for page in content.pages:
-                page.metadata["original_text"] = page.text
-
-            total_pages = content.total_pages
-
-            if llm_mode == "per-page":
-                refinement_prompts = {
-                    'light': '尽量保留当前页原文和篇幅，只修正重复、病句与生硬表达。',
-                    'standard': '保留关键知识，合并重复内容，生成详略适中的自然讲稿。',
-                    'strong': '只保留核心结论、关键依据与必要过渡，讲稿简洁有力。',
-                }
-                refinement_prompt = refinement_prompts.get(
-                    refinement_level, refinement_prompts['standard']
-                )
-                original_texts = [page.text for page in content.pages]
-                previous_script = ""
-                for i, page in enumerate(content.pages, 1):
-                    if cancel_event.is_set():
-                        break
-                    if not page.text or not page.text.strip():
-                        progress.update('llm', i, total_pages, f'第 {i} 页无文本，跳过')
-                        continue
-                    previous_text = original_texts[i - 2] if i > 1 else "（无，当前为第一页）"
-                    next_text = (
-                        original_texts[i] if i < total_pages
-                        else "（无，当前为最后一页）"
-                    )
-                    page_targets = (
-                        focus_targets_by_page[i - 1]
-                        if i <= len(focus_targets_by_page) else []
-                    )
-                    focus_instruction = ""
-                    if page_targets:
-                        target_lines = "\n".join(
-                            f'- {target["anchor_id"]}: {target.get("text", "")}'
-                            for target in page_targets
-                        )
-                        focus_instruction = (
-                            "\n请只输出 JSON：{\"script\":\"可直接配音的完整讲稿\","
-                            "\"focus_cues\":[{\"text\":\"连续讲解片段\","
-                            "\"action\":\"continue|switch|clear\","
-                            "\"anchor_id\":\"对应锚点ID或空字符串\"}]}。"
-                            "focus_cues 按讲解顺序覆盖完整讲稿。结合相邻片段和上一焦点判断："
-                            "延续时用 continue，转到新元素用 switch，概括、过渡或无明确位置时用 clear。"
-                            "clear 的 anchor_id 为空；仅选择当前页候选 ID。"
-                            "每次介绍新概念时先指向该概念标题，解释具体内容时切到对应说明。"
-                            "一个片段只讲一个焦点，不要把标题介绍和后续说明合并到同一片段；"
-                            "中英文名称和缩写代表同一概念。回顾允许返回前面的锚点。"
-                            f"\n当前页焦点候选：\n{target_lines}"
-                        )
-                    raw_summary = llm_provider.summarize(
-                        (
-                            f"上一页原文：\n{previous_text}\n\n"
-                            f"上一页已生成讲稿：\n{previous_script or '（无）'}\n\n"
-                            f"当前页原文：\n{original_texts[i - 1]}\n\n"
-                            f"下一页原文：\n{next_text}"
-                        ),
-                        system_prompt=(
-                            "你是课程讲稿编辑。结合前后页理解当前页在整套课程中的位置，"
-                            "让开头承接上一页、结尾自然引向下一页；避免重复上一页已经讲过的内容，"
-                            "也不要提前展开下一页。只输出当前页可直接配音的讲稿，不要标题、说明或标记。"
-                            + refinement_prompt + focus_instruction
-                            + teaching_prompt(tasks.get(task_id, {}).get('strategy', {}).get('teaching_context'))
-                        ),
-                    )
-                    if cancel_event.is_set():
-                        break
-                    page.text, page.metadata['focus_cues'] = _parse_page_focus_response(
-                        raw_summary
-                    )
-                    previous_script = page.text
-                    progress.update('llm', i, total_pages, f'摘要第 {i}/{total_pages} 页')
-            elif llm_mode == "whole-document" and not cancel_event.is_set():
-                pages_text = [page.text for page in content.pages]
-                summary = llm_provider.summarize_document(
-                    pages_text, system_prompt='你是课程讲稿编辑，根据原文生成完整讲稿。'
-                    + teaching_prompt(tasks.get(task_id, {}).get('strategy', {}).get('teaching_context'))
-                )
-                content.pages[0].text = summary
-                for page in content.pages[1:]:
-                    page.text = ""
-                progress.update('llm', total_pages, total_pages, '整文档摘要完成')
-
-            if not cancel_event.is_set():
-                progress.update('llm', total_pages, total_pages, '文本摘要完成')
+            from vidppt.generation.page_analysis import generate_presentation_narration
+            progress.set_stage('llm', '分析页面图表、公式并生成口播稿...')
+            refinement = {
+                'light': '尽量保留当前页原文信息，只修正重复、病句与生硬表达。',
+                'standard': '保留关键知识，合并重复内容，生成详略适中的自然讲稿。',
+                'strong': '只保留核心结论、关键依据与必要过渡，讲稿简洁有力。',
+            }.get(refinement_level, '')
+            generate_presentation_narration(
+                pipeline.llm_engine, content.pages, focus_targets_by_page, output_dir,
+                mode=llm_mode,
+                instructions=refinement + teaching_prompt(tasks.get(task_id, {}).get('strategy', {}).get('teaching_context')),
+                progress=lambda current, total, message: progress.update('llm', current, total, message),
+                cancelled=cancel_event.is_set,
+            )
 
         focus_plan_by_page = _plan_focus_pages([
             (page.text, focus_targets_by_page[page.page_number - 1]
@@ -2699,6 +2625,7 @@ def run_conversion(task_id: str, file_path: str, output_dir: Path,
                     'script': page.text,
                     'original_script': page.text,
                     'source_text': page.metadata.get('original_text', page.text),
+                    'page_analysis': page.metadata.get('page_analysis'),
                     'focus_targets': (
                         focus_targets_by_page[page.page_number - 1]
                         if page.page_number <= len(focus_targets_by_page) else []
@@ -3380,6 +3307,7 @@ def _preview_media_options(data: dict) -> dict:
             'burn_subtitles': bool(data.get('burn_subtitles', True)),
             'focus_highlight': bool(data.get('focus_highlight', True)),
             'focus_highlight_style': _focus_highlight_style(data),
+            **focus_appearance(data),
             'focus_smoothing_seconds': smoothing}
 
 
@@ -4010,8 +3938,9 @@ def run_media_generation(task_id: str):
                     'focus_page_kind': page.get('focus_page_kind', ''),
                     'focus_highlight': options.get('focus_highlight', True),
                     'focus_highlight_style': options.get(
-                        'focus_highlight_style', 'outline'
+                        'focus_highlight_style', 'underline'
                     ),
+                    **focus_appearance(options),
                 },
             )
             for page in preview.get('pages', [])
@@ -4653,6 +4582,7 @@ def convert_ppt():
         'visual_theme': visual_theme,
         'burn_subtitles': burn_subtitles,
         'focus_highlight_style': focus_highlight_style,
+        **focus_appearance(data),
         **video_options,
         **subtitle_options,
         **packaging_options,
@@ -4687,6 +4617,7 @@ def convert_ppt():
             'render_engine': render_engine,
             'burn_subtitles': burn_subtitles,
             'focus_highlight_style': focus_highlight_style,
+            **focus_appearance(data),
             **video_options,
             **subtitle_options,
             **packaging_options,
@@ -4754,6 +4685,8 @@ def get_course_preview(task_id):
 
 def _page_revision_source(task: dict, preview: dict, page: dict) -> str:
     """Use source content, including for drafts created before source_text existed."""
+    if page.get('page_analysis'):
+        return json.dumps({'source_text': page.get('source_text', ''), 'page_analysis': page['page_analysis']}, ensure_ascii=False)
     if page.get('source_text'):
         return page['source_text']
     course_path = preview.get('course_json_path')
@@ -5260,6 +5193,7 @@ def continue_course(task_id):
             'burn_subtitles': burn_subtitles,
             'focus_highlight': bool(data.get('focus_highlight', True)),
             'focus_highlight_style': focus_highlight_style,
+            **focus_appearance(data),
             'focus_smoothing_seconds': focus_smoothing_seconds,
             **video_options,
             **subtitle_options,

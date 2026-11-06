@@ -7,13 +7,12 @@ import math
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from pptx import Presentation
 
 from .subtitle_rules import subtitle_chunks
 from .focus_alignment import align_cues
 
 
-FOCUS_CUES_VERSION = 9
+FOCUS_CUES_VERSION = 10
 _QUOTED_ENGLISH = re.compile(r"""[‘“'"]([A-Za-z]+(?: +[A-Za-z]+)+)[’”'"]""")
 _MIN_VISIBLE_FOCUS_CONFIDENCE = 0.34
 _IGNORED_TEXT = {
@@ -28,44 +27,9 @@ _IGNORED_TEXT = {
 
 
 def extract_presentation_focus_targets(presentation_path: Path) -> list[list[dict]]:
-    """Extract visible text boxes as normalized focusable regions per slide."""
-    presentation = Presentation(str(presentation_path))
-    slide_width = max(1, int(presentation.slide_width))
-    slide_height = max(1, int(presentation.slide_height))
-    pages: list[list[dict]] = []
-    for slide_number, slide in enumerate(presentation.slides, 1):
-        targets = []
-        for shape_index, shape in enumerate(slide.shapes, 1):
-            if not getattr(shape, "has_text_frame", False):
-                continue
-            text = " ".join(
-                part.strip() for part in str(getattr(shape, "text", "")).splitlines()
-                if part.strip()
-            )
-            if not _is_focusable_text(text):
-                continue
-            x = _clamp(shape.left / slide_width)
-            y = _clamp(shape.top / slide_height)
-            width = _clamp(shape.width / slide_width, minimum=0.01)
-            height = _clamp(shape.height / slide_height, minimum=0.01)
-            if x + width > 1:
-                width = max(0.01, 1 - x)
-            if y + height > 1:
-                height = max(0.01, 1 - y)
-            anchor_id = f"p{slide_number}-a{shape_index}"
-            targets.append({
-                "id": anchor_id,
-                "anchor_id": anchor_id,
-                "shape_id": f"shape-{shape_index}",
-                "text": text[:160],
-                "x": round(x, 5),
-                "y": round(y, 5),
-                "width": round(width, 5),
-                "height": round(height, 5),
-                "role": "title" if y < 0.24 else "content",
-            })
-        pages.append(normalize_focus_targets(targets))
-    return pages
+    """Extract native text, chart, table, image and formula regions per slide."""
+    from ..processors.slide_objects import presentation_objects
+    return [normalize_focus_targets(objects) for objects in presentation_objects(presentation_path)]
 
 
 def normalize_focus_targets(targets: list[dict]) -> list[dict]:

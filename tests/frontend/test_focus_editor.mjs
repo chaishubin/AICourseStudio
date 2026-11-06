@@ -48,7 +48,7 @@ test('mapping can be edited before timing exists without dropping manual events'
 
 test('cue mapping stays enabled with an independent focus timeline', () => {
     class Element {
-        constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; }
+        constructor() { this.children = []; this.dataset = {}; this.style = { setProperty(key, value) { this[key] = value; } }; this.listeners = {}; }
         set innerHTML(value) { this.html = value; this.children = []; this.select = new Element(); }
         querySelector() { return this.select; }
         appendChild(node) { this.children.push(node); }
@@ -96,4 +96,21 @@ test('page visibility preserves saved mappings and shows only manual choices whe
     page._focusMode = 'auto';
     assert.equal(app.visibleCourseFocusEvents(page, events), events);
     assert.equal(events.length, 2);
+});
+
+const strategyMethods = source.slice(source.indexOf('    collectCurrentStrategy() {'), source.indexOf('    collectCoursePackagingOptions() {'));
+const { Strategy } = await import(`data:text/javascript,${encodeURIComponent(`export class Strategy { ${strategyMethods} }`)}`);
+test('focus appearance is included in reusable production strategies', () => {
+    const app = new Strategy();
+    app.elements = new Proxy({
+        focusHighlightStyle: { value: 'underline' },
+        focusHighlightColor: { value: '#1267ab' },
+        focusHighlightWidth: { value: '1' },
+    }, { get(target, key) { return target[key] || { value: '', checked: false }; } });
+    app.state = { logoPath: null };
+    app.collectVideoOptions = app.collectCoursePackagingOptions = () => ({});
+    const saved = app.collectCurrentStrategy();
+    assert.equal(saved.focus_highlight_style, 'underline');
+    assert.equal(saved.focus_highlight_color, '#1267ab');
+    assert.equal(saved.focus_highlight_width, 1);
 });

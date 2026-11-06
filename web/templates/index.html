@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Course Studio - AI课程生产平台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=34">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v=35">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body class="studio-workspace" data-username="{{ current_username }}">
@@ -381,7 +381,7 @@
                                 <option value="qwen">通义千问（百炼）</option>
                                 <option value="openai">ChatGPT（OpenAI）</option>
                             </select>
-                            <label for="llm-mode">摘要模式</label>
+                            <label for="llm-mode">页面分析与口播生成</label>
                             <select id="llm-mode" class="select-input">
                                 <option value="per-page">逐页讲稿</option>
                                 <option value="whole-document">整篇理解</option>
@@ -708,7 +708,20 @@
                                 <select id="focus-highlight-style" class="select-input">
                                     <option value="outline">框选高亮</option>
                                     <option value="spotlight">聚光突出</option>
-                                    <option value="underline">下划线提示</option>
+                                    <option value="underline" selected>下划线提示 · 细直线</option>
+                                </select>
+                            </label>
+                            <label class="focus-style-field">线条颜色
+                                <input type="color" id="focus-highlight-color" value="#ffae1f" aria-label="焦点线条颜色">
+                            </label>
+                            <label class="focus-style-field">线条粗细
+                                <select id="focus-highlight-width" class="select-input" aria-label="焦点线条粗细（1080p 像素）">
+                                    <option value="1">1 px · 极细</option>
+                                    <option value="2" selected>2 px · 细线</option>
+                                    <option value="3">3 px</option>
+                                    <option value="4">4 px</option>
+                                    <option value="5">5 px</option>
+                                    <option value="6">6 px</option>
                                 </select>
                             </label>
                             <label class="focus-style-field">短切换平滑（秒）
@@ -818,11 +831,16 @@
                         </div>
                         <div class="course-duration-segments" id="course-duration-segments" hidden></div>
                     </div>
-                    <div class="course-preview-actions">
-                        <a class="btn-preview" id="download-editable-ppt-btn" href="#">下载并编辑 PPT</a>
-                        <input type="file" id="edited-ppt-input" accept=".pptx" hidden>
-                        <button class="btn-preview" id="upload-edited-ppt-btn">上传修改后的 PPT</button>
-                        <button class="btn-preview" id="cancel-course-btn">放弃草稿，返回策略</button>
+                    <div class="course-preview-actions" role="region" aria-label="草稿保存与生成操作">
+                        <details class="preview-more-actions">
+                            <summary class="btn-preview">更多操作</summary>
+                            <div class="preview-more-actions-menu">
+                                <a class="btn-preview" id="download-editable-ppt-btn" href="#">下载并编辑 PPT</a>
+                                <input type="file" id="edited-ppt-input" accept=".pptx" hidden>
+                                <button class="btn-preview" id="upload-edited-ppt-btn">上传修改后的 PPT</button>
+                                <button class="btn-preview" id="cancel-course-btn">放弃草稿，返回策略</button>
+                            </div>
+                        </details>
                         <button class="btn-preview" id="save-scripts-btn">保存草稿与生成设置</button>
                         <button class="btn-convert" id="continue-course-btn">
                             <span class="btn-text">继续生成视频</span>

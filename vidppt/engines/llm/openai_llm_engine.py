@@ -127,6 +127,15 @@ class OpenAILLMEngine(LLMEngine):
             **kwargs,
         )
 
+    def analyze_slide(self, text: str, image_path, **kwargs) -> str:
+        from .vision import image_content
+        system_prompt = kwargs.pop("system_prompt", self.system_prompt)
+        kwargs.setdefault("model", self.options.get("vision_model") or os.getenv("OPENAI_VISION_MODEL") or self.model)
+        return self._call_api([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": image_content(text, image_path)},
+        ], **kwargs)
+
     def summarize_document(self, pages: list[str], **kwargs) -> str:
         system_prompt = kwargs.pop("system_prompt", self.system_prompt)
         content = "\n\n".join(

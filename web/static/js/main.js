@@ -83,6 +83,8 @@ class AICourseStudioApp {
                 burnSubtitles: document.getElementById('burn-subtitles'),
                 focusHighlight: document.getElementById('focus-highlight'),
                 focusHighlightStyle: document.getElementById('focus-highlight-style'),
+                focusHighlightColor: document.getElementById('focus-highlight-color'),
+                focusHighlightWidth: document.getElementById('focus-highlight-width'),
                 focusSmoothingSeconds: document.getElementById('focus-smoothing-seconds'),
                 subtitleStyleTemplate: document.getElementById('subtitle-style-template'),
                 subtitlePreset: document.getElementById('subtitle-preset'),
@@ -907,6 +909,8 @@ class AICourseStudioApp {
             ttsEmotionScale: 'tts_emotion_scale',
             ttsSentencePause: 'tts_sentence_pause',
             focusHighlightStyle: 'focus_highlight_style',
+            focusHighlightColor: 'focus_highlight_color',
+            focusHighlightWidth: 'focus_highlight_width',
             focusSmoothingSeconds: 'focus_smoothing_seconds',
             subtitleX: 'subtitle_x',
             subtitleY: 'subtitle_y',
@@ -1085,13 +1089,15 @@ class AICourseStudioApp {
         this.elements.unreviewedOnly.addEventListener(
             'change', () => this.filterPreviewPages()
         );
-        this.elements.focusHighlightStyle?.addEventListener('change', () => {
-            this.elements.coursePreviewPages
-                ?.querySelectorAll('.course-focus-overlays')
-                .forEach(root => {
-                    root.dataset.focusStyle = this.elements.focusHighlightStyle.value;
+        [this.elements.focusHighlightStyle, this.elements.focusHighlightColor, this.elements.focusHighlightWidth]
+            .forEach(control => control?.addEventListener('input', () => {
+                this.elements.coursePreviewPages?.querySelectorAll('.course-focus-overlays').forEach(root => {
+                    root.dataset.focusStyle = this.elements.focusHighlightStyle?.value || 'underline';
+                    root.style.setProperty('--focus-color', this.elements.focusHighlightColor?.value || '#FFAE1F');
+                    root.style.setProperty('--focus-line-width', this.elements.focusHighlightWidth?.value || 2);
                 });
-        });
+                this.saveCurrentStrategy();
+            }));
         this.elements.aiReviewSampleBtn.addEventListener(
             'click', () => this.runCourseReview('sample')
         );
@@ -1794,6 +1800,11 @@ class AICourseStudioApp {
             tts_emotion_scale: Number(this.elements.ttsEmotionScale.value),
             tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
             burn_subtitles: this.elements.burnSubtitles.checked,
+            focus_highlight: this.elements.focusHighlight?.checked !== false,
+            focus_highlight_style: this.elements.focusHighlightStyle?.value || 'underline',
+            focus_highlight_color: this.elements.focusHighlightColor?.value || '#FFAE1F',
+            focus_highlight_width: Number(this.elements.focusHighlightWidth?.value || 2),
+            focus_smoothing_seconds: Number(this.elements.focusSmoothingSeconds?.value || 0),
             subtitle_x: Number(this.elements.subtitleX.value),
             subtitle_y: Number(this.elements.subtitleY.value),
             subtitle_width: Number(this.elements.subtitleWidth.value),
@@ -4620,7 +4631,9 @@ class AICourseStudioApp {
         const targets = card._focusTargets || [];
         const cues = card._focusCues || [];
         if (!overlayRoot || !editor) return;
-        overlayRoot.dataset.focusStyle = this.elements.focusHighlightStyle?.value || 'outline';
+        overlayRoot.dataset.focusStyle = this.elements.focusHighlightStyle?.value || 'underline';
+        overlayRoot.style.setProperty('--focus-color', this.elements.focusHighlightColor?.value || '#FFAE1F');
+        overlayRoot.style.setProperty('--focus-line-width', this.elements.focusHighlightWidth?.value || 2);
         overlayRoot.innerHTML = '';
         targets.forEach(target => {
             const box = document.createElement('button');
@@ -4632,6 +4645,7 @@ class AICourseStudioApp {
             box.style.top = `${Number(target.y || 0) * 100}%`;
             box.style.width = `${Number(target.width || 0) * 100}%`;
             box.style.height = `${Number(target.height || 0) * 100}%`;
+            box.style.setProperty('--focus-line-unit', `${100 / (1080 * Math.max(.001, Number(target.height || 0)))}%`);
             overlayRoot.appendChild(box);
         });
         editor.innerHTML = '<strong>讲解焦点与校准</strong>';
@@ -4661,7 +4675,7 @@ class AICourseStudioApp {
         if (!targets.length) {
             const empty = document.createElement('span');
             empty.className = 'course-focus-empty';
-            empty.textContent = '本页未识别到可跟随的文字元素';
+            empty.textContent = '本页未识别到可跟随的页面对象';
             editor.appendChild(empty);
             return;
         }
@@ -5189,7 +5203,9 @@ class AICourseStudioApp {
         return {
             burn_subtitles: this.elements.burnSubtitles.checked,
             focus_highlight: this.elements.focusHighlight?.checked !== false,
-            focus_highlight_style: this.elements.focusHighlightStyle?.value || 'outline',
+            focus_highlight_style: this.elements.focusHighlightStyle?.value || 'underline',
+            focus_highlight_color: this.elements.focusHighlightColor?.value || '#FFAE1F',
+            focus_highlight_width: Number(this.elements.focusHighlightWidth?.value || 2),
             focus_smoothing_seconds: Number(this.elements.focusSmoothingSeconds?.value || 0),
             ...this.collectCoursePackagingOptions(),
             ...this.collectVideoOptions(),
@@ -5431,7 +5447,9 @@ class AICourseStudioApp {
                     tts_sentence_pause: Number(this.elements.ttsSentencePause.value),
                     burn_subtitles: this.elements.burnSubtitles.checked,
                     focus_highlight: this.elements.focusHighlight?.checked !== false,
-                    focus_highlight_style: this.elements.focusHighlightStyle?.value || 'outline',
+                    focus_highlight_style: this.elements.focusHighlightStyle?.value || 'underline',
+                    focus_highlight_color: this.elements.focusHighlightColor?.value || '#FFAE1F',
+                    focus_highlight_width: Number(this.elements.focusHighlightWidth?.value || 2),
                     focus_smoothing_seconds: Number(this.elements.focusSmoothingSeconds?.value || 0),
                     ...this.collectCoursePackagingOptions(),
                     ...this.collectVideoOptions(),

@@ -7,6 +7,11 @@ import shutil
 
 
 @pytest.fixture(autouse=True)
+def isolated_document_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv('VIDPPT_DOCUMENT_CACHE_DIR', str(tmp_path / 'document-cache'))
+
+
+@pytest.fixture(autouse=True)
 def authenticated_web_tests(monkeypatch, tmp_path):
     """隔离 Web 测试的登录与持久化状态，避免污染本地生产任务。"""
     try:
