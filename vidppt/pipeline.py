@@ -4,6 +4,7 @@
 
 import asyncio
 import hashlib
+import os
 import json
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from .core.registry import ProcessorRegistry
 from .engines.tts.edge_tts_engine import EdgeTTSEngine
 from .utils.video_composer import VideoComposer
 from .utils.audio_cache import AudioCacheManager
+from .utils.performance import timed_step
 from .utils.progress import ProgressTracker, ProcessStage
 
 
@@ -227,7 +229,7 @@ class Pipeline:
             raise
 
     def _generate_audio(
-        self, content: DocumentContent, progress: ProgressTracker
+        self, content: DocumentContent, progress: ProgressTracker, cancel_check=None
     ) -> None:
         """生成语音"""
         logger.info(
@@ -350,99 +352,104 @@ class Pipeline:
                 progress.update_stage(ProcessStage.TTS, page.page_number)
 
             # 如果有需要转换的文本，进行异步批量转换
-            if page_texts:
-                # 创建进度回调函数
-                def tts_progress_callback(current: int, total: int, info: str):
-                    """TTS 转换进度回调"""
-                    # 计算总进度：缓存页数 + 当前转换数
-                    total_processed = len(cached_pages) + current
-                    # 使用增量更新，避免频繁输出
-                    progress.update_stage_incremental(
-                        ProcessStage.TTS,
-                        total_processed,
-                        force_display=(current == 1 or current == total)
-                    )
-
-                if self.config.tts_engine == "edge-tts":
-                    # edge-tts 只需要 voice 和 rate，不接受其他参数
-                    errors = _run_async(
-                        self.tts_engine.batch_convert(
-                            page_texts,
-                            voice=self.config.tts_voice,
-                            rate=self.config.tts_rate,
-                            progress_callback=tts_progress_callback,
-                            **({"capture_timestamps": True} if self.config.tts_capture_timestamps else {}),
+            with timed_step(self.config.output_dir, 'tts_requests_and_cache'):
+                if page_texts:
+                    # 创建进度回调函数
+                    def tts_progress_callback(current: int, total: int, info: str):
+                        """TTS 转换进度回调"""
+                        # 计算总进度：缓存页数 + 当前转换数
+                        total_processed = len(cached_pages) + current
+                        # 使用增量更新，避免频繁输出
+                        progress.update_stage_incremental(
+                            ProcessStage.TTS,
+                            total_processed,
+                            force_display=(current == 1 or current == total)
                         )
-                    )
-                elif self.config.tts_engine in {"minimax", "volcengine"}:
-                    api_extra = {
-                        k: v
-                        for k, v in self.config.tts_options.items()
-                        if k
-                        not in (
-                            "api_key",
-                            "appid",
-                            "access_token",
-                            "api_url",
-                            "model",
-                            "sample_rate",
-                            "bitrate",
-                            "audio_format",
-                            "channel",
-                            "voice_id",
-                            "voice_type",
-                            "cluster",
-                            "uid",
-                            "timeout",
-                            "max_retries",
-                        )
-                    }
-                    errors = _run_async(
-                        self.tts_engine.batch_convert(
-                            page_texts,
-                            voice=self._api_voice(),
-                            rate=self.config.tts_rate,
-                            progress_callback=tts_progress_callback,
-                            **api_extra,
-                        )
-                    )
-                else:
-                    errors = []
 
-                # 处理失败的页面：移除其 audio 路径
-                failed_pages = {page_num for page_num, _ in errors}
-                if failed_pages:
-                    for page in content.pages:
-                        if page.page_number in failed_pages:
-                            page.audio = None
-                    logger.warning(
-                        f"TTS 转换失败 {len(failed_pages)} 页: {sorted(failed_pages)}"
-                    )
-
-                # 转换后保存到缓存（仅保存成功的）
-                for page_num, text, audio_path in page_texts:
-                    if page_num in failed_pages:
-                        continue
                     if self.config.tts_engine == "edge-tts":
-                        self.cache_manager.put(
-                            audio_path=audio_path,
-                            text=text,
-                            tts_engine=self.config.tts_engine,
-                            voice=self.config.tts_voice,
-                            rate=self.config.tts_rate,
-                            input_path=str(self.config.input_path),
+                        # edge-tts 只需要 voice 和 rate，不接受其他参数
+                        errors = _run_async(
+                            self.tts_engine.batch_convert(
+                                page_texts,
+                                voice=self.config.tts_voice,
+                                rate=self.config.tts_rate,
+                                progress_callback=tts_progress_callback,
+                                batch_size=max(1, min(16, int(os.getenv('TTS_CONCURRENCY', '5')))),
+                                **({"cancel_check": cancel_check} if cancel_check else {}),
+                                **({"capture_timestamps": True} if self.config.tts_capture_timestamps else {}),
+                            )
+                        )
+                    elif self.config.tts_engine in {"minimax", "volcengine"}:
+                        api_extra = {
+                            k: v
+                            for k, v in self.config.tts_options.items()
+                            if k
+                            not in (
+                                "api_key",
+                                "appid",
+                                "access_token",
+                                "api_url",
+                                "model",
+                                "sample_rate",
+                                "bitrate",
+                                "audio_format",
+                                "channel",
+                                "voice_id",
+                                "voice_type",
+                                "cluster",
+                                "uid",
+                                "timeout",
+                                "max_retries",
+                            )
+                        }
+                        errors = _run_async(
+                            self.tts_engine.batch_convert(
+                                page_texts,
+                                voice=self._api_voice(),
+                                rate=self.config.tts_rate,
+                                progress_callback=tts_progress_callback,
+                                batch_size=max(1, min(16, int(os.getenv('TTS_CONCURRENCY', '5')))),
+                                **({"cancel_check": cancel_check} if cancel_check else {}),
+                                **api_extra,
+                            )
                         )
                     else:
-                        self.cache_manager.put(
-                            audio_path=audio_path,
-                            text=text,
-                            tts_engine=self.config.tts_engine,
-                            voice=self._api_voice(),
-                            rate=self.config.tts_rate,
-                            input_path=str(self.config.input_path),
-                            **api_cache_options,
+                        errors = []
+
+                    # 处理失败的页面：移除其 audio 路径
+                    failed_pages = {page_num for page_num, _ in errors}
+                    if failed_pages:
+                        for page in content.pages:
+                            if page.page_number in failed_pages:
+                                page.audio = None
+                        logger.warning(
+                            f"TTS 转换失败 {len(failed_pages)} 页: {sorted(failed_pages)}"
                         )
-                    logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
+
+                    # 转换后保存到缓存（仅保存成功的）
+                    for page_num, text, audio_path in page_texts:
+                        if page_num in failed_pages:
+                            continue
+                        if self.config.tts_engine == "edge-tts":
+                            self.cache_manager.put(
+                                audio_path=audio_path,
+                                text=text,
+                                tts_engine=self.config.tts_engine,
+                                voice=self.config.tts_voice,
+                                rate=self.config.tts_rate,
+                                input_path=str(self.config.input_path),
+                            )
+                        else:
+                            self.cache_manager.put(
+                                audio_path=audio_path,
+                                text=text,
+                                tts_engine=self.config.tts_engine,
+                                voice=self._api_voice(),
+                                rate=self.config.tts_rate,
+                                input_path=str(self.config.input_path),
+                                **api_cache_options,
+                            )
+                        logger.info(f"第 {page_num} 页 音频 -> {audio_path}")
 
             for page in content.pages:
                 if (page.page_number not in skipped_pages and page.audio

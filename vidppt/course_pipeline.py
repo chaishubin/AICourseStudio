@@ -22,6 +22,7 @@ from .generation import CourseBuilder
 from .ingestion import read_source_document
 from .renderers import PPTXRenderer, SubtitleRenderer
 from .utils.subtitle_rules import normalize_subtitle_text
+from .utils.performance import timed_step
 from .utils.focus_guidance import extract_presentation_focus_targets, plan_page_focus
 
 
@@ -75,10 +76,11 @@ class CoursePipeline:
             media_config and media_config.burn_subtitles
         )
         document = read_source_document(input_path)
-        course = self.builder.build(
-            document,
-            reserve_subtitle_area=reserve_subtitle_area,
-        )
+        with timed_step(output_dir, 'course_design'):
+            course = self.builder.build(
+                document,
+                reserve_subtitle_area=reserve_subtitle_area,
+            )
         course.metadata["teaching_context"] = self.builder.teaching_context
         course.metadata["footer_text"] = self.footer_text
         if reserve_subtitle_area:
@@ -102,13 +104,15 @@ class CoursePipeline:
             json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        if self.illustration_generator:
-            self.illustration_generator.generate_for_course(
-                course, output_dir, self.max_illustrations
+        with timed_step(output_dir, 'illustrations'):
+            if self.illustration_generator:
+                self.illustration_generator.generate_for_course(
+                    course, output_dir, self.max_illustrations
+                )
+        with timed_step(output_dir, 'pptx_creation'):
+            presentation = self.pptx_renderer.render(
+                course, output_dir / f"{input_path.stem}.pptx"
             )
-        presentation = self.pptx_renderer.render(
-            course, output_dir / f"{input_path.stem}.pptx"
-        )
         course_json.write_text(
             json.dumps(course.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",

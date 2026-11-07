@@ -1,0 +1,129 @@
+{
+  "date": "2026-11-06",
+  "environment": {
+    "system": "Darwin",
+    "machine": "x86_64",
+    "python": "3.14.6",
+    "ffmpeg": "ffmpeg version 7.1.1 Copyright (c) 2000-2025 the FFmpeg developers"
+  },
+  "method": {
+    "body_seconds": 12,
+    "fps": 24,
+    "encoder": "libx264 veryfast CRF21, AAC 128k mono 48kHz",
+    "repeats": 2,
+    "order": "baseline/new then new/baseline",
+    "measured_scope": "packaging only, excludes source and card creation; synthetic moving video with burned SRT subtitles and timed audio markers"
+  },
+  "benchmarks": [
+    {
+      "scenario": "compatible_video_copy",
+      "seconds": {
+        "encoded": [
+          1.2639932800011593,
+          1.2208334739989368
+        ],
+        "video_copy": [
+          0.6541518669982906,
+          0.5301703430013731
+        ]
+      },
+      "speedup": 2.0981002745872694,
+      "median_seconds": {
+        "encoded": 1.242413377000048,
+        "video_copy": 0.5921611049998319
+      }
+    },
+    {
+      "transition": 0,
+      "seconds": {
+        "legacy": [
+          1.8072193849948235,
+          1.6824899730054312
+        ],
+        "single_pass": [
+          1.3611837220014422,
+          1.3349235599962412
+        ]
+      },
+      "speedup": 1.2943510747148574,
+      "max_frame_error": 0.5474633487654321,
+      "max_audio_lag_seconds": 0.0,
+      "resolution": "960x540",
+      "body_seconds": 12,
+      "max_absolute_audio_lag_seconds": 0.00016666666666687036,
+      "baseline": "two body range encodes followed by the same timestamp-corrected concatenator",
+      "median_seconds": {
+        "legacy": 1.7448546790001274,
+        "single_pass": 1.3480536409988417
+      }
+    },
+    {
+      "transition": 0.35,
+      "seconds": {
+        "legacy": [
+          3.2337503410017234,
+          2.73443141199823
+        ],
+        "single_pass": [
+          1.5841076069991686,
+          1.7758923109940952
+        ]
+      },
+      "speedup": 1.7762446126976121,
+      "max_frame_error": 0.7092959104938271,
+      "max_audio_lag_seconds": 0.0,
+      "resolution": "960x540",
+      "body_seconds": 12,
+      "max_absolute_audio_lag_seconds": 0.00016666666666687036,
+      "baseline": "two body range encodes followed by the same timestamp-corrected concatenator",
+      "median_seconds": {
+        "legacy": 2.9840908764999767,
+        "single_pass": 1.679999958996632
+      }
+    },
+    {
+      "transition": 0.35,
+      "seconds": {
+        "legacy": [
+          7.0773147369982325,
+          6.478120458996273
+        ],
+        "single_pass": [
+          3.7931706460003625,
+          3.9230450309987646
+        ]
+      },
+      "speedup": 1.7567465404578062,
+      "max_frame_error": 0.5397813786008231,
+      "max_audio_lag_seconds": 0.0,
+      "resolution": "1920x1080",
+      "body_seconds": 12,
+      "max_absolute_audio_lag_seconds": 0.00016666666666687036,
+      "baseline": "two body range encodes followed by the same timestamp-corrected concatenator",
+      "median_seconds": {
+        "legacy": 6.777717597997253,
+        "single_pass": 3.8581078384995635
+      }
+    }
+  ],
+  "verification": {
+    "targeted_unit_tests_passed": 175,
+    "real_ffmpeg_tests_passed": 8,
+    "checks": [
+      "non-keyframe range cuts",
+      "intro/mid/outro and fade duration",
+      "burned SRT and external subtitle offsets",
+      "audio markers before and after joins",
+      "video-copy decoded frames exactly match source samples",
+      "task-local cache reuse and content/settings invalidation",
+      "cancel preserves published output",
+      "incompatible streams and invalid output timing reject fast path"
+    ],
+    "full_unit_run": {
+      "passed": 682,
+      "skipped": 2,
+      "failed": 7,
+      "failure_details": "6 real TTS tests fail on speech.platform.bing.com DNS; 1 existing MiniMax mock hex/audio decoding assertion mismatch"
+    }
+  }
+}

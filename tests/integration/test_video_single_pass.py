@@ -11,6 +11,7 @@ from moviepy import VideoFileClip
 from vidppt.core.models import DocumentContent, PageContent, ProcessConfig
 from vidppt.course_pipeline import CoursePipeline
 from vidppt.utils.video_composer import VideoComposer
+from vidppt.utils.course_packaging import _extract_video_range, _try_copy_concat
 
 
 @pytest.mark.integration
@@ -77,3 +78,18 @@ def test_single_pass_matches_two_pass_subtitles_and_audio(tmp_path):
     )
     with VideoFileClip(str(base)) as plain, VideoFileClip(str(disabled)) as current:
         assert np.abs(plain.get_frame(0.5).astype(float) - current.get_frame(0.5)).mean() < 1
+    # Cut the rendered body at a non-keyframe boundary; preserve subtitles,
+    # focus and audio without running the Python compositor again.
+    first_cut, second_cut = folder / 'cut1.mp4', folder / 'cut2.mp4'
+    for output, start, duration in ((first_cut, 0, 1.75), (second_cut, 1.75, 2.25)):
+        _extract_video_range(shutil.which('ffmpeg'), new, output, config, start=start, duration=duration)
+    with VideoFileClip(str(new)) as original, VideoFileClip(str(second_cut)) as cut:
+        assert abs(cut.duration - 2.25) < 0.1
+        assert cut.audio is not None
+        assert np.abs(original.get_frame(2.5).astype(float) - cut.get_frame(0.75)).mean() < 3
+    joined = folder / 'joined.mp4'
+    assert _try_copy_concat(shutil.which('ffmpeg'), [first_cut, second_cut], joined)
+    with VideoFileClip(str(joined)) as result:
+        assert abs(result.duration - 4) < 0.15
+        assert result.audio is not None
+        assert np.abs(result.get_frame(2.5).astype(float) - second_frame).mean() < 3

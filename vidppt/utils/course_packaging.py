@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import shutil
+import hashlib
+import math
 import subprocess
 import tempfile
 import time
 import re
+import json
 from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from ..core.models import ProcessConfig
+from .ffmpeg_process import run_ffmpeg
+from .performance import timed_step
+from .render_capacity import serialized_render
 
 
 TEMPLATES = {
@@ -61,6 +67,46 @@ TEMPLATES = {
 }
 
 
+def active_packaging_parts(options: dict, segment_durations=None) -> list[str]:
+    """Return only the packaging parts that will actually be rendered."""
+    return [kind for kind in ('intro', 'mid', 'outro')
+            if options.get(f'enable_{kind}')
+            and (kind != 'mid' or len(segment_durations or []) > 1)]
+
+
+def _cached_packaging_clip(output, config, options, **render_args):
+    """Task-local, content-addressed cache; publish only complete rendered clips."""
+    effective = _side_options(options, render_args['kind'])
+    assets = [render_args.get('logo_path'), render_args.get('background_path')]
+    assets += [value for key, value in effective.items() if key.endswith('_path') and value]
+    fingerprints = {}
+    for value in assets:
+        if not value:
+            continue
+        path = Path(value)
+        if path.is_file():
+            with path.open('rb') as stream:
+                fingerprints[str(path)] = hashlib.file_digest(stream, 'sha256').hexdigest()
+    settings = {key: value for key, value in vars(config).items()
+                if key.startswith(('video_', 'audio_')) and key != 'audio_cache_dir'}
+    payload = dict(version=1, options=effective, args=render_args,
+                   settings=settings, assets=fingerprints)
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    folder = config.output_dir / '.packaging_cache'
+    folder.mkdir(parents=True, exist_ok=True)
+    cached = folder / f'{key}.mp4'
+    if not cached.is_file() or not cached.stat().st_size:
+        with tempfile.TemporaryDirectory(prefix='render_', dir=folder) as temporary:
+            rendered = Path(temporary) / 'clip.mp4'
+            with timed_step(config.output_dir, 'packaging_clip_render'):
+                _render_packaging_clip(rendered, config, options, **render_args)
+            rendered.replace(cached)
+    with timed_step(config.output_dir, 'packaging_clip_reuse'):
+        # Never hard-link cached clips: downstream tools may rewrite their input.
+        shutil.copyfile(cached, output)
+
+
+@serialized_render
 def package_course_video(
     source_video: Path,
     output_video: Path,
@@ -74,12 +120,19 @@ def package_course_video(
     mid_background_path: Optional[Path] = None,
     outro_background_path: Optional[Path] = None,
     segment_durations: Optional[list[float]] = None,
+    source_range: Optional[tuple[float, float]] = None,
     cancel_check=None,
+    progress_callback=None,
 ) -> None:
     """Add optional intro, inter-segment transitions, and outro around an MP4."""
-    use_mid = bool(options.get("enable_mid")) and bool(segment_durations) and len(segment_durations) > 1
-    if not options.get("enable_intro") and not use_mid and not options.get("enable_outro"):
-        if source_video != output_video:
+    active_parts = active_packaging_parts(options, segment_durations)
+    use_mid = "mid" in active_parts
+    if not active_parts:
+        if source_range is not None:
+            _extract_video_range(shutil.which("ffmpeg"), source_video, output_video, config,
+                                 start=source_range[0], duration=source_range[1],
+                                 cancel_check=cancel_check, progress_callback=progress_callback)
+        elif source_video != output_video:
             source_video.replace(output_video)
         return
 
@@ -93,9 +146,10 @@ def package_course_video(
     ) as temp_name:
         temp_dir = Path(temp_name)
         clips = []
+        clip_ranges = {}
         if options.get("enable_intro"):
             intro = temp_dir / "intro.mp4"
-            _render_packaging_clip(
+            _cached_packaging_clip(
                 intro,
                 config,
                 options,
@@ -108,7 +162,7 @@ def package_course_video(
             clips.append(intro)
         if use_mid:
             mid = temp_dir / "mid.mp4"
-            _render_packaging_clip(
+            _cached_packaging_clip(
                 mid,
                 config,
                 options,
@@ -120,24 +174,22 @@ def package_course_video(
             )
             offset = 0.0
             for index, duration in enumerate(segment_durations):
-                chunk = temp_dir / f"segment_{index + 1:03d}.mp4"
-                _extract_video_range(
-                    ffmpeg,
-                    source_video,
-                    chunk,
-                    config,
-                    start=offset,
-                    duration=None if index == len(segment_durations) - 1 else duration,
+                # Seek/trim directly in the final encode. Never encode temporary
+                # body chunks just to decode and encode them a second time.
+                clip_ranges[len(clips)] = (
+                    offset, None if index == len(segment_durations) - 1 else duration
                 )
-                clips.append(chunk)
+                clips.append(source_video)
                 offset += duration
                 if index < len(segment_durations) - 1:
                     clips.append(mid)
         else:
+            if source_range is not None:
+                clip_ranges[len(clips)] = source_range
             clips.append(source_video)
         if options.get("enable_outro"):
             outro = temp_dir / "outro.mp4"
-            _render_packaging_clip(
+            _cached_packaging_clip(
                 outro,
                 config,
                 options,
@@ -156,11 +208,14 @@ def package_course_video(
             packaged,
             config,
             cancel_check,
-            transition_seconds=float(options.get("transition_seconds") or 0.35),
+            transition_seconds=float(options.get("transition_seconds", 0.35)),
+            **({"progress_callback": progress_callback} if progress_callback else {}),
+            **({"clip_ranges": clip_ranges} if clip_ranges else {}),
         )
         packaged.replace(output_video)
 
 
+@serialized_render
 def _render_packaging_clip(
     output: Path,
     config: ProcessConfig,
@@ -970,6 +1025,7 @@ def _side_options(options: dict, kind: str) -> dict:
     return resolved
 
 
+@serialized_render
 def _extract_video_range(
     ffmpeg: str,
     source: Path,
@@ -978,6 +1034,8 @@ def _extract_video_range(
     *,
     start: float,
     duration: Optional[float],
+    cancel_check=None,
+    progress_callback=None,
 ) -> None:
     """Extract a normalized course segment for transition-aware concatenation."""
     command = [ffmpeg, "-y", "-ss", f"{max(0.0, start):.3f}", "-i", str(source)]
@@ -998,7 +1056,8 @@ def _extract_video_range(
         "-movflags", "+faststart",
         str(output),
     ])
-    subprocess.run(command, check=True, capture_output=True, text=True)
+    with timed_step(output.parent, 'video_range_encode'):
+        run_ffmpeg(command, cancel_check, duration=duration, progress_callback=progress_callback)
 
 
 def shift_srt_for_packaging(
@@ -1154,24 +1213,150 @@ def _paste_logo(image: Image.Image, logo_path: Path, config: ProcessConfig, opti
     image.paste(logo, (x, y), logo)
 
 
+def _stream_signature(clip: Path, *, include_timing=False):
+    ffprobe = shutil.which('ffprobe')
+    if not ffprobe:
+        return (None, None) if include_timing else None
+    try:
+        result = subprocess.run([
+            ffprobe, '-v', 'error', '-show_streams', '-show_data_hash', 'sha256',
+            '-of', 'json', str(clip),
+        ], check=True, capture_output=True, text=True, timeout=15)
+        streams = json.loads(result.stdout)['streams']
+        if [stream.get('codec_type') for stream in streams] != ['video', 'audio']:
+            return (None, None) if include_timing else None
+        if [stream.get('codec_name') for stream in streams] != ['h264', 'aac']:
+            return (None, None) if include_timing else None
+        fields = ('codec_name', 'profile', 'level', 'width', 'height', 'pix_fmt',
+                  'r_frame_rate', 'time_base', 'sample_rate', 'channels',
+                  'channel_layout', 'extradata_hash', 'sample_aspect_ratio',
+                  'color_range', 'color_space', 'color_transfer', 'color_primaries')
+        if any(not stream.get('extradata_hash') for stream in streams):
+            return (None, None) if include_timing else None
+        signature = tuple(tuple(stream.get(key) for key in fields) for stream in streams)
+        if include_timing:
+            timing = {stream['codec_type']: (float(stream.get('start_time', 0)), float(stream['duration']))
+                      for stream in streams}
+            return signature, timing
+        return signature
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return (None, None) if include_timing else None
+
+
+def _stream_timing(path):
+    ffprobe = shutil.which('ffprobe')
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run([ffprobe, '-v', 'error', '-show_entries',
+                                 'stream=codec_type,start_time,duration', '-of', 'json', str(path)],
+                                check=True, capture_output=True, text=True, timeout=15)
+        return {stream['codec_type']: (float(stream.get('start_time', 0)), float(stream['duration']))
+                for stream in json.loads(result.stdout)['streams']}
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return None
+
+
+def _try_copy_concat(ffmpeg, clips, output, cancel_check=None, timing_dir=None, config=None):
+    """Copy compatible video packets; rebuild audio to remove per-clip AAC priming."""
+    metadata = {clip: _stream_signature(clip, include_timing=True) for clip in dict.fromkeys(clips)}
+    signatures = [metadata[clip][0] for clip in clips]
+    if not signatures or signatures[0] is None or any(s != signatures[0] for s in signatures):
+        return False
+    if any('\n' in str(clip) or '\r' in str(clip) for clip in clips):
+        return False
+    timings = [metadata[clip][1] for clip in clips]
+    if any(not timing or 'video' not in timing or 'audio' not in timing for timing in timings):
+        return False
+    if any(abs(timing['video'][0]) > 0.001 or timing['video'][1] <= 0 for timing in timings):
+        return False
+    durations = [timing['video'][1] for timing in timings]
+    total = sum(durations)
+    with tempfile.TemporaryDirectory(prefix='concat_', dir=output.parent) as folder:
+        listing = Path(folder) / 'clips.txt'
+        listing.write_text(''.join(
+            "file '" + str(clip.resolve()).replace("'", "'\\''") + "'\n"
+            + f"duration {duration:.9f}\n"
+            for clip, duration in zip(clips, durations)
+        ), encoding='utf-8')
+        command = [ffmpeg, '-y', '-copyts', '-f', 'concat', '-safe', '0', '-i', str(listing)]
+        filters = []
+        for index, (clip, duration) in enumerate(zip(clips, durations), 1):
+            command.extend(['-i', str(clip)])
+            filters.append(f'[{index}:a:0]aresample=async=1:first_pts=0,'
+                           f'apad=whole_dur={duration:.9f},atrim=duration={duration:.9f},'
+                           f'asetpts=PTS-STARTPTS[a{index}]')
+        filters.append(''.join(f'[a{index}]' for index in range(1, len(clips) + 1))
+                       + f'concat=n={len(clips)}:v=0:a=1[a]')
+        command.extend(['-filter_complex', ';'.join(filters), '-map', '0:v:0', '-map', '[a]',
+                        '-c:v', 'copy', '-c:a', config.audio_codec if config else 'aac',
+                        '-b:a', config.audio_bitrate if config else '128k',
+                        '-ar', str(config.audio_sample_rate if config else 48000),
+                        '-ac', str(config.audio_channels if config else 1),
+                        '-t', f'{total:.9f}', '-movflags', '+faststart', str(output)])
+        try:
+            with timed_step(timing_dir or output.parent, 'packaging_copy_concat'):
+                run_ffmpeg(command, cancel_check)
+            actual = _stream_timing(output)
+            if not actual or any(abs(actual[kind][0]) > 0.001
+                                 or abs(actual[kind][1] - total) > 0.025 for kind in ('video', 'audio')):
+                output.unlink(missing_ok=True)
+                return False
+            return True
+        except (subprocess.CalledProcessError, KeyError):
+            output.unlink(missing_ok=True)
+            return False
+
+
+def _audio_segment_filter(duration, sample_rate):
+    filters = [f'aresample={sample_rate}:async=1:first_pts=0', 'asetpts=PTS-STARTPTS']
+    if duration > 0:
+        # AAC decoding can expose trailing padding. Match audio to the video
+        # frame grid at every join so even many mid cards cannot accumulate lag.
+        filters += [f'apad=whole_dur={duration:.9f}', f'atrim=duration={duration:.9f}']
+    return filters
+
+
 def _concat_with_ffmpeg(
     ffmpeg: str,
     clips: list[Path],
     output: Path,
     config: ProcessConfig,
     cancel_check=None,
+    progress_callback=None,
     *,
     transition_seconds: float = 0.0,
+    timing_dir=None,
+    clip_ranges: Optional[dict[int, tuple[float, Optional[float]]]] = None,
 ) -> None:
-    clips = [
-        _ensure_audio_stream(ffmpeg, clip, output.parent, config)
-        for clip in clips
-    ]
+    clip_ranges = clip_ranges or {}
+    timing_dir = timing_dir or config.output_dir
+    if not clip_ranges and not transition_seconds and _try_copy_concat(ffmpeg, clips, output, cancel_check, timing_dir, config):
+        if progress_callback:
+            progress_callback(1.0)
+        return
+    normalized = {clip: _ensure_audio_stream(ffmpeg, clip, output.parent, config)
+                  for clip in dict.fromkeys(clips)}
+    clips = [normalized[clip] for clip in clips]
     command = [ffmpeg, "-y"]
-    for clip in clips:
+    for index, clip in enumerate(clips):
+        if index in clip_ranges:
+            start, duration = clip_ranges[index]
+            command.extend(["-ss", f"{max(0.0, start):.3f}"])
+            if duration is not None:
+                command.extend(["-t", f"{max(0.05, duration):.3f}"])
         command.extend(["-i", str(clip)])
     transition = max(0.0, min(0.8, float(transition_seconds or 0.0)))
-    durations = [_probe_media_duration(clip) for clip in clips]
+    probed = {}
+    for clip in dict.fromkeys(clips):
+        timing = _stream_timing(clip)
+        probed[clip] = timing['video'][1] if timing and 'video' in timing else _probe_media_duration(clip)
+    durations = []
+    for index, clip in enumerate(clips):
+        start, duration = clip_ranges.get(index, (0.0, None))
+        available = max(0.0, probed[clip] - start)
+        selected = available if duration is None else min(duration, available)
+        durations.append(math.ceil(selected * config.video_fps - 1e-4) / config.video_fps)
     filters = []
     if transition > 0 and len(clips) > 1 and all(duration > 0 for duration in durations):
         transition = min(transition, min(durations) / 2)
@@ -1182,10 +1367,7 @@ def _concat_with_ffmpeg(
                 "setsar=1",
                 "setpts=PTS-STARTPTS",
             ]
-            audio_filters = [
-                f"aresample={config.audio_sample_rate}:async=1:first_pts=0",
-                "asetpts=PTS-STARTPTS",
-            ]
+            audio_filters = _audio_segment_filter(durations[index], config.audio_sample_rate)
             if index > 0:
                 video_filters.append(f"fade=t=in:st=0:d={transition:.3f}")
                 audio_filters.append(f"afade=t=in:st=0:d={transition:.3f}")
@@ -1210,10 +1392,8 @@ def _concat_with_ffmpeg(
             filters.append(
                 f"[{index}:v:0]fps={config.video_fps},setsar=1,setpts=PTS-STARTPTS[v{index}]"
             )
-            filters.append(
-                f"[{index}:a:0]aresample={config.audio_sample_rate}:async=1:first_pts=0,"
-                f"asetpts=PTS-STARTPTS[a{index}]"
-            )
+            audio_filters = _audio_segment_filter(durations[index], config.audio_sample_rate)
+            filters.append(f"[{index}:a:0]{','.join(audio_filters)}[a{index}]")
             parts.append(f"[v{index}][a{index}]")
         filters.append("".join(parts) + f"concat=n={len(clips)}:v=1:a=1[v][a]")
         filter_complex = ";".join(filters)
@@ -1252,22 +1432,12 @@ def _concat_with_ffmpeg(
             str(output),
         ]
     )
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    while process.poll() is None:
-        if cancel_check and cancel_check():
-            process.terminate()
-            process.wait(timeout=5)
-            output.unlink(missing_ok=True)
-            raise InterruptedError("用户停止了视频生成")
-        time.sleep(0.2)
-    if process.returncode != 0:
-        _, stderr = process.communicate()
-        raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+    try:
+        with timed_step(timing_dir or output.parent, 'packaging_filter_encode'):
+            run_ffmpeg(command, cancel_check, duration=sum(durations), progress_callback=progress_callback)
+    except InterruptedError:
+        output.unlink(missing_ok=True)
+        raise
 
 
 def _probe_media_duration(path: Path) -> float:

@@ -21,6 +21,8 @@ from moviepy import (
 
 from ..core.models import DocumentContent, ProcessConfig
 from .focus_guidance import focus_timeline
+from .render_capacity import serialized_render
+from .performance import timed_step
 
 
 class _MoviePyProgressLogger:
@@ -263,6 +265,7 @@ class VideoComposer:
         return layers
 
     @staticmethod
+    @serialized_render
     def compose(
         content: DocumentContent,
         config: ProcessConfig,
@@ -339,7 +342,7 @@ class VideoComposer:
             progress_callback, cancel_check
         )
         try:
-            with ExitStack() as resources:
+            with timed_step(output_path.parent, 'video_encode'), ExitStack() as resources:
                 params = VideoComposer.ffmpeg_params(config)
                 if subtitles is not None and config.burn_subtitles:
                     from ..course_pipeline import CoursePipeline

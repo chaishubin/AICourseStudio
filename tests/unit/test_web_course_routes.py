@@ -8,6 +8,7 @@ from queue import Queue
 from types import SimpleNamespace
 
 from PIL import Image
+import pytest
 
 
 def test_render_only_keeps_rendered_status_after_final_progress(monkeypatch, temp_dir):
@@ -957,7 +958,8 @@ def test_source_file_rejects_paths_outside_upload_folder(monkeypatch, temp_dir):
     assert response.status_code == 404
 
 
-def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
+@pytest.mark.parametrize('segment_mode', ['none', 'plain', 'packaged'])
+def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir, segment_mode):
     import moviepy
     import web.app as web_app
     from vidppt.course_pipeline import CoursePipeline
@@ -976,6 +978,9 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     preview = {
         "task_id": task_id,
         "source_type": "presentation",
+        "lesson_segments": [] if segment_mode == 'none' else [
+            {'id': 1, 'title': '课程分段', 'start_page': 1, 'end_page': 1}
+        ],
         "pages": [{
             "page_number": 1,
             "title": "第一页",
@@ -1007,7 +1012,7 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
                     "organization": "测试大学",
                     "instructor": "",
                     "outro_text": "感谢观看",
-                    "apply_to_segments": False,
+                    "apply_to_segments": segment_mode == 'packaged',
                     "use_slide_background": True,
                     "enable_motion": True,
                     "enable_music": True,
@@ -1034,6 +1039,8 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
         def close(self):
             pass
 
+    compose_calls = []
+
     def fake_compose(
         content, config, output, progress_callback=None, cancel_check=None, subtitles=None
     ):
@@ -1041,6 +1048,7 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             progress_callback(0.5)
             progress_callback(1.0)
         assert subtitles is not None and subtitles.exists()
+        compose_calls.append(output)
         output.write_bytes(b"final-video")
 
     def fake_burn(
@@ -1059,8 +1067,11 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
         course_title, segment_title="", logo_path=None,
         intro_background_path=None, mid_background_path=None, outro_background_path=None,
         segment_durations=None,
+        source_range=None,
         cancel_check=None,
+        progress_callback=None,
     ):
+        assert source_video.read_bytes() == b'final-video'
         packaged.append({
             "source_video": source_video,
             "output_video": output_video,
@@ -1071,10 +1082,26 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
             "mid_background_path": mid_background_path,
             "outro_background_path": outro_background_path,
             "segment_durations": segment_durations,
+            'source_range': source_range,
         })
+        replacement = output_video.with_suffix('.packaged.tmp')
+        replacement.write_bytes(b'packaged-video')
+        replacement.replace(output_video)
+
+    cuts = []
+
+    def fake_extract(_ffmpeg, source, output, _config, *, start, duration, cancel_check=None, progress_callback=None):
+        assert source.read_bytes() == b'final-video'
+        cuts.append((start, duration))
+        output.write_bytes(b'cut-video')
+        if progress_callback:
+            progress_callback(1.0)
 
     def fake_segmented_audio(content, config, *, cancel_check=None):
         fake_audio(None, content, None)
+        latest = web_app._read_preview(task_id)
+        latest['ai_review'] = {'status': 'passed', 'review_completed': True, 'running': False}
+        web_app._persist_preview(task_id, latest)
         for page in content.pages:
             page.metadata["focus_cues"] = [{
                 "text": page.text, "start": 0.0, "end": 2.0,
@@ -1086,11 +1113,16 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     monkeypatch.setattr(VideoComposer, "compose", fake_compose)
     monkeypatch.setattr(CoursePipeline, "_burn_subtitles", fake_burn)
     monkeypatch.setattr(course_packaging, "package_course_video", fake_package)
+    monkeypatch.setattr(course_packaging, '_extract_video_range', fake_extract)
 
     web_app.run_media_generation(task_id)
 
     assert captured_scripts == ["用户确认后的讲稿"]
-    assert len(packaged) == 1
+    assert len(compose_calls) == 1
+    assert cuts == ([(0, 2.0)] if segment_mode == 'plain' else [])
+    assert len(packaged) == (2 if segment_mode == 'packaged' else 1)
+    if segment_mode == 'packaged':
+        assert packaged[1]['source_range'] == (0, 2.0)
     assert packaged[0]["course_title"] == "source"
     assert packaged[0]["options"]["template"] == "academic"
     assert packaged[0]["intro_background_path"] == slide
@@ -1100,6 +1132,7 @@ def test_media_generation_uses_confirmed_scripts(monkeypatch, temp_dir):
     saved_preview = json.loads((output_dir / "preview.json").read_text(encoding="utf-8"))
     assert saved_preview["pages"][0]["duration"] == 2.0
     assert saved_preview["duration_estimate"]["total_seconds"] == 2.0
+    assert saved_preview['ai_review']['status'] == 'passed'
     video_progress = [
         event["percentage"]
         for event in list(web_app.progress_queues[task_id].queue)

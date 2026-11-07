@@ -814,6 +814,7 @@ def test_course_packaging_soft_transition_keeps_timeline_length(temp_dir, monkey
 
     monkeypatch.setattr(course_packaging, "_ensure_audio_stream", lambda _f, clip, _d, _c: clip)
     monkeypatch.setattr(course_packaging, "_probe_media_duration", lambda _path: 4.0)
+    monkeypatch.setattr(course_packaging, "_stream_timing", lambda _path: {"video": (0, 4.0)})
     monkeypatch.setattr(
         course_packaging.subprocess,
         "Popen",
@@ -845,6 +846,7 @@ def test_course_packaging_inserts_mid_clip_between_lesson_segments(temp_dir, mon
     config = ProcessConfig(input_path=temp_dir / "source.pptx", output_dir=temp_dir)
     extracted = []
     concatenated = []
+    ranges = {}
 
     monkeypatch.setattr(course_packaging.shutil, "which", lambda _: "/usr/bin/ffmpeg")
     monkeypatch.setattr(
@@ -853,12 +855,13 @@ def test_course_packaging_inserts_mid_clip_between_lesson_segments(temp_dir, mon
         lambda path, *_args, **_kwargs: path.write_bytes(b"mid"),
     )
 
-    def extract(_ffmpeg, _source, path, _config, *, start, duration):
+    def extract(_ffmpeg, _source, path, _config, *, start, duration, cancel_check=None):
         extracted.append((start, duration))
         path.write_bytes(b"segment")
 
     def concat(_ffmpeg, clips, path, _config, _cancel_check, **_kwargs):
         concatenated.extend(item.name for item in clips)
+        ranges.update(_kwargs.get("clip_ranges", {}))
         path.write_bytes(b"packaged")
 
     monkeypatch.setattr(course_packaging, "_extract_video_range", extract)
@@ -873,9 +876,10 @@ def test_course_packaging_inserts_mid_clip_between_lesson_segments(temp_dir, mon
         segment_durations=[12.0, 18.0, 9.0],
     )
 
-    assert extracted == [(0.0, 12.0), (12.0, 18.0), (30.0, None)]
+    assert extracted == []
+    assert ranges == {0: (0.0, 12.0), 2: (12.0, 18.0), 4: (30.0, None)}
     assert concatenated == [
-        "segment_001.mp4", "mid.mp4", "segment_002.mp4", "mid.mp4", "segment_003.mp4"
+        "course.mp4", "mid.mp4", "course.mp4", "mid.mp4", "course.mp4"
     ]
     assert output.read_bytes() == b"packaged"
 

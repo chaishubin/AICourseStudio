@@ -21,6 +21,7 @@ import tempfile
 import glob
 from io import BytesIO
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue, Empty
 from urllib.parse import quote
@@ -47,6 +48,8 @@ except ImportError:
 # 导入 vidppt
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from vidppt import Pipeline, ProcessConfig
+from vidppt.utils.performance import timed_step
+from vidppt.utils.render_capacity import render_capacity
 from vidppt.core.course import Course, CourseSection, KnowledgePoint
 from vidppt.core.cue_timeline import (
     build_cue_timeline,
@@ -980,12 +983,17 @@ def _read_server_log_lines(limit: int = 1500, keyword: str = '', task_id: str = 
 
 
 class ConversionQueue:
-    """串行转换队列，保证同一时刻只运行一个转换任务"""
+    """Bounded task workers overlap network waits; render_capacity serializes heavy renders."""
 
     def __init__(self):
         self._queue = Queue()
-        self._worker = threading.Thread(target=self._run, daemon=True)
-        self._worker.start()
+        self._task_locks = {}
+        self._workers = [
+            threading.Thread(target=self._run, daemon=True)
+            for _ in range(max(1, min(4, int(os.getenv('CONVERSION_WORKERS', '2')))))
+        ]
+        for worker in self._workers:
+            worker.start()
 
     def enqueue(self, func, *args, **kwargs):
         task_id = args[0] if args else None
@@ -1051,7 +1059,11 @@ class ConversionQueue:
                         continue
                     if self._should_skip(task_id, queue_run_id):
                         continue
-                func(*args, **kwargs)
+                lock = self._task_locks.setdefault(task_id, threading.Lock())
+                with lock:
+                    if task_id and self._should_skip(task_id, queue_run_id):
+                        continue
+                    func(*args, **kwargs)
             except Exception as e:
                 logger.error(f"ConversionQueue worker error: {e}")
             finally:
@@ -1728,6 +1740,19 @@ def load_state():
             continue
         status = entry.get('status', '')
         preview_path = entry.get('preview_path')
+        if (entry.get('ai_review') or {}).get('running'):
+            interrupted_review = {**entry['ai_review'], 'running': False,
+                                  'status': 'pending',
+                                  'summary': '服务重启中断了质检，请重新运行 AI 质检。'}
+            entry['ai_review'] = interrupted_review
+            if preview_path:
+                try:
+                    path = Path(preview_path)
+                    saved_preview = json.loads(path.read_text(encoding='utf-8'))
+                    saved_preview['ai_review'] = interrupted_review
+                    path.write_text(json.dumps(saved_preview, ensure_ascii=False, indent=2), encoding='utf-8')
+                except (OSError, ValueError):
+                    pass
         if (
             status == 'error'
             and entry.get('stage') in {'tts', 'video'}
@@ -2327,6 +2352,7 @@ class WebProgressTracker:
         self.current_progress = 0
         self.stage_progress = {}  # stage_name -> {current, total, percentage}
         self._stage_started_at = None
+        self._recorded_stage_seconds = {}
         self._update_task(started_at=time.time(), stage_timings={})
 
     def _overall_percentage(self, stage: str, stage_pct: float) -> int:
@@ -2351,9 +2377,13 @@ class WebProgressTracker:
         """记录当前阶段的耗时"""
         if self.current_stage and self._stage_started_at:
             duration = time.time() - self._stage_started_at
+            self._recorded_stage_seconds[self.current_stage] = (
+                self._recorded_stage_seconds.get(self.current_stage, 0) + duration
+            )
             self._update_task(stage_timings={
-                self.current_stage: {'duration': round(duration, 2)}
+                self.current_stage: {'duration': round(self._recorded_stage_seconds[self.current_stage], 2)}
             })
+            self._stage_started_at = None
 
     def update(self, stage: str, current: int, total: int, message: str = ""):
         """更新进度"""
@@ -2955,14 +2985,30 @@ def _review_mode_for_quality(quality_mode: str) -> str | None:
     return None
 
 
-def _run_course_review(task_id: str, mode: str) -> dict:
+_review_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='course-review')
+
+
+def _run_course_review(task_id: str, mode: str, run_id=None) -> dict:
     if mode not in {'sample', 'full'}:
         raise ValueError('不支持的 AI 审查模式')
-    preview = _read_preview(task_id)
+    with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+        task = tasks.get(task_id)
+        if not task:
+            raise FileNotFoundError('任务不存在')
+        if run_id is None:
+            run_id = uuid.uuid4().hex
+            task['review_run_id'] = run_id
+        elif task.get('review_run_id') != run_id:
+            return task.get('ai_review') or {}
+        preview = _read_preview(task_id)
     reviewed_scripts = [(page.get('page_number'), page.get('script')) for page in preview.get('pages', [])]
     preview['teaching_context'] = tasks.get(task_id, {}).get('strategy', {}).get('teaching_context')
-    review = CourseReviewer().review(preview, mode)
+    with timed_step(tasks[task_id]['output_dir'], 'course_review'):
+        review = CourseReviewer().review(preview, mode)
+    review['running'] = False
     with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+        if task_id not in tasks or tasks[task_id].get('review_run_id') != run_id:
+            return tasks.get(task_id, {}).get('ai_review') or {}
         latest = _read_preview(task_id)
         current_scripts = [(page.get('page_number'), page.get('script')) for page in latest.get('pages', [])]
         if current_scripts != reviewed_scripts:
@@ -2970,19 +3016,22 @@ def _run_course_review(task_id: str, mode: str) -> dict:
                           summary='审查期间讲稿已修改，请重新质检当前版本')
         latest['ai_review'] = review
         _persist_preview(task_id, latest)
-    task = tasks.get(task_id)
-    if task:
-        task['ai_review'] = review
-        provider_label = 'DeepSeek' if review.get('provider') == 'deepseek' else 'ChatGPT'
-        task['message'] = (
-            f'{provider_label} 全课二审完成'
-            if mode == 'full' else f'{provider_label} 抽检完成'
-        )
-        save_state(task_id)
+        task = tasks.get(task_id)
+        if task:
+            task['ai_review'] = review
+            provider_label = 'DeepSeek' if review.get('provider') == 'deepseek' else 'ChatGPT'
+            if task.get('status') == 'awaiting_confirmation':
+                task['message'] = (
+                    f'{provider_label} 全课二审完成'
+                    if mode == 'full' else f'{provider_label} 抽检完成'
+                )
+            save_state(task_id)
     return review
 
 
-def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dict:
+def _mark_course_review_failed(task_id: str, mode: str, error: Exception, run_id=None) -> dict:
+    if run_id is not None and tasks.get(task_id, {}).get('review_run_id') != run_id:
+        return tasks.get(task_id, {}).get('ai_review') or {}
     provider = str(os.getenv('COURSE_REVIEW_PROVIDER') or 'openai').strip().lower()
     model = (
         os.getenv('DEEPSEEK_REVIEW_MODEL') or 'deepseek-v4-pro'
@@ -2992,6 +3041,7 @@ def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dic
     review = {
         'review_completed': False,
         'status': 'failed',
+        'running': False,
         'mode': mode,
         'provider': provider,
         'model': model,
@@ -3013,7 +3063,8 @@ def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dic
     task = tasks.get(task_id)
     if task:
         task['ai_review'] = review
-        task['message'] = review['summary']
+        if task.get('status') == 'awaiting_confirmation':
+            task['message'] = review['summary']
         save_state(task_id)
     return review
 
@@ -3021,13 +3072,27 @@ def _mark_course_review_failed(task_id: str, mode: str, error: Exception) -> dic
 def _auto_review_preview(task_id: str) -> None:
     task = tasks.get(task_id)
     mode = _review_mode_for_quality(_quality_mode_for_task(task))
-    if not mode:
+    if not task or not mode:
         return
-    try:
-        _run_course_review(task_id, mode)
-    except Exception as exc:
-        logger.warning(f'自动 AI 审查失败: task={task_id}, mode={mode}, error={exc}')
-        _mark_course_review_failed(task_id, mode, exc)
+    run_id = uuid.uuid4().hex
+    with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+        preview = _read_preview(task_id)
+        pending = {'status': 'pending', 'running': True, 'review_completed': False,
+                   'mode': mode, 'summary': 'AI 正在后台质检，可先核对讲稿与配音。',
+                   'findings': [], 'run_id': run_id}
+        preview['ai_review'] = pending
+        task.update(ai_review=pending, review_run_id=run_id)
+        _persist_preview(task_id, preview)
+
+    def review_in_background():
+        try:
+            _run_course_review(task_id, mode, run_id=run_id)
+        except Exception as exc:
+            logger.warning(f'自动 AI 审查失败: task={task_id}, mode={mode}, error={exc}')
+            with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+                _mark_course_review_failed(task_id, mode, exc, run_id=run_id)
+
+    _review_executor.submit(review_in_background)
 
 
 def _slide_image_url(image_path: str) -> str:
@@ -3206,63 +3271,66 @@ def _generate_audio_with_focus_segments(
         Pipeline(segment_config)._generate_audio(
             DocumentContent(pages=segment_pages),
             ProgressTracker(total_pages=len(segment_pages)),
+            **({'cancel_check': cancel_check} if cancel_check else {}),
         )
 
-    for page, page_segments in segmented:
-        if cancel_check and cancel_check():
-            raise InterruptedError("用户停止了生成")
-        if any(
-            not segment.audio or not segment.audio.exists()
-            for _, segment in page_segments
-        ):
-            raise RuntimeError(f"第 {page.page_number} 页字幕分段配音失败")
-        clips = []
-        cursor = 0.0
-        try:
-            for cue, segment in page_segments:
-                clip = AudioFileClip(str(segment.audio))
-                # Cue-level TTS produces many independently encoded files.  A
-                # hard cut at a non-zero waveform creates clicks and can sound
-                # like a brief dropout, so smooth only the first/last 10 ms.
-                # This is short enough to preserve consonants and cue timing.
-                edge_fade = min(0.01, max(0.001, float(clip.duration) / 4))
-                clip = clip.with_effects([
-                    AudioFadeIn(edge_fade),
-                    AudioFadeOut(edge_fade),
-                ])
-                clips.append(clip)
-                cue_duration = float(clip.duration)
-                timing = _segment_speech_timing(segment.audio, cue['text'], cue_duration)
-                start, end = timing if timing else (0.0, cue_duration)
-                cue['start'] = round(cursor + start, 3)
-                cue['end'] = round(cursor + end, 3)
-                cue['duration'] = round(end - start, 3)
-                cue['timing_source'] = 'tts_word_boundary' if timing else 'segment_audio'
-                cursor += cue_duration
-            page_audio = config.output_dir / str(page.page_number) / 'audio.mp3'
-            page_audio.parent.mkdir(parents=True, exist_ok=True)
-            combined = concatenate_audioclips(clips)
+    with timed_step(config.output_dir, 'tts_audio_merge'):
+        for page, page_segments in segmented:
+            if cancel_check and cancel_check():
+                raise InterruptedError("用户停止了生成")
+            if any(
+                not segment.audio or not segment.audio.exists()
+                for _, segment in page_segments
+            ):
+                raise RuntimeError(f"第 {page.page_number} 页字幕分段配音失败")
+            clips = []
+            cursor = 0.0
             try:
-                combined.write_audiofile(
-                    str(page_audio),
-                    codec='libmp3lame',
-                    fps=config.audio_sample_rate,
-                    bitrate=config.audio_bitrate,
-                    logger=None,
-                )
+                for cue, segment in page_segments:
+                    clip = AudioFileClip(str(segment.audio))
+                    # Cue-level TTS produces many independently encoded files.  A
+                    # hard cut at a non-zero waveform creates clicks and can sound
+                    # like a brief dropout, so smooth only the first/last 10 ms.
+                    # This is short enough to preserve consonants and cue timing.
+                    edge_fade = min(0.01, max(0.001, float(clip.duration) / 4))
+                    clip = clip.with_effects([
+                        AudioFadeIn(edge_fade),
+                        AudioFadeOut(edge_fade),
+                    ])
+                    clips.append(clip)
+                    cue_duration = float(clip.duration)
+                    timing = _segment_speech_timing(segment.audio, cue['text'], cue_duration)
+                    start, end = timing if timing else (0.0, cue_duration)
+                    cue['start'] = round(cursor + start, 3)
+                    cue['end'] = round(cursor + end, 3)
+                    cue['duration'] = round(end - start, 3)
+                    cue['timing_source'] = 'tts_word_boundary' if timing else 'segment_audio'
+                    cursor += cue_duration
+                page_audio = config.output_dir / str(page.page_number) / 'audio.mp3'
+                page_audio.parent.mkdir(parents=True, exist_ok=True)
+                combined = concatenate_audioclips(clips)
+                try:
+                    combined.write_audiofile(
+                        str(page_audio),
+                        codec='libmp3lame',
+                        fps=config.audio_sample_rate,
+                        bitrate=config.audio_bitrate,
+                        logger=None,
+                    )
+                finally:
+                    combined.close()
+                page.audio = page_audio
+                if page.metadata.get('focus_targets'):
+                    _refresh_automatic_focus_events(page.metadata)
             finally:
-                combined.close()
-            page.audio = page_audio
-            if page.metadata.get('focus_targets'):
-                _refresh_automatic_focus_events(page.metadata)
-        finally:
-            for clip in clips:
-                clip.close()
+                for clip in clips:
+                    clip.close()
 
     if regular_pages:
         Pipeline(config)._generate_audio(
             DocumentContent(pages=regular_pages),
             ProgressTracker(total_pages=len(regular_pages)),
+            **({'cancel_check': cancel_check} if cancel_check else {}),
         )
 
 
@@ -3895,7 +3963,7 @@ def run_media_generation(task_id: str):
         from moviepy import AudioFileClip
         from vidppt.core.models import DocumentContent, PageContent
         from vidppt.renderers.subtitles import SubtitleRenderer
-        from vidppt.utils.course_packaging import package_course_video, shift_srt_for_packaging
+        from vidppt.utils.course_packaging import active_packaging_parts, package_course_video, shift_srt_for_packaging, _extract_video_range
         from vidppt.utils.progress import ProgressTracker
         from vidppt.utils.video_composer import VideoComposer
         from vidppt.course_pipeline import CoursePipeline
@@ -3949,11 +4017,12 @@ def run_media_generation(task_id: str):
         progress.set_stage('tts', '根据确认后的讲稿生成配音...')
         if cancel_event.is_set():
             raise InterruptedError("用户停止了生成")
-        _generate_audio_with_focus_segments(
-            content,
-            config,
-            cancel_check=cancel_event.is_set,
-        )
+        with timed_step(config.output_dir, 'tts_total'):
+            _generate_audio_with_focus_segments(
+                content,
+                config,
+                cancel_check=cancel_event.is_set,
+            )
         if cancel_event.is_set():
             raise InterruptedError("用户停止了生成")
         progress.update('tts', len(content.pages), len(content.pages), '语音转换完成')
@@ -4089,7 +4158,11 @@ def run_media_generation(task_id: str):
         duration_estimate = _duration_estimate_payload(preview)
         preview['duration_estimate'] = duration_estimate
         preview['lesson_segments'] = duration_estimate['segments']
-        _persist_preview(task_id, preview)
+        with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+            latest_review = _read_preview(task_id).get('ai_review')
+            if latest_review is not None:
+                preview['ai_review'] = latest_review
+            _persist_preview(task_id, preview)
         task['cue_timeline_path'] = str(cue_timeline_path)
 
         course_json_path = preview.get('course_json_path')
@@ -4115,263 +4188,279 @@ def run_media_generation(task_id: str):
             config.output_dir / f'{stem}.srt',
             cue_timeline=cue_timeline,
         )
-        progress.set_stage(
-            'video',
-            '合成视频并烧录字幕...'
-            if config.burn_subtitles else '合成无内嵌字幕视频...'
-        )
-        base_video = config.output_dir / f'{stem}.base.mp4'
-        last_reported = -1
+        progress.set_stage('video', '等待视频渲染资源...')
+        with render_capacity(cancel_event.is_set, config.output_dir), timed_step(config.output_dir, 'video_total'):
+            progress.set_stage(
+                'video',
+                '合成视频并烧录字幕...'
+                if config.burn_subtitles else '合成无内嵌字幕视频...'
+            )
+            base_video = config.output_dir / f'{stem}.base.mp4'
+            last_reported = -1
 
-        def report_video(stage_percentage: int, message: str):
-            nonlocal last_reported
-            stage_percentage = max(0, min(100, stage_percentage))
-            if stage_percentage > last_reported:
-                last_reported = stage_percentage
-                progress.update('video', stage_percentage, 100, message)
+            def report_video(stage_percentage: int, message: str):
+                nonlocal last_reported
+                stage_percentage = max(0, min(100, stage_percentage))
+                if stage_percentage > last_reported:
+                    last_reported = stage_percentage
+                    progress.update('video', stage_percentage, 100, message)
 
-        VideoComposer.compose(
-            content,
-            config,
-            base_video,
-            progress_callback=lambda fraction: report_video(
-                round(fraction * 98),
-                f'正在合成视频{"与字幕" if config.burn_subtitles else ""} {round(fraction * 100)}%',
-            ),
-            cancel_check=cancel_event.is_set,
-            subtitles=subtitles,
-        )
-        if not base_video.exists():
-            raise RuntimeError("视频合成未产生输出文件")
-        video_path = config.output_dir / f'{stem}.mp4'
-        base_video.replace(video_path)
-        packaging_options = options.get('course_packaging') or {}
-        lesson_segments = [
-            segment for segment in preview.get('lesson_segments', [])
-            if isinstance(segment, dict)
-        ]
-        packaging_segment_durations = []
-        for segment in lesson_segments:
-            try:
-                start_page = int(segment['start_page'])
-                end_page = int(segment['end_page'])
-            except (KeyError, TypeError, ValueError):
-                continue
-            segment_duration = sum(
-                duration for page_number, duration in durations_by_page.items()
-                if start_page <= page_number <= end_page
-            )
-            if segment_duration > 0:
-                packaging_segment_durations.append(segment_duration)
-        logo_candidate = (
-            options.get('school_logo_path')
-            or (task.get('strategy') or {}).get('school_logo_path')
-        )
-        logo_path = Path(logo_candidate) if logo_candidate else None
-        if (
-            packaging_options.get('enable_intro')
-            or (packaging_options.get('enable_mid') and len(packaging_segment_durations) > 1)
-            or packaging_options.get('enable_outro')
-        ):
-            intro_seconds = (
-                float(
-                    packaging_options.get('intro_duration_seconds')
-                    or packaging_options.get('duration_seconds')
-                    or 4
-                )
-                if packaging_options.get('enable_intro') else 0.0
-            )
-            mid_seconds = (
-                float(packaging_options.get('mid_duration_seconds') or 2.5)
-                if packaging_options.get('enable_mid')
-                and len(packaging_segment_durations) > 1 else 0.0
-            )
-            outro_seconds = (
-                float(
-                    packaging_options.get('outro_duration_seconds')
-                    or packaging_options.get('duration_seconds')
-                    or 4
-                )
-                if packaging_options.get('enable_outro') else 0.0
-            )
-            custom_background = Path(packaging_options['background_path']) if packaging_options.get('background_path') else None
-            intro_background = (
-                custom_background or (content.pages[0].slide_image if content.pages else None)
-            )
-            outro_background = (
-                custom_background or (content.pages[-1].slide_image if content.pages else None)
-            )
-            mid_background = (
-                custom_background or (content.pages[len(content.pages) // 2].slide_image if content.pages else None)
-            )
-            report_video(99, '正在添加片头、片中转场与片尾')
-            package_course_video(
-                video_path,
-                video_path,
+            VideoComposer.compose(
+                content,
                 config,
-                packaging_options,
-                course_title=task.get('course_name') or stem,
-                logo_path=logo_path if logo_path and logo_path.is_file() else None,
-                intro_background_path=intro_background,
-                mid_background_path=mid_background,
-                outro_background_path=outro_background,
-                segment_durations=packaging_segment_durations,
-                cancel_check=cancel_event.is_set,
-            )
-            write_cue_timeline(
-                shift_cue_timeline(
-                    cue_timeline,
-                    intro_seconds=intro_seconds,
-                    segment_durations=packaging_segment_durations,
-                    mid_seconds=mid_seconds,
-                    outro_seconds=outro_seconds,
+                base_video,
+                progress_callback=lambda fraction: report_video(
+                    round(fraction * 98),
+                    f'正在合成视频{"与字幕" if config.burn_subtitles else ""} {round(fraction * 100)}%',
                 ),
-                cue_timeline_path,
+                cancel_check=cancel_event.is_set,
+                subtitles=subtitles,
             )
-            if not config.burn_subtitles:
-                shift_srt_for_packaging(
-                    subtitles,
-                    intro_seconds=intro_seconds,
-                    segment_durations=packaging_segment_durations,
-                    mid_seconds=mid_seconds,
-                )
-        progress.update('video', 100, 100, '视频生成完成')
-        segment_artifacts = []
-        if lesson_segments:
-            progress.set_stage('video', '按智能切课范围生成分段视频...')
-            pages_by_number = {page.page_number: page for page in content.pages}
-            timed_by_number = {
-                int(page.page_number): (course_page, duration)
-                for page, (course_page, duration) in zip(content.pages, timed_pages)
-            }
-            segment_dir = config.output_dir / 'segments'
-            segment_dir.mkdir(exist_ok=True)
-            for index, segment in enumerate(lesson_segments, 1):
-                if cancel_event.is_set():
-                    raise InterruptedError("用户停止了生成")
-                start_page = int(segment['start_page'])
-                end_page = int(segment['end_page'])
-                segment_pages = [
-                    pages_by_number[number]
-                    for number in sorted(pages_by_number)
-                    if start_page <= number <= end_page
-                ]
-                segment_timed_pages = [
-                    timed_by_number[number]
-                    for number in sorted(timed_by_number)
-                    if start_page <= number <= end_page
-                ]
-                if not segment_pages or not segment_timed_pages:
+            if not base_video.exists():
+                raise RuntimeError("视频合成未产生输出文件")
+            video_path = config.output_dir / f'{stem}.mp4'
+            packaging_options = options.get('course_packaging') or {}
+            lesson_segments = [
+                segment for segment in preview.get('lesson_segments', [])
+                if isinstance(segment, dict)
+            ]
+            if lesson_segments:
+                # Preserve the unwrapped body for exact cuts, before intro/outro
+                # modifies the published output. Hard links avoid a full copy.
+                video_path.unlink(missing_ok=True)
+                try:
+                    os.link(base_video, video_path)
+                except OSError:
+                    shutil.copy2(base_video, video_path)
+            else:
+                base_video.replace(video_path)
+            packaging_segment_durations = []
+            for segment in lesson_segments:
+                try:
+                    start_page = int(segment['start_page'])
+                    end_page = int(segment['end_page'])
+                except (KeyError, TypeError, ValueError):
                     continue
-                segment_content = DocumentContent(
-                    pages=segment_pages,
-                    metadata={
-                        **content.metadata,
-                        'lesson_segment': segment,
-                    },
+                segment_duration = sum(
+                    duration for page_number, duration in durations_by_page.items()
+                    if start_page <= page_number <= end_page
                 )
-                segment_title = _safe_filename_stem(segment.get('title', ''))
-                segment_stem = _artifact_filename_stem(
-                    f"{stem}_{index:02d}_{segment_title}"
-                    if segment_title else f"{stem}_{index:02d}_pages_{start_page}_{end_page}"
-                )
-                segment_cue_timeline = slice_cue_timeline(
-                    cue_timeline, start_page, end_page
-                )
-                segment_cue_timeline_path = write_cue_timeline(
-                    segment_cue_timeline,
-                    segment_dir / f'{segment_stem}.cue_timeline.json',
-                )
-                segment_subtitles = SubtitleRenderer().render_course(
-                    segment_timed_pages,
-                    segment_dir / f'{segment_stem}.srt',
-                    cue_timeline=segment_cue_timeline,
-                )
-                segment_base = segment_dir / f'{segment_stem}.base.mp4'
-                segment_video = segment_dir / f'{segment_stem}.mp4'
-                segment_last_reported = -1
-
-                def report_segment(fraction: float):
-                    nonlocal segment_last_reported
-                    stage_percentage = round(
-                        ((index - 1) + max(0.0, min(1.0, fraction))) / len(lesson_segments) * 100
+                if segment_duration > 0:
+                    packaging_segment_durations.append(segment_duration)
+            logo_candidate = (
+                options.get('school_logo_path')
+                or (task.get('strategy') or {}).get('school_logo_path')
+            )
+            logo_path = Path(logo_candidate) if logo_candidate else None
+            active_parts = active_packaging_parts(packaging_options, packaging_segment_durations)
+            if active_parts:
+                intro_seconds = (
+                    float(
+                        packaging_options.get('intro_duration_seconds')
+                        or packaging_options.get('duration_seconds')
+                        or 4
                     )
-                    if stage_percentage > segment_last_reported:
-                        segment_last_reported = stage_percentage
-                        progress.update(
-                            'video',
-                            stage_percentage,
-                            100,
-                            f'正在生成第 {index}/{len(lesson_segments)} 段视频',
-                        )
-
-                VideoComposer.compose(
-                    segment_content,
-                    config,
-                    segment_base,
-                    progress_callback=report_segment,
-                    cancel_check=cancel_event.is_set,
-                    subtitles=segment_subtitles,
+                    if packaging_options.get('enable_intro') else 0.0
                 )
-                segment_base.replace(segment_video)
-                if packaging_options.get('apply_to_segments') and (
-                    packaging_options.get('enable_intro')
-                    or packaging_options.get('enable_outro')
-                ):
-                    segment_intro_seconds = (
-                        float(
-                            packaging_options.get('intro_duration_seconds')
-                            or packaging_options.get('duration_seconds')
-                            or 4
-                        )
-                        if packaging_options.get('enable_intro') else 0.0
+                mid_seconds = (
+                    float(packaging_options.get('mid_duration_seconds') or 2.5)
+                    if packaging_options.get('enable_mid')
+                    and len(packaging_segment_durations) > 1 else 0.0
+                )
+                outro_seconds = (
+                    float(
+                        packaging_options.get('outro_duration_seconds')
+                        or packaging_options.get('duration_seconds')
+                        or 4
                     )
+                    if packaging_options.get('enable_outro') else 0.0
+                )
+                custom_background = Path(packaging_options['background_path']) if packaging_options.get('background_path') else None
+                intro_background = (
+                    custom_background or (content.pages[0].slide_image if content.pages else None)
+                )
+                outro_background = (
+                    custom_background or (content.pages[-1].slide_image if content.pages else None)
+                )
+                mid_background = (
+                    custom_background or (content.pages[len(content.pages) // 2].slide_image if content.pages else None)
+                )
+                part_names = {'intro': '片头', 'mid': '片中转场', 'outro': '片尾'}
+                report_video(99, '正在添加' + '、'.join(part_names[part] for part in active_parts))
+                with timed_step(config.output_dir, 'full_video_packaging'):
                     package_course_video(
-                        segment_video,
-                        segment_video,
+                        video_path,
+                        video_path,
                         config,
-                        {
-                            **packaging_options,
-                            'enable_outro': False,
-                        },
+                        packaging_options,
                         course_title=task.get('course_name') or stem,
-                        segment_title=segment.get('title', ''),
                         logo_path=logo_path if logo_path and logo_path.is_file() else None,
-                        intro_background_path=(
-                            Path(packaging_options['background_path'])
-                            if packaging_options.get('background_path')
-                            else segment_pages[0].slide_image
-                        ),
-                        outro_background_path=segment_pages[-1].slide_image,
+                        intro_background_path=intro_background,
+                        mid_background_path=mid_background,
+                        outro_background_path=outro_background,
+                        segment_durations=packaging_segment_durations,
                         cancel_check=cancel_event.is_set,
                     )
-                    write_cue_timeline(
-                        shift_cue_timeline(
-                            segment_cue_timeline,
-                            intro_seconds=segment_intro_seconds,
-                        ),
-                        segment_cue_timeline_path,
+                write_cue_timeline(
+                    shift_cue_timeline(
+                        cue_timeline,
+                        intro_seconds=intro_seconds,
+                        segment_durations=packaging_segment_durations,
+                        mid_seconds=mid_seconds,
+                        outro_seconds=outro_seconds,
+                    ),
+                    cue_timeline_path,
+                )
+                if not config.burn_subtitles:
+                    shift_srt_for_packaging(
+                        subtitles,
+                        intro_seconds=intro_seconds,
+                        segment_durations=packaging_segment_durations,
+                        mid_seconds=mid_seconds,
                     )
-                    if not config.burn_subtitles and segment_intro_seconds:
-                        shift_srt_for_packaging(
-                            segment_subtitles,
-                            intro_seconds=segment_intro_seconds,
+            progress.update('video', 100, 100, '视频生成完成')
+            segment_artifacts = []
+            if lesson_segments:
+                progress.set_stage('video', '按智能切课范围生成分段视频...')
+                pages_by_number = {page.page_number: page for page in content.pages}
+                timed_by_number = {
+                    int(page.page_number): (course_page, duration)
+                    for page, (course_page, duration) in zip(content.pages, timed_pages)
+                }
+                segment_dir = config.output_dir / 'segments'
+                segment_dir.mkdir(exist_ok=True)
+                for index, segment in enumerate(lesson_segments, 1):
+                    if cancel_event.is_set():
+                        raise InterruptedError("用户停止了生成")
+                    start_page = int(segment['start_page'])
+                    end_page = int(segment['end_page'])
+                    segment_pages = [
+                        pages_by_number[number]
+                        for number in sorted(pages_by_number)
+                        if start_page <= number <= end_page
+                    ]
+                    segment_timed_pages = [
+                        timed_by_number[number]
+                        for number in sorted(timed_by_number)
+                        if start_page <= number <= end_page
+                    ]
+                    if not segment_pages or not segment_timed_pages:
+                        continue
+                    segment_title = _safe_filename_stem(segment.get('title', ''))
+                    segment_stem = _artifact_filename_stem(
+                        f"{stem}_{index:02d}_{segment_title}"
+                        if segment_title else f"{stem}_{index:02d}_pages_{start_page}_{end_page}"
+                    )
+                    segment_cue_timeline = slice_cue_timeline(
+                        cue_timeline, start_page, end_page
+                    )
+                    segment_cue_timeline_path = write_cue_timeline(
+                        segment_cue_timeline,
+                        segment_dir / f'{segment_stem}.cue_timeline.json',
+                    )
+                    segment_subtitles = SubtitleRenderer().render_course(
+                        segment_timed_pages,
+                        segment_dir / f'{segment_stem}.srt',
+                        cue_timeline=segment_cue_timeline,
+                    )
+                    segment_base = segment_dir / f'{segment_stem}.base.mp4'
+                    segment_video = segment_dir / f'{segment_stem}.mp4'
+                    segment_last_reported = -1
+
+                    def report_segment(fraction: float):
+                        nonlocal segment_last_reported
+                        segment_percentage = int(max(0.0, min(1.0, fraction)) * 100)
+                        stage_percentage = round(
+                            ((index - 1) + segment_percentage / 100) / len(lesson_segments) * 100
                         )
-                segment_artifacts.append({
-                    **segment,
-                    'video_path': str(segment_video),
-                    'subtitles_path': str(segment_subtitles),
-                    'cue_timeline_path': str(segment_cue_timeline_path),
-                })
-            progress.update('video', 100, 100, '分段视频生成完成')
-        progress.complete(
-            str(video_path),
-            course_json_path=preview.get('course_json_path'),
-            presentation_path=preview.get('presentation_path'),
-            subtitles_path=str(subtitles),
-            cue_timeline_path=str(cue_timeline_path),
-            video_segments=segment_artifacts,
-        )
+                        if segment_percentage > segment_last_reported:
+                            segment_last_reported = segment_percentage
+                            progress.update(
+                                'video', stage_percentage, 100,
+                                f'正在生成第 {index}/{len(lesson_segments)} 段视频（本段 {segment_percentage}%）',
+                            )
+
+                    report_segment(0.0)
+                    ffmpeg = shutil.which('ffmpeg')
+                    if not ffmpeg:
+                        raise RuntimeError('切课需要 ffmpeg')
+                    segment_start = sum(
+                        seconds for number, seconds in durations_by_page.items()
+                        if number < start_page
+                    )
+                    segment_duration = sum(
+                        seconds for number, seconds in durations_by_page.items()
+                        if start_page <= number <= end_page
+                    )
+                    if packaging_options.get('apply_to_segments') and packaging_options.get('enable_intro'):
+                        segment_intro_seconds = (
+                            float(
+                                packaging_options.get('intro_duration_seconds')
+                                or packaging_options.get('duration_seconds')
+                                or 4
+                            )
+                            if packaging_options.get('enable_intro') else 0.0
+                        )
+                        with timed_step(config.output_dir, 'segment_packaging'):
+                            package_course_video(
+                                base_video,
+                                segment_video,
+                                config,
+                                {
+                                    **packaging_options,
+                                    'enable_outro': False,
+                                },
+                                course_title=task.get('course_name') or stem,
+                                segment_title=segment.get('title', ''),
+                                source_range=(segment_start, segment_duration),
+                                logo_path=logo_path if logo_path and logo_path.is_file() else None,
+                                intro_background_path=(
+                                    Path(packaging_options['background_path'])
+                                    if packaging_options.get('background_path')
+                                    else segment_pages[0].slide_image
+                                ),
+                                outro_background_path=segment_pages[-1].slide_image,
+                                cancel_check=cancel_event.is_set,
+                                progress_callback=report_segment,
+                            )
+                        write_cue_timeline(
+                            shift_cue_timeline(
+                                segment_cue_timeline,
+                                intro_seconds=segment_intro_seconds,
+                            ),
+                            segment_cue_timeline_path,
+                        )
+                        if not config.burn_subtitles and segment_intro_seconds:
+                            shift_srt_for_packaging(
+                                segment_subtitles,
+                                intro_seconds=segment_intro_seconds,
+                            )
+                    else:
+                        with timed_step(config.output_dir, 'segment_extraction'):
+                            _extract_video_range(
+                                ffmpeg, base_video, segment_base, config,
+                                start=segment_start, duration=segment_duration,
+                                cancel_check=cancel_event.is_set,
+                                progress_callback=report_segment,
+                            )
+                        segment_base.replace(segment_video)
+                    report_segment(1.0)
+                    segment_artifacts.append({
+                        **segment,
+                        'video_path': str(segment_video),
+                        'subtitles_path': str(segment_subtitles),
+                        'cue_timeline_path': str(segment_cue_timeline_path),
+                    })
+                progress.update('video', 100, 100, '分段视频生成完成')
+            base_video.unlink(missing_ok=True)
+            progress.complete(
+                str(video_path),
+                course_json_path=preview.get('course_json_path'),
+                presentation_path=preview.get('presentation_path'),
+                subtitles_path=str(subtitles),
+                cue_timeline_path=str(cue_timeline_path),
+                video_segments=segment_artifacts,
+            )
     except InterruptedError as e:
         logger.exception(f'task={task_id} 媒体生成已中断')
         progress.rollback(str(e), '生成已停止')
@@ -4741,6 +4830,21 @@ def revise_course_preview_page(task_id):
         return jsonify({'error': 'AI 重新生成失败，请稍后重试；当前讲稿已保留'}), 502
 
 
+@app.route('/api/task-performance/<task_id>', methods=['GET'])
+def task_performance(task_id):
+    task, error = require_task_access(task_id)
+    if error:
+        return error
+    root = Path(task['output_dir'])
+    reports = {}
+    for name in ('performance.json', '_focus_segments/performance.json', 'segments/performance.json'):
+        try:
+            reports[name] = json.loads((root / name).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+    return jsonify({'stage_timings': task.get('stage_timings', {}), 'reports': reports})
+
+
 @app.route('/api/course-review/<task_id>', methods=['GET', 'POST'])
 def course_review(task_id):
     """读取或运行预览阶段的 AI 质量审查。"""
@@ -4764,18 +4868,23 @@ def course_review(task_id):
     mode = str(data.get('mode') or 'sample').strip().lower()
     if mode not in {'sample', 'full'}:
         return jsonify({'error': 'mode 只能是 sample 或 full'}), 400
+    run_id = uuid.uuid4().hex
+    with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+        task['review_run_id'] = run_id
     try:
-        review = _run_course_review(task_id, mode)
+        review = _run_course_review(task_id, mode, run_id=run_id)
     except (ValueError, CourseReviewError) as exc:
         logger.warning(
             f'课程 AI 审查未完成: task={task_id}, mode={mode}, '
             f'error_type={type(exc).__name__}, error={exc}'
         )
-        review = _mark_course_review_failed(task_id, mode, exc)
+        with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+            review = _mark_course_review_failed(task_id, mode, exc, run_id=run_id)
         return jsonify({'success': False, 'ai_review': review, 'error': review['summary']}), 400
     except Exception as exc:
         logger.exception(f'课程 AI 审查失败: task={task_id}, mode={mode}')
-        review = _mark_course_review_failed(task_id, mode, exc)
+        with _preview_audio_locks.setdefault(task_id, threading.Lock()):
+            review = _mark_course_review_failed(task_id, mode, exc, run_id=run_id)
         return jsonify({'success': False, 'ai_review': review, 'error': review['summary']}), 502
 
     log_operation(

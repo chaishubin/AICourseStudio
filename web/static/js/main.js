@@ -3966,7 +3966,29 @@ class AICourseStudioApp {
         }
     }
 
+    async pollBackgroundReview(taskId, token) {
+        const current = () => this.reviewPollToken === token
+            && this.elements.coursePreviewModule.dataset.taskId === taskId
+            && !this.elements.coursePreviewModule.hidden;
+        if (!current()) return;
+        try {
+            const response = await fetch(`/api/course-review/${taskId}`);
+            if (!current() || !response.ok) return;
+            const data = await response.json();
+            if (!current()) return;
+            this.renderCourseReview(data.ai_review, data.quality_mode || 'balanced');
+        } catch (_) {
+            if (current()) this.reviewPollTimer = setTimeout(() => this.pollBackgroundReview(taskId, token), 5000);
+        }
+    }
+
     renderCourseReview(review, qualityMode = 'balanced') {
+        clearTimeout(this.reviewPollTimer);
+        const token = this.reviewPollToken = {};
+        if (review?.running) {
+            const taskId = this.elements.coursePreviewModule.dataset.taskId;
+            this.reviewPollTimer = setTimeout(() => this.pollBackgroundReview(taskId, token), 2500);
+        }
         this.currentAIReview = review || null;
         const modeLabels = {
             economy: '经济模式',
@@ -4022,7 +4044,7 @@ class AICourseStudioApp {
         this.elements.aiReviewFixAllBtn.disabled = Boolean(this.courseReviewFixing);
         if (!findings.length) {
             const emptyMessage = !completed
-                ? (status === 'pending' ? '请重新运行 AI 质检' : '质检未完成，无法判断课程质量，请重新运行 AI 质检')
+                ? (review.running ? '质检正在后台进行，结果会自动更新' : (status === 'pending' ? '请重新运行 AI 质检' : '质检未完成，无法判断课程质量，请重新运行 AI 质检'))
                 : (status === 'passed' ? '未发现具体问题' : '未返回具体问题，请重新运行 AI 质检');
             this.elements.aiReviewFindings.innerHTML =
                 `<div class="ai-review-empty">${emptyMessage}</div>`;
@@ -4147,6 +4169,8 @@ class AICourseStudioApp {
         const taskId = this.elements.coursePreviewModule.dataset.taskId;
         if (!taskId) return;
         if (!await this.savePreviewScripts({ automatic: true })) return;
+        clearTimeout(this.reviewPollTimer);
+        this.reviewPollToken = {};
         const button = mode === 'full'
             ? this.elements.aiReviewFullBtn
             : this.elements.aiReviewSampleBtn;

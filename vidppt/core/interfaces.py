@@ -92,6 +92,7 @@ class TTSEngine(ABC):
         batch_size: int = 5,
         progress_callback: Optional[ProgressCallback] = None,
         continue_on_error: bool = True,
+        cancel_check: Optional[Callable[[], bool]] = None,
         **kwargs,
     ) -> list[tuple[int, str]]:
         """批量转换文本为音频
@@ -113,9 +114,15 @@ class TTSEngine(ABC):
 
         total = len(texts)
         errors: list[tuple[int, str]] = []
+        completed = 0
+        if batch_size < 1:
+            raise ValueError('batch_size 必须大于 0')
 
         async def convert_with_progress(item: tuple[int, str, Path], index: int):
             """转换单个并更新进度"""
+            nonlocal completed
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户停止了配音生成')
             page_num, text, path = item
             try:
                 await self.convert_async(text, path, voice, rate, **kwargs)
@@ -126,17 +133,24 @@ class TTSEngine(ABC):
                     logger.warning(f"第 {page_num} 页 TTS 转换失败: {error_msg}")
                 else:
                     raise
+            completed += 1
             if progress_callback:
-                progress_callback(index + 1, total, f"第 {page_num} 页")
+                progress_callback(completed, total, f"第 {page_num} 页")
 
-        tasks = [
-            convert_with_progress(item, i)
-            for i, item in enumerate(texts)
-        ]
+        pending = iter(enumerate(texts))
 
-        # 分批处理避免并发过多
-        for i in range(0, len(tasks), batch_size):
-            await asyncio.gather(*tasks[i : i + batch_size])
+        async def worker():
+            for index, item in pending:
+                await convert_with_progress(item, index)
+
+        tasks = [asyncio.create_task(worker()) for _ in range(min(batch_size, total))]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         return errors
 

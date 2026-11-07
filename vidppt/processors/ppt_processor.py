@@ -22,6 +22,7 @@ from ..core.models import DocumentContent, PageContent, ProcessConfig
 from ..core.registry import register_processor
 from .original_slides import reference_path, render_original_slides
 from ..utils.document_cache import DocumentCache, file_digest
+from ..utils.render_capacity import serialized_render
 
 
 @register_processor
@@ -118,6 +119,7 @@ class PPTProcessor(DocumentProcessor):
 
         return DocumentContent(pages=pages)
 
+    @serialized_render
     def render_pages(self, config: ProcessConfig) -> list[Path]:
         """优先使用已确认的原生页面；成功渲染后才提交缓存签名。"""
         engine = 'original' if reference_path(config.input_path).is_file() else config.render_engine
