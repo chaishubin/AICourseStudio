@@ -5407,6 +5407,22 @@ def retry_task_stage(task_id):
         'awaiting_confirmation', 'completed', 'error', 'interrupted'
     }:
         return jsonify({'error': '任务仍在运行或排队，不能重复提交'}), 409
+    data = request.get_json(silent=True) or {}
+    if data.get('stage') == 'analysis':
+        if task.get('status') not in {'error', 'interrupted'}:
+            return jsonify({'error': '仅失败或中断的任务可以恢复分析'}), 409
+        file_path = task.get('file_path')
+        if not file_path or not Path(file_path).is_file():
+            return jsonify({'error': '源文件不存在，无法恢复'}), 409
+        cancellation_events.pop(task_id, None)
+        task.update(status='queued', stage='queue', percentage=0, error=None,
+                    stop_requested=False, retry_stage='analysis',
+                    message='已进入队列，将复用已完成的页面分析和讲稿')
+        save_state(task_id)
+        resume_queued_tasks(only_task_id=task_id)
+        log_operation('retry_task', task_id=task_id, target_name=task.get('original_name'))
+        return jsonify({'success': True, 'task_id': task_id,
+                        'message': task['message'], 'queue_size': conversion_queue.size()})
     try:
         _read_preview(task_id)
     except (FileNotFoundError, json.JSONDecodeError, KeyError) as exc:
@@ -6873,10 +6889,12 @@ def preview_script():
         return jsonify({'error': f'讲稿试听生成失败: {exc}'}), 502
 
 
-def resume_queued_tasks():
+def resume_queued_tasks(only_task_id=None):
     """Rebuild executable queue entries that were persisted before a restart."""
     resumed = 0
     for task_id, task in list(tasks.items()):
+        if only_task_id is not None and task_id != only_task_id:
+            continue
         if task.get('status') != 'queued':
             continue
         file_path = task.get('file_path')

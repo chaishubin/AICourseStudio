@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+from loguru import logger
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import copy
@@ -111,7 +112,9 @@ def analyze_page(engine, page, native: list[dict], output_dir: Path) -> tuple[di
     try:
         cached = json.loads(path.read_text(encoding='utf-8'))
         if cached.get('signature') == signature:
-            return validate_analysis(cached['raw_analysis'], native, page.page_number)
+            result = validate_analysis(cached['raw_analysis'], native, page.page_number)
+            logger.info(f'第 {page.page_number} 页复用已完成的页面分析')
+            return result
     except (OSError, ValueError, TypeError, KeyError):
         pass
     with timed_step(output_dir, 'page_analysis_request'):
@@ -153,12 +156,21 @@ def generate_presentation_narration(engine, pages, targets_by_page, output_dir, 
     with timed_step(output_dir, 'page_analysis_wall'), ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(analyze, index): index for index in range(len(pages))}
         completed = 0
+        failures = []
         try:
             for future in as_completed(futures):
                 if cancelled():
                     return
                 index = futures[future]
-                analysis, targets = future.result()
+                try:
+                    result = future.result()
+                    if result is None:
+                        continue
+                    analysis, targets = result
+                except Exception as exc:
+                    failures.append((pages[index].page_number, exc))
+                    logger.warning(f'第 {pages[index].page_number} 页分析失败，继续保存其他页面: {exc}')
+                    continue
                 analyses[index] = analysis
                 targets_by_page[index] = targets
                 pages[index].metadata.update(page_analysis=analysis, focus_targets=targets)
@@ -168,6 +180,9 @@ def generate_presentation_narration(engine, pages, targets_by_page, output_dir, 
         finally:
             for future in futures:
                 future.cancel()
+    if failures:
+        failed_pages = ', '.join(str(number) for number, _ in sorted(failures))
+        raise RuntimeError(f'第 {failed_pages} 页分析失败；已完成的页面已保存，点击重新提交可继续。原因: {failures[0][1]}') from failures[0][1]
     for index, page in enumerate(pages):
         if cancelled():
             return

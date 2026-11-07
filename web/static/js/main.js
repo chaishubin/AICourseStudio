@@ -3120,7 +3120,7 @@ class AICourseStudioApp {
                             ${!['error', 'interrupted'].includes(item.status) ? '<div class="spinner"></div>' : ''}
                             <p>${placeholderText}</p>
                             ${!['error', 'interrupted'].includes(item.status) ? this._renderCardProgress(item) : ''}
-                            ${isInterrupted ? `
+                            ${['error', 'interrupted'].includes(item.status) ? `
                                 <button class="result-card-retry" type="button"
                                         data-task-id="${this._esc(item.taskId)}">重新提交</button>
                             ` : ''}
@@ -3246,7 +3246,7 @@ class AICourseStudioApp {
 
     async retryTask(taskId) {
         const found = this.getItemByTaskId(taskId);
-        if (!found || found.item.status !== 'interrupted') return;
+        if (!found || !['error', 'interrupted'].includes(found.item.status)) return;
 
         const { item } = found;
         const button = this.elements.resultsGrid.querySelector(
@@ -3258,23 +3258,14 @@ class AICourseStudioApp {
         }
 
         try {
-            const response = await fetch('/api/convert', {
+            const response = await fetch(`/api/tasks/${taskId}/retry`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    file_path: item.filePath,
-                    original_name: item.fileName,
-                    course_name: this.courseDisplayName(item),
-                    batch_id: globalThis.crypto?.randomUUID?.() || `retry-${Date.now()}`,
-                    strategy_source: item.strategySource || 'batch',
-                    ...(item.strategy || {})
-                })
+                body: JSON.stringify({stage: 'analysis'})
             });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || '重新提交失败');
+            if (!response.ok) throw new Error(data.error || '恢复任务失败');
 
-            // 新任务成功入队后再清理已中断的旧任务，避免提交失败时丢失恢复入口。
-            await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
             const current = this.getItemByTaskId(taskId);
             if (!current) return;
             this.updateItem(current.index, {

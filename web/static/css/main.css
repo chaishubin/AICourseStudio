@@ -1875,6 +1875,7 @@ body {
 
 .ai-review-panel {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     margin: 16px 0 18px;
     padding: 16px;
@@ -1889,6 +1890,18 @@ body {
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
+}
+
+.ai-review-header > div:first-child {
+    flex: 1 1 280px;
+    min-width: 0;
+}
+
+.ai-review-header span,
+.ai-review-meta,
+.ai-review-finding-body,
+.ai-review-applied-notice {
+    overflow-wrap: anywhere;
 }
 
 .ai-review-header h4 {
@@ -1930,11 +1943,14 @@ body {
 
 .ai-review-findings {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
     gap: 8px;
 }
 
 .ai-review-finding {
     display: grid;
+    min-width: 0;
     gap: 4px;
     width: 100%;
     padding: 10px 12px;
@@ -5031,10 +5047,10 @@ details.ai-review-finding { display: block; }
 .ai-review-finding-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-2); }
 .ai-review-finding-state { margin-left: auto; flex-shrink: 0; color: var(--color-text-3); }
 .applied .ai-review-finding-state { color: #166534; }
-.ai-review-finding-body { display: grid; gap: 8px; padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--color-border); }
+.ai-review-finding-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--color-border); }
 .ai-review-applied-group { border: 1px solid #bbf7d0; border-radius: 8px; background: #f0fdf4; }
 .ai-review-applied-group > summary { display: flex; gap: 10px; padding: 12px; color: #166534; font-size: 13px; cursor: pointer; list-style: none; }
-.ai-review-applied-content { display: grid; gap: 8px; padding: 0 12px 12px; }
+.ai-review-applied-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 0 12px 12px; }
 .ai-review-finding-summary:focus-visible,
 .ai-review-applied-group > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 @media (max-width: 640px) {

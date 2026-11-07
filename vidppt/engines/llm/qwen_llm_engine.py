@@ -1,6 +1,7 @@
 """阿里云百炼通义千问 LLM 引擎（OpenAI 兼容 Chat Completions）。"""
 
 import os
+import random
 import time
 from typing import Optional
 
@@ -27,8 +28,8 @@ class QwenLLMEngine(LLMEngine):
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         temperature: float = 0.3,
         max_tokens: int = 8192,
-        timeout: float = 120.0,
-        max_retries: int = 3,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
         enable_thinking: bool = False,
         **kwargs,
     ):
@@ -44,8 +45,10 @@ class QwenLLMEngine(LLMEngine):
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.timeout = timeout
-        self.max_retries = max_retries
+        self.timeout = float(timeout if timeout is not None else os.getenv("QWEN_TIMEOUT", "300"))
+        self.max_retries = int(max_retries if max_retries is not None else os.getenv("QWEN_MAX_RETRIES", "4"))
+        if self.timeout <= 0 or self.max_retries < 1:
+            raise ValueError("千问 timeout 必须大于 0，max_retries 必须至少为 1")
         self.enable_thinking = enable_thinking
         self.options = kwargs
 
@@ -73,7 +76,7 @@ class QwenLLMEngine(LLMEngine):
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
+                with httpx.Client(timeout=httpx.Timeout(self.timeout, connect=min(30.0, self.timeout))) as client:
                     response = client.post(
                         self.api_url, headers=headers, json=payload
                     )
@@ -90,14 +93,21 @@ class QwenLLMEngine(LLMEngine):
                 if not content:
                     raise ValueError(f"千问返回内容为空: {result}")
                 return content
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in {408, 429, 500, 502, 503, 504}:
+                    raise
                 last_error = exc
                 if attempt == self.max_retries:
                     raise
-                wait = 2 ** (attempt - 1)
+                wait = min(30.0, 2 ** attempt) + random.uniform(0, 1)
+                if isinstance(exc, httpx.HTTPStatusError):
+                    try:
+                        wait = max(wait, min(60.0, float(exc.response.headers.get("Retry-After", "0"))))
+                    except ValueError:
+                        pass
                 logger.warning(
                     f"千问请求失败（{attempt}/{self.max_retries}），"
-                    f"{wait}s 后重试: {exc}"
+                    f"{wait:.1f}s 后重试（model={payload['model']}）: {exc}"
                 )
                 time.sleep(wait)
         raise last_error or RuntimeError("千问请求失败")

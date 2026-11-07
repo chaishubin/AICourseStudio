@@ -270,3 +270,37 @@ def test_restart_clears_abandoned_background_review(monkeypatch, tmp_path):
     app.load_state()
     assert app.tasks['restarted']['ai_review']['running'] is False
     assert json.loads(preview.read_text())['ai_review']['running'] is False
+
+
+def test_failed_analysis_preserves_other_pages_for_resume(tmp_path):
+    calls = []
+    failing = True
+
+    class Engine:
+        model, api_url, options = 'test', '', {}
+
+        def analyze_slide(self, source, image, **kwargs):
+            number = json.loads(source)['text']
+            calls.append(number)
+            if number == '2' and failing:
+                raise TimeoutError('timeout')
+            return json.dumps({'summary': number, 'objects': []})
+
+        def summarize(self, text, **kwargs):
+            return json.dumps({'script': 'ok', 'focus_cues': [{'text': 'ok', 'action': 'clear'}]})
+
+    def pages():
+        result = []
+        for number in range(1, 4):
+            image = tmp_path / f'{number}.png'
+            Image.new('RGB', (20, 20)).save(image)
+            result.append(PageContent(page_number=number, text=str(number), slide_image=image))
+        return result
+
+    with pytest.raises(RuntimeError, match='第 2 页分析失败'):
+        generate_presentation_narration(Engine(), pages(), [], tmp_path, analysis_workers=1)
+    assert (tmp_path / '1/page_analysis.json').exists()
+    assert (tmp_path / '3/page_analysis.json').exists()
+    failing = False
+    generate_presentation_narration(Engine(), pages(), [], tmp_path, analysis_workers=1)
+    assert calls == ['1', '2', '3', '2']

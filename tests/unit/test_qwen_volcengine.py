@@ -146,3 +146,26 @@ async def test_volcengine_writes_base64_audio(temp_dir):
     assert output.read_bytes() == audio
     headers = client.post.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer;token"
+
+@pytest.mark.parametrize('failure', ['disconnect', 429, 503, 401])
+def test_qwen_retries_transient_errors_only(failure):
+    import httpx
+    request = httpx.Request('POST', 'https://example.invalid')
+    error = (httpx.RemoteProtocolError('disconnected') if failure == 'disconnect' else
+             httpx.HTTPStatusError('failed', request=request,
+                                   response=httpx.Response(failure, request=request, headers={'Retry-After': '5'})))
+    response = Mock()
+    response.json.return_value = {'choices': [{'message': {'content': 'ok'}}]}
+    with patch('httpx.Client') as factory, patch('time.sleep') as sleep:
+        client = factory.return_value.__enter__.return_value
+        client.post.side_effect = [error, response]
+        engine = QwenLLMEngine(api_key='test')
+        if failure == 401:
+            with pytest.raises(httpx.HTTPStatusError):
+                engine.summarize('test')
+            sleep.assert_not_called()
+        else:
+            assert engine.summarize('test') == 'ok'
+            assert client.post.call_count == 2
+            sleep.assert_called_once()
+            assert factory.call_args.kwargs['timeout'].read == 300

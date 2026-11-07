@@ -1736,7 +1736,7 @@ def test_course_workspace_exposes_packaging_media_library_controls():
     assert '进入包装设计' in html
     assert 'id="packaging-music-library"' not in html
     assert 'id="packaging-intro-video-input"' not in html
-    assert '/static/js/main.js?v=54' in html
+    assert '/static/js/main.js?v=55' in html
 
 
 def test_course_packaging_has_a_separate_design_page():
@@ -2430,3 +2430,34 @@ def test_script_change_preserves_manual_focus_for_review(monkeypatch, temp_dir):
     result = web_app._update_preview_scripts("task", [{"page_number": 1, "script": "新讲稿"}])
     saved = result["pages"][0]["focus_events"]
     assert saved == [{**event, "needs_review": True}]
+
+
+def test_retry_analysis_keeps_task_directory_and_cached_pages(monkeypatch, temp_dir):
+    import web.app as web_app
+    task_id = 'resume-analysis'
+    source = temp_dir / 'source.pptx'
+    source.write_bytes(b'pptx')
+    output = temp_dir / task_id
+    output.mkdir()
+    cache = output / 'page_analysis.json'
+    cache.write_text('cached')
+    monkeypatch.setattr(web_app, 'tasks', {
+        task_id: {'status': 'error', 'file_path': str(source), 'output_dir': str(output),
+                  'strategy': {'llm_enabled': True}},
+        'other': {'status': 'queued', 'file_path': str(source)},
+    })
+    monkeypatch.setattr(web_app, 'progress_queues', {})
+    enqueued = []
+    monkeypatch.setattr(web_app.conversion_queue, 'enqueue',
+                        lambda func, *args: enqueued.append((func, args)))
+    response = web_app.app.test_client().post(
+        f'/api/tasks/{task_id}/retry', json={'stage': 'analysis'})
+    assert response.status_code == 200
+    assert response.json['task_id'] == task_id
+    assert cache.read_text() == 'cached'
+    assert len(enqueued) == 1
+    assert enqueued[0][0] == web_app.run_conversion
+    assert enqueued[0][1][:3] == (task_id, str(source), output)
+    assert web_app.tasks[task_id]['status'] == 'queued'
+    assert web_app.app.test_client().post(
+        f'/api/tasks/{task_id}/retry', json={'stage': 'analysis'}).status_code == 409
